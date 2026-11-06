@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { GenerateTripResponseSchema, type GenerateTripResponse } from '../../domain'
 import { sampleGenerateTripRequest, sampleTrip } from '../../domain/samples'
-import { handleGenerateTripRequest, MAX_REQUEST_BYTES } from './handler'
+import { handleGenerateTripRequest, isTripGenerationEnabled, MAX_REQUEST_BYTES } from './handler'
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -19,7 +19,7 @@ const postJson = (value: unknown) => post(JSON.stringify(value))
 
 const handlerReturning = (response: GenerateTripResponse) => {
   const generate = vi.fn().mockResolvedValue(response)
-  return { generate, deps: { generate } }
+  return { generate, deps: { isEnabled: () => true, generate } }
 }
 
 describe('POST /api/trips/generate: 正常系', () => {
@@ -135,6 +135,7 @@ describe('POST /api/trips/generate: 想定外の失敗', () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined)
     const generate = vi.fn().mockRejectedValue(new Error('Bearer dummy-secret-value'))
     const response = await handleGenerateTripRequest(postJson(sampleGenerateTripRequest), {
+      isEnabled: () => true,
       generate,
     })
 
@@ -156,5 +157,147 @@ describe('POST /api/trips/generate: 想定外の失敗', () => {
 
     expect(response.status).toBe(500)
     expect((await response.json()).status).toBe('internal_error')
+  })
+})
+
+describe('POST /api/trips/generate: 機能フラグ（認証・利用制限が入るまで既定は無効）', () => {
+  it.each([undefined, '', 'false', '1', 'TRUE', 'yes'])(
+    'TRIP_GENERATION_ENABLED=%s は無効として扱う',
+    (value) => {
+      expect(isTripGenerationEnabled({ TRIP_GENERATION_ENABLED: value })).toBe(false)
+    },
+  )
+
+  it('未設定の環境でも無効（既定は停止）', () => {
+    expect(isTripGenerationEnabled({})).toBe(false)
+  })
+
+  it("'true'（前後の空白は許容）のときだけ有効", () => {
+    expect(isTripGenerationEnabled({ TRIP_GENERATION_ENABLED: 'true' })).toBe(true)
+    expect(isTripGenerationEnabled({ TRIP_GENERATION_ENABLED: ' true ' })).toBe(true)
+  })
+
+  it('無効の間は503を返し、生成（Gemini呼び出し）も本文の読み取りもしない', async () => {
+    const generate = vi.fn()
+    const request = postJson(sampleGenerateTripRequest)
+    const response = await handleGenerateTripRequest(request, {
+      isEnabled: () => false,
+      generate,
+    })
+
+    expect(response.status).toBe(503)
+    expect((await response.json()).status).toBe('service_unavailable')
+    expect(generate).not.toHaveBeenCalled()
+    expect(request.bodyUsed).toBe(false)
+  })
+
+  it('不正な入力でも、無効の間は入力の検証より先に503を返す', async () => {
+    const generate = vi.fn()
+    const response = await handleGenerateTripRequest(post('{壊れたJSON'), {
+      isEnabled: () => false,
+      generate,
+    })
+
+    expect(response.status).toBe(503)
+  })
+})
+
+// 本文をストリームで与えるリクエスト（Content-Lengthなし）を作る。
+const streamRequest = (stream: ReadableStream<Uint8Array>) =>
+  new Request('http://localhost/api/trips/generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: stream,
+    duplex: 'half',
+  } as RequestInit)
+
+describe('POST /api/trips/generate: 本文のストリーム読み取り', () => {
+  it('上限を超えた時点で読み取りを中止し、残りを読み込まない（413）', async () => {
+    let pulled = 0
+    let cancelled = false
+    const chunk = new Uint8Array(10 * 1024).fill(0x61)
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled += 1
+        controller.enqueue(chunk) // 終わらない巨大な本文
+      },
+      cancel() {
+        cancelled = true
+      },
+    })
+    const { generate, deps } = handlerReturning({ status: 'proposed', trip: sampleTrip })
+    const response = await handleGenerateTripRequest(streamRequest(stream), deps)
+
+    expect(response.status).toBe(413)
+    expect((await response.json()).status).toBe('payload_too_large')
+    expect(cancelled).toBe(true)
+    // 上限（32KB）を超えた直後で止まる。全量を読み込もうとしていない。
+    expect(pulled).toBeLessThan(10)
+    expect(generate).not.toHaveBeenCalled()
+  })
+
+  it('読み取り中にストリームが失敗しても、安全に400を返す', async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('{"date":'))
+        controller.error(new Error('接続が切断されました'))
+      },
+    })
+    const { generate, deps } = handlerReturning({ status: 'proposed', trip: sampleTrip })
+    const response = await handleGenerateTripRequest(streamRequest(stream), deps)
+
+    expect(response.status).toBe(400)
+    const text = await response.text()
+    expect(text).toContain('invalid_request')
+    expect(text).not.toContain('切断')
+    expect(generate).not.toHaveBeenCalled()
+  })
+
+  it('複数のチャンクに分かれた本文（日本語の文字の途中で分割されても）を正しく読む', async () => {
+    const bytes = new TextEncoder().encode(JSON.stringify(sampleGenerateTripRequest))
+    // 3バイト文字の途中（1バイト目の直後）を含む、細かい分割。
+    const chunks = [0, 7, 8, 9, 10, 31, 200].map((start, index, all) =>
+      bytes.slice(start, all[index + 1] ?? bytes.length),
+    )
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        chunks.forEach((chunk) => controller.enqueue(chunk))
+        controller.close()
+      },
+    })
+    const { generate, deps } = handlerReturning({ status: 'proposed', trip: sampleTrip })
+    const response = await handleGenerateTripRequest(streamRequest(stream), deps)
+
+    expect(response.status).toBe(200)
+    expect(generate.mock.calls[0][0]).toEqual(sampleGenerateTripRequest)
+  })
+
+  it('上限ちょうどの本文は受け付け、1バイト超えると拒否する（境界）', async () => {
+    const withPadding = (size: number) => {
+      const base = JSON.stringify({ pad: '' })
+      return '{"pad":"' + 'a'.repeat(size - base.length) + '"}'
+    }
+    const { deps } = handlerReturning({ status: 'proposed', trip: sampleTrip })
+
+    const exact = await handleGenerateTripRequest(post(withPadding(MAX_REQUEST_BYTES)), deps)
+    // 上限内なので読み取りは成功し、内容が契約違反であるため400（413ではない）。
+    expect((await exact.json()).status).toBe('invalid_request')
+
+    const over = await handleGenerateTripRequest(post(withPadding(MAX_REQUEST_BYTES + 1)), deps)
+    expect(over.status).toBe(413)
+  })
+
+  it('UTF-8として不正なバイト列は400', async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([0x7b, 0xff, 0xfe, 0x7d]))
+        controller.close()
+      },
+    })
+    const { generate, deps } = handlerReturning({ status: 'proposed', trip: sampleTrip })
+    const response = await handleGenerateTripRequest(streamRequest(stream), deps)
+
+    expect(response.status).toBe(400)
+    expect(generate).not.toHaveBeenCalled()
   })
 })

@@ -14,6 +14,12 @@ export const DEFAULT_GEMINI_MODEL = 'gemini-3.5-flash'
 export const DEFAULT_GEMINI_LOCATION = 'global'
 // 1回の旅程生成に許す時間。SDKの自動再試行は無効にし、課金される呼び出しを増やさない。
 export const GEMINI_TIMEOUT_MS = 45_000
+// 出力の上限。旅程の下書き（最大4地点のJSON）は数百トークン程度だが、思考に使われる
+// トークンも含まれる可能性があるため、十分な余裕を持たせた上で費用の上限を決める。
+// 実Gemini（gemini-3.5-flash）で通常の生成が収まることは未確認のため、確認後に見直す。
+export const MAX_OUTPUT_TOKENS = 8192
+// 受け取るJSON文字列の上限（4地点の下書きに対して十分大きく、暴走した出力を弾ける大きさ）。
+export const MAX_OUTPUT_CHARS = 16_000
 
 export type GeminiCallFailureReason =
   'not_configured' | 'api_error' | 'blocked' | 'incomplete' | 'empty_response'
@@ -85,6 +91,10 @@ export function createGeminiJsonClient(
             responseMimeType: 'application/json',
             responseJsonSchema,
             candidateCount: 1,
+            // SDKは既定で、継続トークンを受け取るたびに同じリクエストを自動で再送する
+            // （各リクエストに課金が発生する）。1リクエスト1呼び出しにするため無効にする。
+            automaticContinuation: false,
+            maxOutputTokens: MAX_OUTPUT_TOKENS,
           },
         })
       } catch (cause) {
@@ -103,7 +113,7 @@ export function createGeminiJsonClient(
         throw new GeminiCallError('empty_response', 'Geminiの応答に候補がありません')
       }
       if (candidate.finishReason !== undefined && candidate.finishReason !== FinishReason.STOP) {
-        // MAX_TOKENS等で途中終了したJSONは壊れているため、使わない。
+        // MAX_TOKENS・CONTINUATION等で途中終了したJSONは壊れているため、使わない。
         throw new GeminiCallError(
           'incomplete',
           `Geminiの生成が完了しませんでした（${candidate.finishReason}）`,
@@ -112,6 +122,10 @@ export function createGeminiJsonClient(
       const text = response.text?.trim()
       if (!text) {
         throw new GeminiCallError('empty_response', 'Geminiの応答が空です')
+      }
+      // トークン数の上限とは別に、受け取る文字列の大きさも制限する。
+      if (text.length > MAX_OUTPUT_CHARS) {
+        throw new GeminiCallError('incomplete', 'Geminiの出力が上限を超えました')
       }
       return text
     },

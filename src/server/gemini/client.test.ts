@@ -1,5 +1,11 @@
-import { ApiError, BlockedReason, FinishReason, GenerateContentResponse } from '@google/genai'
-import { describe, expect, it, vi } from 'vitest'
+import {
+  ApiError,
+  BlockedReason,
+  FinishReason,
+  GenerateContentResponse,
+  GoogleGenAI,
+} from '@google/genai'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   createGeminiJsonClient,
@@ -8,6 +14,8 @@ import {
   DEFAULT_GEMINI_MODEL,
   GeminiCallError,
   loadGeminiConfig,
+  MAX_OUTPUT_CHARS,
+  MAX_OUTPUT_TOKENS,
   type GenerateContentFn,
 } from './client'
 
@@ -146,5 +154,84 @@ describe('createLazyVertexGeminiClient', () => {
 
     const error = await failureOf(client)
     expect(error.reason).toBe('not_configured')
+  })
+})
+
+describe('費用の制御（呼び出し回数と出力量の上限）', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('SDKへ、自動継続の無効化と出力トークン数の上限を指定する', async () => {
+    const generateContent = vi.fn<GenerateContentFn>().mockResolvedValue(completed('{"a":1}'))
+    await clientWith(generateContent).generateJson(request)
+
+    const config = generateContent.mock.calls[0][0].config
+    expect(config?.automaticContinuation).toBe(false)
+    expect(config?.maxOutputTokens).toBe(MAX_OUTPUT_TOKENS)
+    expect(MAX_OUTPUT_TOKENS).toBeGreaterThanOrEqual(4096)
+  })
+
+  // 継続トークン付きの応答を3回返してから完了する、実SDKに対する偽のHTTP応答。
+  const stubContinuingFetch = () => {
+    let calls = 0
+    const fetchFn = vi.fn(async () => {
+      calls += 1
+      const continuing = calls <= 3
+      return new Response(
+        JSON.stringify({
+          candidates: [
+            {
+              content: { role: 'model', parts: [{ text: '{"a":' }] },
+              finishReason: continuing ? 'CONTINUATION' : 'STOP',
+              ...(continuing ? { continuationToken: `token-${calls}` } : {}),
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      )
+    })
+    vi.stubGlobal('fetch', fetchFn)
+    return fetchFn
+  }
+
+  it('【回帰】実SDKでも、継続トークンを返す応答に対してHTTP呼び出しは1回だけで、不完全として扱う', async () => {
+    const fetchFn = stubContinuingFetch()
+    const ai = new GoogleGenAI({ apiKey: 'dummy-test-key' })
+    const client = createGeminiJsonClient({ model: 'test-model' }, (params) =>
+      ai.models.generateContent(params),
+    )
+
+    const error = await failureOf(client)
+
+    expect(fetchFn).toHaveBeenCalledTimes(1)
+    expect(error.reason).toBe('incomplete')
+  })
+
+  it('【対照】自動継続を無効にしなければ、実SDKは内部で複数回HTTPを呼ぶ（上の回帰テストが有効であることの確認）', async () => {
+    const fetchFn = stubContinuingFetch()
+    const ai = new GoogleGenAI({ apiKey: 'dummy-test-key' })
+
+    await ai.models.generateContent({ model: 'test-model', contents: 'x' })
+
+    expect(fetchFn.mock.calls.length).toBeGreaterThan(1)
+  })
+
+  it('受け取る出力が文字数の上限を超えたら、使わずに失敗として扱う', async () => {
+    const oversized = '{"a":"' + 'あ'.repeat(MAX_OUTPUT_CHARS) + '"}'
+    const error = await failureOf(
+      clientWith(vi.fn<GenerateContentFn>().mockResolvedValue(completed(oversized))),
+    )
+
+    expect(error.reason).toBe('incomplete')
+  })
+
+  it('上限ちょうどの文字数は受け取る（境界）', async () => {
+    const exact = 'a'.repeat(MAX_OUTPUT_CHARS)
+    const text = await clientWith(
+      vi.fn<GenerateContentFn>().mockResolvedValue(completed(exact)),
+    ).generateJson(request)
+
+    expect(text).toHaveLength(MAX_OUTPUT_CHARS)
   })
 })

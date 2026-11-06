@@ -3,7 +3,10 @@ import {
   generateTrip,
   type GenerationFailureEvent,
 } from '../../../../server/trip-generation/generate-trip'
-import { handleGenerateTripRequest } from '../../../../server/trip-generation/handler'
+import {
+  handleGenerateTripRequest,
+  isTripGenerationEnabled,
+} from '../../../../server/trip-generation/handler'
 
 // Vertex AIのSDKはNode.jsで動かす（Edgeでは使わない）。
 export const runtime = 'nodejs'
@@ -17,6 +20,7 @@ const logFailure = (event: GenerationFailureEvent) => {
 
 export async function POST(request: Request): Promise<Response> {
   return handleGenerateTripRequest(request, {
+    isEnabled: () => isTripGenerationEnabled(process.env),
     generate: (tripRequest) => generateTrip(tripRequest, { client, report: logFailure }),
   })
 }

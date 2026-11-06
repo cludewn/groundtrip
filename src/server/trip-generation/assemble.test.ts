@@ -63,7 +63,7 @@ describe('assembleTrip: 正常系', () => {
     expect(generated.name).toBe('昼食店（テスト）')
   })
 
-  it('固定予定は、AIが名前や時刻を変えても入力どおり（根拠を含む）に保たれる', () => {
+  it('固定予定の内容（ID・名前・時刻・滞在・固定状態）は、AIが変えても入力どおりに保たれる', () => {
     const draft = validDraft()
     draft.stops[0] = {
       fixedStopId: 'stop-morning',
@@ -74,9 +74,35 @@ describe('assembleTrip: 正常系', () => {
     const result = assemble(draft)
     if (!result.ok) throw new Error(result.reason)
 
-    expect(result.trip.stops[0]).toEqual(fixedMorning)
-    expect(result.trip.stops[2]).toEqual(fixedExhibition)
-    expect(result.trip.stops[0].evidence).not.toHaveLength(0)
+    expect(result.trip.stops[0]).toMatchObject({
+      id: fixedMorning.id,
+      name: fixedMorning.name,
+      plannedStartTime: fixedMorning.plannedStartTime,
+      durationMinutes: fixedMorning.durationMinutes,
+      isFixed: true,
+    })
+    expect(result.trip.stops[2]).toMatchObject({
+      id: fixedExhibition.id,
+      name: fixedExhibition.name,
+      isFixed: true,
+    })
+  })
+
+  it('HTTP入力の固定予定にあるPlace IDと根拠は、検証済みとして引き継がず未照合に戻す', () => {
+    // 入力（クライアントの自己申告）には、Place IDと「情報源と整合」の根拠が付いている。
+    expect(fixedMorning.evidence.some((item) => item.status === 'consistent')).toBe(true)
+    const withClaimedPlace = {
+      ...request,
+      fixedStops: [{ ...fixedMorning, placeId: 'client-claimed-place-id' }, fixedExhibition],
+    }
+    const result = assembleTrip(withClaimedPlace, validDraft(), createIdFactory())
+    if (!result.ok) throw new Error(result.reason)
+
+    for (const stop of result.trip.stops.filter((item) => item.isFixed)) {
+      expect(stop.placeId).toBeNull()
+      expect(stop.evidence).toEqual([])
+    }
+    expect(JSON.stringify(result.trip)).not.toContain('client-claimed-place-id')
   })
 
   it('IDはサーバーが採番し、重複しない', () => {

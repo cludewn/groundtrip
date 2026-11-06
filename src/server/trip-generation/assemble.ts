@@ -11,7 +11,8 @@ const toMinutes = (time: string): number => {
 }
 
 // Geminiの下書きを共通のTripに変換する。AIの出力を信用せず、次をサーバー側で保証する。
-// - 固定予定は入力どおり（名前・時刻・滞在・根拠）に置き換え、過不足なく1回ずつ含める。
+// - 固定予定は入力どおり（名前・時刻・滞在）に置き換え、過不足なく1回ずつ含める。
+//   入力のPlace IDと根拠は未検証の自己申告なので引き継がない。
 // - 固定でない地点のIDはサーバーが採番し、Place IDはnull、根拠は空にする（未照合）。
 // - 地点は時刻順で重ならない（移動時間や営業時間の照合ではない。それは別機能の責務）。
 // - 学びの反映は入力にある承認済みの学びだけを、存在する地点に対して記録する。
@@ -46,8 +47,10 @@ export function assembleTrip(
       return fail('同じ固定予定が複数回含まれています')
     }
     usedFixedIds.add(fixed.id)
-    // 固定予定はAIの出力ではなく、利用者が入力した内容をそのまま使う。
-    stops.push(fixed)
+    // 固定予定の名前・時刻・滞在時間は、AIの出力ではなく利用者が入力した内容をそのまま使う。
+    // 一方、Place IDと根拠（evidence）はHTTP入力の自己申告であり、サーバーが照合した結果では
+    // ないため引き継がない。未照合として返し、照合はPlaces・Routes連携（#7）で行う。
+    stops.push({ ...fixed, placeId: null, evidence: [] })
   }
 
   if (usedFixedIds.size !== fixedById.size) {
