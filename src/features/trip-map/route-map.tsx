@@ -1,0 +1,222 @@
+import type { Stop, Trip } from '@/domain'
+
+import { EvidenceBadge, UnverifiedBadge } from './evidence-badge'
+import { LockIcon } from './icons'
+import {
+  endTime,
+  stopKindLabels,
+  worstEvidence,
+  type RouteMeta,
+  type RouteStopMeta,
+  type StopKind,
+  type TravelSegment,
+} from './model'
+
+interface RouteMapProps {
+  trip: Trip
+  meta?: RouteMeta
+  selectedStopId?: string | null
+  onSelectStop: (stopId: string) => void
+}
+
+const RAIL_WIDTH = 68
+const NODE_CENTER_Y = 34
+
+function Node({ stop, index, kind }: { stop: Stop; index: number; kind: StopKind }) {
+  const base = 'absolute flex items-center justify-center font-mono text-[11px] font-black'
+  if (stop.isFixed) {
+    return (
+      <span
+        aria-hidden="true"
+        className={`${base} size-7 rounded-[7px] bg-gt-ink text-white`}
+        style={{ left: 20, top: NODE_CENTER_Y - 14 }}
+      >
+        <LockIcon size={14} />
+      </span>
+    )
+  }
+  if (kind === 'station') {
+    return (
+      <span
+        aria-hidden="true"
+        className={`${base} size-[34px] rounded-full border-[6px] border-gt-ink bg-gt-paper`}
+        style={{ left: 17, top: NODE_CENTER_Y - 17 }}
+      >
+        {index + 1}
+      </span>
+    )
+  }
+  return (
+    <span
+      aria-hidden="true"
+      className={`${base} size-7 rounded-full border-[5px] border-gt-line bg-gt-paper`}
+      style={{ left: 20, top: NODE_CENTER_Y - 14 }}
+    >
+      {index + 1}
+    </span>
+  )
+}
+
+function Evidence({ stop }: { stop: Stop }) {
+  const worst = worstEvidence(stop.evidence)
+  return (
+    <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+      {worst ? <EvidenceBadge evidence={worst} /> : <UnverifiedBadge />}
+      {stop.evidence.length > 1 && (
+        <span className="text-xs text-gt-muted">ほか{stop.evidence.length - 1}件</span>
+      )}
+    </span>
+  )
+}
+
+function SegmentLabel({ segment }: { segment?: TravelSegment }) {
+  let text = '次の地点まで：移動時間は未確認'
+  if (segment?.status === 'known') {
+    text = `次の地点まで：${segment.mode === 'walk' ? '徒歩' : '車'}${segment.minutes}分`
+  }
+  return (
+    <p className="mt-2 flex items-center gap-1.5 text-xs text-gt-muted">
+      <svg
+        width="12"
+        height="12"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M12 4v15M6 13l6 6 6-6" />
+      </svg>
+      {text}
+    </p>
+  )
+}
+
+function StopButton({
+  stop,
+  meta,
+  kind,
+  selected,
+  onSelect,
+}: {
+  stop: Stop
+  meta: RouteStopMeta
+  kind: StopKind
+  selected: boolean
+  onSelect: () => void
+}) {
+  const label = `${stop.plannedStartTime} ${stop.name}${stop.isFixed ? '（固定予定）' : ''}の詳細を開く`
+  const selectedRing = selected ? 'outline outline-[3px] outline-offset-2 outline-gt-line/60' : ''
+  const isTicket = stop.isFixed || kind === 'meal' || kind === 'reserved'
+
+  if (!isTicket) {
+    return (
+      <button
+        type="button"
+        onClick={onSelect}
+        aria-label={label}
+        aria-pressed={selected}
+        className={`block min-h-11 w-full rounded-lg py-1 text-left ${selectedRing}`}
+      >
+        <span className="block font-mono text-[13px] font-semibold text-gt-muted">
+          {stop.plannedStartTime}〜{endTime(stop)}・{stop.durationMinutes}分
+        </span>
+        <span className="block text-[21px] font-black leading-snug">{stop.name}</span>
+        <span className="mt-1 block">
+          <Evidence stop={stop} />
+        </span>
+      </button>
+    )
+  }
+
+  const dark = stop.isFixed
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-label={label}
+      aria-pressed={selected}
+      className={`relative flex w-full rounded-[14px] text-left shadow-[0_1px_0_rgba(0,0,0,.06),0_8px_18px_-10px_rgba(0,0,0,.35)] ${dark ? 'bg-gt-ink text-white' : 'bg-gt-paper'} ${selectedRing}`}
+    >
+      <span
+        className={`flex w-[70px] flex-none flex-col justify-center gap-1 border-r-2 border-dashed py-3 pl-3 pr-2 ${dark ? 'border-white/30' : 'border-gt-rule'}`}
+      >
+        <span className="font-mono text-[18px] font-semibold leading-none">
+          {stop.plannedStartTime}
+        </span>
+        <span className={`text-[10.5px] font-bold ${dark ? 'text-white/70' : 'text-gt-muted'}`}>
+          {kind === 'meal'
+            ? stopKindLabels.meal
+            : kind === 'reserved'
+              ? stopKindLabels.reserved
+              : '固定'}
+        </span>
+      </span>
+      <span
+        aria-hidden="true"
+        className="absolute -top-2 left-[62px] size-4 rounded-full bg-gt-bg"
+      />
+      <span
+        aria-hidden="true"
+        className="absolute -bottom-2 left-[62px] size-4 rounded-full bg-gt-bg"
+      />
+      <span className="min-w-0 flex-1 px-3 py-2.5">
+        {stop.isFixed && (
+          <span className="mb-1 inline-flex items-center gap-1 rounded-[5px] bg-white py-px pl-1.5 pr-2 text-[11px] font-black text-gt-ink">
+            <LockIcon size={11} />
+            固定予定
+          </span>
+        )}
+        <span className="block text-[15.5px] font-black leading-snug">{stop.name}</span>
+        <span className={`mt-0.5 block text-[12.5px] ${dark ? 'text-white/70' : 'text-gt-muted'}`}>
+          {stop.plannedStartTime}〜{endTime(stop)}・{stop.durationMinutes}分
+          {meta.price ? `・${meta.price}` : ''}
+        </span>
+        <span className="mt-1.5 block">
+          <Evidence stop={stop} />
+        </span>
+      </span>
+    </button>
+  )
+}
+
+// 旅程を一本の路線図として表示する。駅＝予定、予約や固定の予定はチケット。
+// 路線図は旅の順番を表すもので、実際の地図ではない。
+export function RouteMap({ trip, meta = {}, selectedStopId = null, onSelectStop }: RouteMapProps) {
+  const last = trip.stops.length - 1
+  return (
+    <ol aria-label="旅程の路線図" className="m-0 list-none p-0">
+      {trip.stops.map((stop, index) => {
+        const stopMeta = meta[stop.id] ?? {}
+        const kind = stopMeta.kind ?? 'sight'
+        const nextMeta = meta[trip.stops[index + 1]?.id ?? '']
+        const lineStyle =
+          index === 0
+            ? { top: NODE_CENTER_Y, bottom: 0 }
+            : index === last
+              ? { top: 0, height: NODE_CENTER_Y }
+              : { top: 0, bottom: 0 }
+        return (
+          <li key={stop.id} id={`stop-${stop.id}`} className="relative flex">
+            <div className="relative flex-none" style={{ width: RAIL_WIDTH }} aria-hidden="true">
+              <span className="absolute left-[30px] w-2 rounded-sm bg-gt-line" style={lineStyle} />
+              <Node stop={stop} index={index} kind={kind} />
+            </div>
+            <div className="min-w-0 flex-1 pb-5 pr-5 pt-2">
+              <StopButton
+                stop={stop}
+                meta={stopMeta}
+                kind={kind}
+                selected={selectedStopId === stop.id}
+                onSelect={() => onSelectStop(stop.id)}
+              />
+              {index < last && <SegmentLabel segment={nextMeta?.segmentFromPrevious} />}
+            </div>
+          </li>
+        )
+      })}
+    </ol>
+  )
+}

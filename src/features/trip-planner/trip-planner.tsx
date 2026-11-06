@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 
 import type { Trip } from '@/domain'
+import { RouteFailure, RouteLoading } from '@/features/trip-map/route-states'
 
 import { failureGuidance } from './failure-messages'
 import {
@@ -169,15 +170,15 @@ export function TripPlanner({ generate, renderTrip = defaultRenderTrip }: TripPl
       </form>
 
       <div role="status" aria-live="polite">
-        {isGenerating && <p>旅程を生成しています。しばらくお待ちください。</p>}
+        {isGenerating && <RouteLoading />}
       </div>
 
       {state.phase === 'failed' && (
-        <div role="alert" className="space-y-1 rounded border-2 border-current p-4">
-          <p className="font-medium">エラー：{failureGuidance[state.failure.kind].title}</p>
-          <p className="text-sm">{failureGuidance[state.failure.kind].action}</p>
-          <p className="text-sm">詳細：{state.failure.message}</p>
-        </div>
+        <RouteFailure
+          title={failureGuidance[state.failure.kind].title}
+          action={failureGuidance[state.failure.kind].action}
+          message={state.failure.message}
+        />
       )}
 
       {state.phase === 'succeeded' && (
