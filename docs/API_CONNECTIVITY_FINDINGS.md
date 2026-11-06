@@ -2,6 +2,8 @@
 
 実施日：2026-11-05 ／ 対象プロジェクト：`project-a3d3ded4-c376-43a6-8b4` ／ 認証：ADC（OAuth）のみ。APIキーは作成していない。
 
+> **追記（2026-11-07）**：上記プロジェクトは削除要求済み（課金無効）となり、以降は `groundtrip` プロジェクトを使う。同プロジェクトで`aiplatform`・`places`・`routes`を有効化し、Gemini（旅程生成API）とPlaces・Routes（アダプター）が、ADCのOAuthのみで動くことを再確認した（Placesの営業時間取得、存在しない名称の空応答、Routesの徒歩・車）。
+
 > 本書は**疎通確認の実測記録**であり、設計の確定ではない。取得できた情報と、そこから保証できることを区別して書く。
 
 ## 1. 結論
@@ -37,19 +39,27 @@
 3. **「候補なし」「同名複数」「API失敗」を区別する。** 空応答は HTTP 200 で返る。HTTPステータスだけでは失敗を検出できない。
 4. **営業時間は曜日で判定できる。** `periods` の `day` は 0=日曜。対象日の曜日で突き合わせる。これは**通常営業時間**の照合であり、臨時休業は判定できない。
 5. **固定予定への到達性は、徒歩・車で判定できる。** Routes の所要時間と、前後の予定の余裕を比べる。
-6. **公共交通は当面「確認できない」として扱う。** 徒歩・車のみで判定し、公共交通を使う案は「移動時間を確認できない」と表示する。Geminiの推定時間を根拠として埋めない。
+6. **公共交通は当面「確認できない」として扱う。** 徒歩・車のみで判定し、公共交通を使う案は「移動時間を確認できない」と表示する。Geminiの推定時間を根拠として埋めない。公式FAQの記述と実測の関係は§6を参照。
 7. **Geminiのモデル名は設定で差し替え可能にする。** 一覧にあっても404になるモデルがあった。起動時または初回呼び出しで可用性を確認する。
 8. **日本語クエリは UTF-8 で送る。** Windows の Git Bash の `curl -d` で日本語を直接渡すと UTF-8 にならず、無関係な結果が返る。HTTPクライアントを使う実装では問題にならないが、手元の検証では注意する。
 
 ## 5. 費用・規約の注意
 
-- 課金は、リクエストしたフィールドのうち**最も高いSKUで決まる**（公式の説明による）。FieldMask は必要最小限にする。
-- `regularOpeningHours` や `priceRange` を含めた場合の SKU 区分と単価は、本確認では公式ページで確定できなかった。**未確認。** 実運用前に、Cloud Billing の請求内訳と公式の SKU 表で確認する。
-- Google Maps Platform のデータの保存・キャッシュ・表示条件は、設計書の不変条件 7 に従う。Place ID と施設詳細の保存可否を区別し、本書にも施設詳細は載せていない。
+- **Places API (New) のフィールドのSKU区分**（公式のデータフィールド一覧による。2026-11-07 確認）：
+  - `regularOpeningHours` と `priceRange` は、いずれも **Enterprise**（Text Searchでも Enterprise）。
+  - `displayName` と `businessStatus` は Pro、`formattedAddress` と `location` は Essentials、`id` は Essentials（IDs Only）。
+  - 実際の単価・請求額は、本書では確定していない。実運用前に、公式の料金表とCloud Billingの請求内訳で確認する。
+- 複数のフィールドを指定したときに、請求がどの区分で決まるかは、データフィールド一覧のページに説明が無く、**未確認**（以前の版にあった「最も高いSKUで決まる」は、公式の根拠を確認できていないため、確定事項としない）。安全側に、必要最小限のFieldMaskとし、`regularOpeningHours`（Enterprise）は、営業時間が必要なときだけ要求する（アダプターの既定は要求しない）。
+- **保存・表示の条件**（Google Maps Platformの条件。設計書の不変条件 7 に従う）：
+  - Place ID は、キャッシュ制限の例外で、**無期限に保存してよい**（Places・Routesのポリシーページ。確認済み）。
+  - Place ID 以外（名称・住所・営業時間・所要時間など）のキャッシュ・保存の可否と期間は、利用規約（Service Specific Terms）が定める。**本文を確認できていない**（規約ページは、取得ツールでは本文を読めなかった）。検索結果の抜粋では、緯度経度は連続30日まで一時保存でき、その後は削除する、とされていた（二次情報・要原典確認）。**運用上は、Place ID だけを保存し、それ以外は処理中にのみ使う。**
+  - Googleマップを使わずにPlaces・Routesのデータを画面に表示するときは、**Googleの帰属表示が必要**（Googleマップのロゴが望ましく、スペースが足りない場合のみテキスト「Google Maps」。コンテンツの上端または下端の近く、同じ視覚的なまとまりの中に置く。ポリシーページ。確認済み）。Googleマップ上に表示し、帰属がすでに見える場合は不要。旅程の路線図（Googleマップではない画面）に、Places由来の名称・営業時間等を出す場合は、この帰属表示が必要になる。
+  - 請求先がEEAの場合は、別の規約が適用される。
+  - アプリ側の利用規約・プライバシーポリシーの公開義務は、Places・Routesのポリシーページには記載が無かった。
 
 ## 6. 未解決事項
 
-- Routes の `TRANSIT` が空になる原因（対応地域・リクエスト形式・プロジェクト設定のいずれか）。公式ドキュメントでは、日本での可否を確認できなかった。
+- Routes の `TRANSIT` が空になる原因。公式FAQ（Google Maps Platform FAQ「In which countries are transit directions available?」）に、「Routes APIは、Indian Railway Catering and Tourism Corporation と日本のものを除く、Google Transitパートナーに対応する」旨の記載がある（原文：`The Routes API supports all Google Transit partners, except the Indian Railway Catering and Tourism Corporation and those in Japan.`）。実測した`TRANSIT`の4回の空応答と整合する説明だが、**個々の空応答の原因や、日本国内のすべての公共交通経路の可否までは断定しない**（FAQは「サポート外」という語や`TRANSIT`への言及はしておらず、「日本のもの」が指す事業者の範囲も書かれていない）。方針は§4-6のとおり、当面「確認できない」とし、アダプターは`TRANSIT`を呼び出さない。
 - 将来日時の営業時間（`regularOpeningHours` と `currentOpeningHours` の使い分け）。
 - 交通状況を考慮した所要時間（`TRAFFIC_AWARE`）。
 - 費用上限（予算アラート、クォータ）の設定。
