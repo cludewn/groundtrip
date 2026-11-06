@@ -19,6 +19,11 @@ export const failureGuidance: Record<GenerationFailureKind, { title: string; act
     title: '入力内容を受け付けられませんでした',
     action: '入力内容を確認して、もう一度お試しください。',
   },
+  service_unavailable: {
+    title: '旅程の生成は現在利用できません',
+    action:
+      'このサービスでは、旅程の生成を一時的に停止しています。しばらくしてからお試しください。',
+  },
   interrupted: {
     title: '通信が中断されました',
     action: '入力内容はそのままです。接続を確認して、もう一度お試しください。',

@@ -15,6 +15,7 @@ export type GenerationFailureKind =
   | 'insufficient_information'
   | 'external_service_error'
   | 'invalid_request'
+  | 'service_unavailable'
   | 'interrupted'
   | 'unexpected'
 
@@ -78,6 +79,10 @@ export async function requestTripGeneration(
   const apiError = ApiLayerErrorSchema.safeParse(body)
   if (apiError.success && apiError.data.status === 'invalid_request') {
     return failure('invalid_request', apiError.data.message)
+  }
+  // 旅程生成が停止されている（機能フラグが無効）。利用者の操作では解消しない。
+  if (apiError.success && apiError.data.status === 'service_unavailable') {
+    return failure('service_unavailable', apiError.data.message)
   }
   return failure('unexpected', UNEXPECTED_MESSAGE)
 }

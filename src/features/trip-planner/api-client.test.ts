@@ -87,6 +87,17 @@ describe('requestTripGeneration: 通信・想定外の応答', () => {
     expect(result).toMatchObject({ ok: false, failure: { kind: 'interrupted' } })
   })
 
+  it('生成の停止中（service_unavailable）は専用の種類で返す', async () => {
+    const failure = await failureOf(
+      respond({ status: 'service_unavailable', message: '旅程の生成は現在利用できません。' }, 503),
+    )
+
+    expect(failure).toEqual({
+      kind: 'service_unavailable',
+      message: '旅程の生成は現在利用できません。',
+    })
+  })
+
   it.each([
     ['サイズ超過', { status: 'payload_too_large', message: '大きすぎます' }, 413],
     ['内部エラー', { status: 'internal_error', message: '内部エラー' }, 500],
