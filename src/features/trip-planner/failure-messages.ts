@@ -19,6 +19,10 @@ export const failureGuidance: Record<GenerationFailureKind, { title: string; act
     title: '入力内容を受け付けられませんでした',
     action: '入力内容を確認して、もう一度お試しください。',
   },
+  payload_too_large: {
+    title: '入力内容が大きすぎます',
+    action: '希望条件を短くして、もう一度お試しください。',
+  },
   service_unavailable: {
     title: '旅程の生成は現在利用できません',
     action:

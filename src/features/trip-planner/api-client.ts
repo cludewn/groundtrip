@@ -15,6 +15,7 @@ export type GenerationFailureKind =
   | 'insufficient_information'
   | 'external_service_error'
   | 'invalid_request'
+  | 'payload_too_large'
   | 'service_unavailable'
   | 'interrupted'
   | 'unexpected'
@@ -40,12 +41,26 @@ const failure = (kind: GenerationFailureKind, message: string): GenerationResult
 })
 
 const UNEXPECTED_MESSAGE = 'サーバーから想定外の応答が返されました。'
+const INTERRUPTED_MESSAGE = '通信が中断されました。接続を確認して、もう一度お試しください。'
+
+// #17のAPI仕様（docs/TRIP_GENERATION_API.md）における、本文の状態とHTTPステータスの対応。
+// 食い違う応答（例：201の提案、500の候補なし）は、通常の成功・失敗として扱わない。
+const EXPECTED_HTTP_STATUS = {
+  proposed: 200,
+  no_candidates: 422,
+  insufficient_information: 422,
+  external_service_error: 502,
+  invalid_request: 400,
+  payload_too_large: 413,
+  service_unavailable: 503,
+} as const
 
 export async function requestTripGeneration(
   request: GenerateTripRequest,
   { fetchFn = fetch, signal }: GenerationOptions = {},
 ): Promise<GenerationResult> {
   let response: Response
+  let text: string
   try {
     response = await fetchFn(GENERATE_TRIP_ENDPOINT, {
       method: 'POST',
@@ -53,36 +68,43 @@ export async function requestTripGeneration(
       body: JSON.stringify(request),
       signal,
     })
+    // 本文の受信中に切れた場合も、応答は完結していない。不正なJSONとは区別する。
+    text = await response.text()
   } catch {
-    // 接続できない・途中で切れた・利用者の操作で中止した場合。応答は得られていない。
-    return failure('interrupted', '通信が中断されました。接続を確認して、もう一度お試しください。')
+    // 接続できない・途中で切れた・利用者の操作で中止した場合。
+    return failure('interrupted', INTERRUPTED_MESSAGE)
   }
 
   let body: unknown
   try {
-    body = await response.json()
+    body = JSON.parse(text)
   } catch {
     return failure('unexpected', UNEXPECTED_MESSAGE)
   }
 
   const contract = GenerateTripResponseSchema.safeParse(body)
   if (contract.success) {
-    // 200以外で提案が返ることは契約上ありえない。HTTPの状態と本文が食い違う応答は採用しない。
-    if (contract.data.status === 'proposed') {
-      return response.ok
-        ? { ok: true, trip: contract.data.trip }
-        : failure('unexpected', UNEXPECTED_MESSAGE)
+    const { data } = contract
+    if (response.status !== EXPECTED_HTTP_STATUS[data.status]) {
+      return failure('unexpected', UNEXPECTED_MESSAGE)
     }
-    return failure(contract.data.status, contract.data.message)
+    return data.status === 'proposed'
+      ? { ok: true, trip: data.trip }
+      : failure(data.status, data.message)
   }
 
   const apiError = ApiLayerErrorSchema.safeParse(body)
-  if (apiError.success && apiError.data.status === 'invalid_request') {
-    return failure('invalid_request', apiError.data.message)
-  }
-  // 旅程生成が停止されている（機能フラグが無効）。利用者の操作では解消しない。
-  if (apiError.success && apiError.data.status === 'service_unavailable') {
-    return failure('service_unavailable', apiError.data.message)
+  if (apiError.success) {
+    const { status, message } = apiError.data
+    // 利用者が行動で解消できる、API層のエラー。ステータスが仕様と一致するものだけ扱う。
+    if (
+      (status === 'invalid_request' ||
+        status === 'payload_too_large' ||
+        status === 'service_unavailable') &&
+      response.status === EXPECTED_HTTP_STATUS[status]
+    ) {
+      return failure(status, message)
+    }
   }
   return failure('unexpected', UNEXPECTED_MESSAGE)
 }

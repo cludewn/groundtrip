@@ -160,6 +160,7 @@ describe('TripPlanner: 生成の失敗', () => {
     ['interrupted', '通信が中断されました'],
     ['invalid_request', '入力内容を受け付けられませんでした'],
     ['service_unavailable', '旅程の生成は現在利用できません'],
+    ['payload_too_large', '入力内容が大きすぎます'],
     ['unexpected', '予期しないエラーが発生しました'],
   ] as const)(
     '%s は種類に応じた案内を出し、入力内容を保持したまま再試行できる',
