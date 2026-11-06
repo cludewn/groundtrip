@@ -8,5 +8,5 @@ export default defineConfig({
       'server-only': fileURLToPath(new URL('./tests/helpers/server-only.ts', import.meta.url)),
     },
   },
-  test: { include: ['src/**/*.test.ts'] },
+  test: { include: ['src/**/*.test.{ts,tsx}'] },
 })

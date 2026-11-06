@@ -2,9 +2,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { GET } from '../../app/api/auth/session/route'
 import { getAdminAuth } from '../firebase/admin'
+import { FirebaseConfigurationError } from '../firebase/config'
+import { reportAuthUnavailable } from './diagnostics'
 import { AuthError, authErrorResponse, requireActor, requireOwner } from './server'
 
 vi.mock('../firebase/admin', () => ({ getAdminAuth: vi.fn() }))
+vi.mock('./diagnostics', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./diagnostics')>()),
+  reportAuthUnavailable: vi.fn(),
+}))
 const verifyIdToken = vi.fn()
 
 function request(authorization?: string) {
@@ -37,6 +43,7 @@ describe('サーバー認証・認可境界（SDKモック）', () => {
     expect(response.status).toBe(401)
     expect(verifyIdToken).not.toHaveBeenCalled()
     expect(response.headers.get('WWW-Authenticate')).toBe('Bearer')
+    expect(reportAuthUnavailable).not.toHaveBeenCalled()
   })
 
   it.each([
@@ -57,6 +64,13 @@ describe('サーバー認証・認可境界（SDKモック）', () => {
     expect(response.status).toBe(status)
     expect(body.error.code).toBe(expectedCode)
     expect(JSON.stringify(body)).not.toContain('private-sdk-detail')
+    if (status === 503) {
+      expect(reportAuthUnavailable).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ code: sdkCode }),
+      )
+    } else {
+      expect(reportAuthUnavailable).not.toHaveBeenCalled()
+    }
   })
 
   it('UIDをクエリや本文から取得せず、共有キャッシュを禁止する', async () => {
@@ -84,5 +98,36 @@ describe('サーバー認証・認可境界（SDKモック）', () => {
     expect(response.status).toBe(503)
     expect(await response.text()).not.toContain('private-configuration')
     expect(authErrorResponse(new Error('secret')).status).toBe(503)
+    expect(reportAuthUnavailable).toHaveBeenCalledTimes(2)
+    expect(reportAuthUnavailable).toHaveBeenLastCalledWith({ category: 'unknown', code: 'unknown' })
+  })
+
+  it('設定失敗を分類し、ログ用情報をHTTPレスポンスには追加しない', async () => {
+    vi.mocked(getAdminAuth).mockImplementation(() => {
+      throw new FirebaseConfigurationError()
+    })
+    const response = await GET(request('Bearer header.payload.signature'))
+    expect(reportAuthUnavailable).toHaveBeenCalledExactlyOnceWith({
+      category: 'configuration',
+      code: 'firebase_configuration',
+    })
+    expect(response.status).toBe(503)
+    expect(await response.json()).toEqual({
+      error: {
+        code: 'auth_unavailable',
+        message: '認証サービスを利用できません。時間をおいて再試行してください',
+      },
+    })
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
+  })
+
+  it('未知のSDKコードは原文を診断ログへ渡さない', async () => {
+    verifyIdToken.mockRejectedValue({ code: 'private-user-or-token', stack: 'private-stack' })
+    const response = await GET(request('Bearer header.payload.signature'))
+    expect(response.status).toBe(503)
+    expect(reportAuthUnavailable).toHaveBeenCalledExactlyOnceWith({
+      category: 'unknown',
+      code: 'unknown',
+    })
   })
 })

@@ -1,6 +1,7 @@
 import 'server-only'
 
 import { getAdminAuth } from '../firebase/admin'
+import { classifyAuthFailure, reportAuthUnavailable, type AuthDiagnostic } from './diagnostics'
 
 export type Actor = Readonly<{ uid: string }>
 
@@ -13,7 +14,10 @@ type AuthErrorCode =
   | 'not_found'
 
 export class AuthError extends Error {
-  constructor(readonly code: AuthErrorCode) {
+  constructor(
+    readonly code: AuthErrorCode,
+    readonly diagnostic: AuthDiagnostic = classifyAuthFailure(undefined),
+  ) {
     const messages: Record<AuthErrorCode, string> = {
       unauthenticated: '認証が必要です',
       invalid_token: '認証情報を確認できません',
@@ -55,7 +59,7 @@ export async function requireActor(request: Pick<Request, 'headers'>): Promise<A
       throw new AuthError('invalid_token')
     }
     // 設定・IAM・ネットワークの失敗を、認証成功やUIDフォールバックに変換しない。
-    throw new AuthError('auth_unavailable')
+    throw new AuthError('auth_unavailable', classifyAuthFailure(error))
   }
 }
 
@@ -66,7 +70,11 @@ export function requireOwner(actor: Actor, ownerUid: string): void {
 }
 
 export function authErrorResponse(error: unknown): Response {
-  const authError = error instanceof AuthError ? error : new AuthError('auth_unavailable')
+  const authError =
+    error instanceof AuthError
+      ? error
+      : new AuthError('auth_unavailable', classifyAuthFailure(error))
+  if (authError.code === 'auth_unavailable') reportAuthUnavailable(authError.diagnostic)
   const status =
     authError.code === 'auth_unavailable' ? 503 : authError.code === 'not_found' ? 404 : 401
   const headers = new Headers({ 'Cache-Control': 'private, no-store' })

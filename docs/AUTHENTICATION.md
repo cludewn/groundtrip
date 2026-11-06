@@ -18,6 +18,18 @@ MVPの実装方針はFirebase Authentication匿名認証。正式なチーム合
 - サーバー専用モジュールは`server-only`で保護。Node.js runtimeで利用する。
 - トークン・SDKエラーの原文・環境変数の値はログやHTTPエラーへ出さない。
 
+### サーバーの障害診断ログ
+
+`authErrorResponse`が503（`auth_unavailable`）を返す際は、設定・権限・認証情報・通信・
+SDK内部・未知の分類と、許可リストにある固定コードだけをサーバーへ記録する。
+未知の`error.code`は`unknown`へ正規化し、UID、トークン、SDKのmessageやstack、環境変数の値を
+ログへ渡さない。HTTPレスポンスのコード・文言は従来どおりで、診断情報を追加しない。
+未認証・不正/期限切れ/失効トークン等の401、所有者不一致の404は記録しない。
+
+503の同じ診断コードは**1プロセスにつき60秒に1件まで**記録する。未知のコードも同じ1枠を使う。
+これはログ量の抑制であり、要求件数の正確な集計や分散レート制限ではない。
+インスタンス増加・再起動時にはログ枠も増えるため、本番のログ保持・監視とAPI利用制限は別途必要。
+
 匿名認証は一人一アカウントや身元の保証ではない。認証状態を失うと保存データへ戻れない可能性がある。
 将来のGoogle認証は既存ユーザーへのリンクを使い、UIDを維持する。メールを所有権キーにしない。
 別アカウントにリンク済みの場合の統合・復旧は今回未実装。
@@ -25,7 +37,13 @@ MVPの実装方針はFirebase Authentication匿名認証。正式なチーム合
 ## ローカル導入・実行
 
 前提：Node.js **24.15以上の24系**、package.json指定のpnpm、**Java 21以上**。
-追加SDK・CLI依存の実行条件に合わせ、Node.jsの下限をpackage.jsonへ明示している。
+ロック済み依存の`package.json`を確認した結果、下限は次の条件に合わせている。
+
+- `re2@1.27.0`とそのビルド用`node-gyp@13.1.0`はNode.js `^24.15.0`（24系の場合）を要求する。
+- `@firebase/rules-unit-testing@6.0.0`とFirebase SDK内の`@firebase/ai@3.0.0`も`>=24.12.0`を要求する。
+- Node.js 24.10で一部の動作が成功しても、依存パッケージの対応範囲を満たす根拠にはならない。
+  このため`engines.node`の`>=24.15.0 <25`を維持する。
+
 JavaはOSのパッケージ管理または[Adoptium](https://adoptium.net/)等で導入し、
 `java -version`で確認する。別のJDKを使う場合はJAVA_HOMEとPATHを設定する。
 
@@ -38,6 +56,18 @@ pnpm emulators
 CLIの対象はスクリプト内の架空プロジェクト`demo-groundtrip`に固定している。
 Authは127.0.0.1:9099、Firestoreは127.0.0.1:8080。外部公開しない。
 pnpmの依存スクリプト許可は`pnpm-workspace.yaml`へ記録し、無差別な許可をしない。
+
+`re2: true`は`firebase-tools@15.35.0 → superstatic@10.0.0 → re2@1.27.0`という
+開発用CLIの間接依存に限る既存の許可。re2のinstallはネイティブバイナリの取得を試み、
+利用できない場合はnode-gypによるコンパイルを行う。アプリの認証処理からre2を直接使わない。
+Auth/Firestore Emulatorそのものの必須依存ではなく、superstaticのoptional依存である。
+未ビルドではsuperstaticがJavaScriptのRegExpへフォールバックするため、許可を削除すると
+CLIのHosting用正規表現の実装も変わる。今回は既存CLIの挙動とRE2の利用を維持し、許可を残す。
+新たなビルドスクリプトは許可しない。CLI更新時には依存経路・取得先・ビルド内容を再確認する。
+
+Vitestは`src/**/*.test.{ts,tsx}`を対象とする。#18の統合時は設定を`vitest.config.ts`へ一本化し、
+#18の`oxc.jsx.runtime: 'automatic'`と`@`エイリアスに加えて、#19の`server-only`エイリアスも保持する。
+今回は#18の画面・依存パッケージ・JSX設定を取り込まない。
 
 別ターミナルで`.env.example`を`.env.local`へコピーして`pnpm dev`を起動する。
 サンプルは架空の値だけを含み、ローカルEmulator専用。本番の値は混ぜない。
@@ -240,6 +270,16 @@ CIに両Emulatorの専用ジョブを追加し、本番認証情報を渡さな�
 
 **App Check・利用者別/全体の利用制限は未実装。有料APIを安全に公開できる状態ではない。**
 今回有料APIは追加していない。認証API自体の大量アクセス・匿名アカウント大量作成のリスクも残る。
+
+既存の`POST /api/trips/generate`にも認証・App Check・利用制限はまだ接続していない。
+`.env.example`の`TRIP_GENERATION_ENABLED=false`を維持し、公開前に次を引き継ぐ。
+
+- #10：`requireActor`による検証済みUIDの境界を提供し、#6/#7/#9のAPIへの適用と認可を確認する。
+- #6（Gemini）/#7（Places/Routes）：認証・App Checkの検証後、UID別と全体の共有利用枠を
+  原子的に予約してから有料呼び出しを行う。未認証・不正App Check・枠超過・枠確認失敗では呼び出さない。
+- #16：明示的な匿名利用開始、Bearer IDトークンとApp Checkトークンの送信を画面へ接続する。
+- 公開判断前に、匿名UID再作成・並列要求・複数インスタンス・再試行でも全体上限を回避できないことと、
+  Cloud側クォータ・停止手順の実効性を検証する。匿名認証やApp Checkだけを課金上限の代わりにしない。
 
 導入境界はRoute Handlerの認証に続くサーバー保護処理とする。
 ブラウザがX-Firebase-AppCheckを送り、Admin SDKでトークンと対象アプリを検証する。
