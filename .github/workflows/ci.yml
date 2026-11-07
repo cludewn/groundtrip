@@ -31,10 +31,6 @@ jobs:
           cache: pnpm
       - name: 依存関係をインストール
         run: pnpm install --frozen-lockfile
-      - name: 一時整形出力（修正後に削除）
-        run: |
-          pnpm exec prettier src/features/reflection-flow/api-client.ts src/features/reflection-flow/api-client.test.ts src/features/reflection-flow/reflection-flow.tsx src/features/reflection-flow/reflection-flow.test.tsx src/app/reflection/page.tsx --write
-          node -e 'const fs=require("node:fs"); for(const f of process.argv.slice(1)){console.log("FORMATTED_FILE:"+f+" "+JSON.stringify(fs.readFileSync(f,"utf8")))}' src/features/reflection-flow/api-client.ts src/features/reflection-flow/api-client.test.ts src/features/reflection-flow/reflection-flow.tsx src/features/reflection-flow/reflection-flow.test.tsx src/app/reflection/page.tsx
       - name: フォーマット
         run: pnpm format:check
       - name: Lint
