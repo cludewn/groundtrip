@@ -40,7 +40,7 @@ export function OnSiteReplanningFlow({
   const activeReview =
     step === 'review' &&
     session !== null &&
-    target !== undefined &&
+    target != null &&
     !target.isFixed &&
     sameTrip(session.trip, trip)
 
