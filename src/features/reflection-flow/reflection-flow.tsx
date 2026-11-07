@@ -1,12 +1,11 @@
 'use client'
 
+import Link from 'next/link'
+
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import type { Trip } from '@/domain'
-import {
-  initializeAnonymousSession,
-  startNewAnonymousSession,
-} from '@/lib/auth/client'
+import { initializeAnonymousSession, startNewAnonymousSession } from '@/lib/auth/client'
 import { LearningReview } from '@/features/learning-review/learning-review'
 
 import {
@@ -43,31 +42,34 @@ export function ReflectionFlow({ initialTripId }: { initialTripId?: string }) {
   const [savedError, setSavedError] = useState('')
   const sessionRequestRef = useRef(0)
 
-  const openSession = useCallback(async (newAccount: boolean) => {
-    const request = ++sessionRequestRef.current
-    setSession({ kind: 'loading' })
-    try {
-      if (newAccount) {
-        // 過去の匿名UIDを復旧できない可能性を説明したボタンからだけ実行する。
-        await startNewAnonymousSession()
-      } else {
-        await initializeAnonymousSession()
+  const openSession = useCallback(
+    async (newAccount: boolean) => {
+      const request = ++sessionRequestRef.current
+      setSession({ kind: 'loading' })
+      try {
+        if (newAccount) {
+          // 過去の匿名UIDを復旧できない可能性を説明したボタンからだけ実行する。
+          await startNewAnonymousSession()
+        } else {
+          await initializeAnonymousSession()
+        }
+        const list = await loadSavedTrips()
+        if (request !== sessionRequestRef.current) return
+        const warning =
+          list.listInfo.skippedInvalid || list.listInfo.truncated
+            ? '一部の旅程を表示できません。保存データの状態を確認してください。'
+            : ''
+        setSession({ kind: 'ready', trips: list.trips, warning })
+        if (initialTripId && list.trips.some((trip) => trip.id === initialTripId)) {
+          setSelectedTripId(initialTripId)
+        }
+      } catch (error) {
+        if (request !== sessionRequestRef.current) return
+        setSession({ kind: 'error', message: messageOf(error) })
       }
-      const list = await loadSavedTrips()
-      if (request !== sessionRequestRef.current) return
-      const warning =
-        list.listInfo.skippedInvalid || list.listInfo.truncated
-          ? '一部の旅程を表示できません。保存データの状態を確認してください。'
-          : ''
-      setSession({ kind: 'ready', trips: list.trips, warning })
-      if (initialTripId && list.trips.some((trip) => trip.id === initialTripId)) {
-        setSelectedTripId(initialTripId)
-      }
-    } catch (error) {
-      if (request !== sessionRequestRef.current) return
-      setSession({ kind: 'error', message: messageOf(error) })
-    }
-  }, [initialTripId])
+    },
+    [initialTripId],
+  )
 
   useEffect(() => {
     void openSession(false)
@@ -131,9 +133,7 @@ export function ReflectionFlow({ initialTripId }: { initialTripId?: string }) {
           学びは本人が確認・承認して保存するまで、次回には使われません。
         </p>
       </header>
-      {session.kind === 'loading' && (
-        <p role="status">保存した旅程と認証状態を確認しています…</p>
-      )}
+      {session.kind === 'loading' && <p role="status">保存した旅程と認証状態を確認しています…</p>}
       {session.kind === 'error' && (
         <section className="space-y-3 rounded border border-current/40 p-4">
           <p role="alert">{session.message}</p>
@@ -167,12 +167,20 @@ export function ReflectionFlow({ initialTripId }: { initialTripId?: string }) {
           <h2 id="saved-trips-heading" className="text-lg font-semibold">
             保存済みの旅行
           </h2>
-          {session.warning && <p role="alert" className="text-sm">{session.warning}</p>}
+          {session.warning && (
+            <p role="alert" className="text-sm">
+              {session.warning}
+            </p>
+          )}
           {session.trips.length === 0 ? (
             <div className="space-y-2 rounded border border-current/30 p-4 text-sm">
               <p>保存された旅行がありません。</p>
-              <p>旅行計画を作るだけではFirestoreに保存されません。保存が完了した旅程だけを振り返りに利用できます。</p>
-              <a className="underline" href="/">旅行計画へ戻る</a>
+              <p>
+                旅行計画を作るだけではFirestoreに保存されません。保存が完了した旅程だけを振り返りに利用できます。
+              </p>
+              <a className="underline" href="/">
+                旅行計画へ戻る
+              </a>
             </div>
           ) : (
             <ul className="space-y-2">
@@ -196,13 +204,13 @@ export function ReflectionFlow({ initialTripId }: { initialTripId?: string }) {
           )}
         </section>
       )}
-      {history?.kind === 'loading' && (
-        <p role="status">旅行と変更履歴を読み込んでいます…</p>
-      )}
+      {history?.kind === 'loading' && <p role="status">旅行と変更履歴を読み込んでいます…</p>}
       {history?.kind === 'error' && (
         <section className="space-y-2" role="alert">
           <p>{history.message}</p>
-          <p className="text-sm">変更履歴が不完全な場合、誤った学びを作らないため振り返りを開始しません。</p>
+          <p className="text-sm">
+            変更履歴が不完全な場合、誤った学びを作らないため振り返りを開始しません。
+          </p>
           {selectedTripId && (
             <button
               className="rounded border border-current/50 px-4 py-3"
@@ -217,7 +225,8 @@ export function ReflectionFlow({ initialTripId }: { initialTripId?: string }) {
       {history?.kind === 'ready' && (
         <section className="space-y-4">
           <p className="rounded border border-current/30 p-3 text-sm">
-            {history.history.trip.region}（{history.history.trip.date}）の保存済みデータを表示しています。
+            {history.history.trip.region}（{history.history.trip.date}
+            ）の保存済みデータを表示しています。
             保存された変更履歴には、まだ承認されていない提案が含まれる場合があります。
             未承認の変更や模擬報告は、実際に起きた出来事として学びにしません。
           </p>
@@ -238,9 +247,19 @@ export function ReflectionFlow({ initialTripId }: { initialTripId?: string }) {
             >
               保存済みの内容を再取得
             </button>
-            {savedError && <p role="alert" className="text-sm">{savedError}</p>}
-            {!savedError && !saved && <p role="status" className="text-sm">取得中…</p>}
-            {saved && saved.learnings.length === 0 && <p className="text-sm">保存済みの学びはありません。</p>}
+            {savedError && (
+              <p role="alert" className="text-sm">
+                {savedError}
+              </p>
+            )}
+            {!savedError && !saved && (
+              <p role="status" className="text-sm">
+                取得中…
+              </p>
+            )}
+            {saved && saved.learnings.length === 0 && (
+              <p className="text-sm">保存済みの学びはありません。</p>
+            )}
             {saved && saved.learnings.length > 0 && (
               <ul className="space-y-2">
                 {saved.learnings.map(({ learning }) => (
