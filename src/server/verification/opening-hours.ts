@@ -1,4 +1,5 @@
 import type { OpeningPeriod } from '../maps'
+import { formatMinutes, toMinutes } from './travel'
 
 // 通常営業時間（Placesの`regularOpeningHours`）と、予定の滞在時間帯を照合する。
 // 判定できるのは「通常営業時間の範囲内か」だけ。臨時休業・特別営業・混雑・予約の可否は判定できない。
@@ -25,14 +26,6 @@ export function weekdayIndex(isoDate: string): number {
 }
 
 export const weekdayName = (isoDate: string): string => WEEKDAY_NAMES[weekdayIndex(isoDate)]
-
-const toMinutes = (time: string): number => {
-  const [hours, minutes] = time.split(':').map(Number)
-  return hours * 60 + minutes
-}
-
-const formatMinutes = (total: number): string =>
-  `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`
 
 const weekMinute = (point: { day: number; hour: number; minute: number }): number =>
   point.day * DAY + point.hour * 60 + point.minute

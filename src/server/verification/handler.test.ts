@@ -65,6 +65,17 @@ describe('POST /api/trips/verify', () => {
     expect(verify).not.toHaveBeenCalled()
   })
 
+  it('verify が invalid_trip を返したら、400 invalid_request（メッセージはそのまま）', async () => {
+    const { deps } = setup({ status: 'invalid_trip', message: '時刻が重なっています' })
+    const response = await handleVerifyTripRequest(post(validBody), deps)
+
+    expect(response.status).toBe(400)
+    expect(await response.json()).toEqual({
+      status: 'invalid_request',
+      message: '時刻が重なっています',
+    })
+  })
+
   it('移動手段の指定（travelModes）などの未知の項目は、無視せず、400で拒否する', async () => {
     const { verify, deps } = setup()
     const response = await handleVerifyTripRequest(

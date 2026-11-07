@@ -2,7 +2,7 @@
 // 移動時間は、Routesの結果（呼び出し側が取得）。結果が無い・取得できないときは、間に合うとも
 // 間に合わないとも言わず、「確認できない」にする。Geminiの推定時間で補わない。
 
-const toMinutes = (time: string): number => {
+export const toMinutes = (time: string): number => {
   const [hours, minutes] = time.split(':').map(Number)
   return hours * 60 + minutes
 }
