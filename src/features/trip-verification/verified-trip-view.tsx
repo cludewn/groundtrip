@@ -25,10 +25,15 @@ type Phase =
 // 固定・版・Place ID・根拠以外に変更があった場合、古い照合結果を重ねない。
 // 固定は照合中でも操作できるため、同じ予定の内容を維持していれば根拠だけ取り込める。
 function itineraryFingerprint(trip: Trip): string {
-  const { version: _version, stops, ...remaining } = trip
   return JSON.stringify({
-    ...remaining,
-    stops: stops.map(({ isFixed: _fixed, placeId: _placeId, evidence: _evidence, ...stop }) => stop),
+    ...trip,
+    version: 0,
+    stops: trip.stops.map((stop) => ({
+      ...stop,
+      isFixed: false,
+      placeId: null,
+      evidence: [],
+    })),
   })
 }
 
