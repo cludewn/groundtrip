@@ -35,8 +35,8 @@ export default function TermsPage() {
           2. Google Maps Platformの利用
         </h2>
         <p className="mt-2">
-          このアプリは、旅程の地点や移動時間を外部の情報と照合する機能で、Google Maps
-          Platform（Places API、Routes API）の機能とコンテンツを利用します。
+          照合の機能を有効にした環境では、このアプリは、旅程の地点や移動時間を外部の情報と照合し、Google
+          Maps Platform（Places API、Routes API）の機能とコンテンツを利用します。
         </p>
         <p className="mt-2">
           Google
