@@ -15,6 +15,14 @@ export const failureGuidance: Record<GenerationFailureKind, { title: string; act
     title: 'AIによる旅程の生成に失敗しました',
     action: '入力内容はそのままです。時間をおいて、もう一度お試しください。',
   },
+  auth_required: {
+    title: '認証を確認できません',
+    action: '保存済みの学びを使うには、以前の利用者の認証状態を確認してください。',
+  },
+  selection_changed: {
+    title: '保存済みの学びが変更されました',
+    action: '学びの一覧を再読み込みして選び直してください。',
+  },
   invalid_request: {
     title: '入力内容を受け付けられませんでした',
     action: '入力内容を確認して、もう一度お試しください。',

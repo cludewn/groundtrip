@@ -15,6 +15,8 @@ export type GenerationFailureKind =
   | 'insufficient_information'
   | 'external_service_error'
   | 'invalid_request'
+  | 'selection_changed'
+  | 'auth_required'
   | 'payload_too_large'
   | 'service_unavailable'
   | 'interrupted'
@@ -30,6 +32,9 @@ export type GenerationResult = { ok: true; trip: Trip } | { ok: false; failure: 
 export interface GenerationOptions {
   fetchFn?: typeof fetch
   signal?: AbortSignal
+  endpoint?: string
+  payload?: unknown
+  headers?: HeadersInit
 }
 
 // 共通契約の外にある、API層だけのエラー本文（入力不備・サイズ超過・内部エラー等）。
@@ -51,21 +56,25 @@ const EXPECTED_HTTP_STATUS = {
   insufficient_information: 422,
   external_service_error: 502,
   invalid_request: 400,
+  selection_changed: 409,
+  auth_required: 401,
   payload_too_large: 413,
   service_unavailable: 503,
 } as const
 
 export async function requestTripGeneration(
   request: GenerateTripRequest,
-  { fetchFn = fetch, signal }: GenerationOptions = {},
+  { fetchFn = fetch, signal, endpoint = GENERATE_TRIP_ENDPOINT, payload, headers }: GenerationOptions = {},
 ): Promise<GenerationResult> {
   let response: Response
   let text: string
   try {
-    response = await fetchFn(GENERATE_TRIP_ENDPOINT, {
+    const requestHeaders = new Headers(headers)
+    requestHeaders.set('Content-Type', 'application/json')
+    response = await fetchFn(endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(request),
+      headers: requestHeaders,
+      body: JSON.stringify(payload ?? request),
       signal,
     })
     // 本文の受信中に切れた場合も、応答は完結していない。不正なJSONとは区別する。
@@ -99,6 +108,8 @@ export async function requestTripGeneration(
     // 利用者が行動で解消できる、API層のエラー。ステータスが仕様と一致するものだけ扱う。
     if (
       (status === 'invalid_request' ||
+        status === 'selection_changed' ||
+        status === 'auth_required' ||
         status === 'payload_too_large' ||
         status === 'service_unavailable') &&
       response.status === EXPECTED_HTTP_STATUS[status]
