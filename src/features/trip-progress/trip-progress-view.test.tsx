@@ -33,12 +33,39 @@ const travelEvidence = (
 })
 
 // 昼食店A（2番目）に、移動時間の根拠を付けた旅程。
-const tripWithLunchTravel = (items: Evidence[]): Trip => ({
+const tripWithLunchTravel = (items: Evidence[]): Trip => tripWithEvidence('stop-lunch', items)
+
+// 指定した予定の根拠を、差し替えた旅程。keepは、元の根拠（sampleTripでは模擬データ）を残すか。
+const tripWithEvidence = (stopId: string, items: Evidence[], keep = true): Trip => ({
   ...sampleTrip,
   stops: sampleTrip.stops.map((stop) =>
-    stop.id === 'stop-lunch' ? { ...stop, evidence: [...stop.evidence, ...items] } : stop,
+    stop.id === stopId ? { ...stop, evidence: keep ? [...stop.evidence, ...items] : items } : stop,
   ),
 })
+
+const evidenceOf = (
+  id: string,
+  subject: Evidence['subject'],
+  status: Evidence['status'],
+  sourceKind: Evidence['source']['kind'],
+): Evidence => ({
+  id,
+  subject,
+  claim: '確認した内容',
+  applicability: '2026-11-08 Asia/Tokyo',
+  source: { kind: sourceKind, label: '出典' },
+  checkedAt: '2026-11-08T09:00:00+09:00',
+  status,
+  explanation: '説明',
+})
+
+// 実測・照合を思わせる文言。模擬データの表示には、決して出さない。
+const realLookingWords = /情報源と整合|間に合う見込み|確認できた|営業時間内/
+
+const SIM_NOTE = '実際の施設・営業時間・移動を確認した結果ではありません'
+const evidenceList = () => within(currentCard()).getByRole('list', { name: '根拠の状態' })
+const demoMark = (item: HTMLElement) => item.querySelector('.border-dashed')
+const checkMark = (item: HTMLElement) => item.querySelector('svg path[d^="M5 12.5"]')
 
 const user = () => userEvent.setup()
 const forwardButton = () => screen.getByRole('button', { name: '次の予定へ進む' })
@@ -215,11 +242,12 @@ describe('固定予定の表示', () => {
 describe('根拠の状態', () => {
   it('いまの予定の根拠を、項目ごとの文字で示す。根拠が無ければ「未照合」', async () => {
     render(<TripProgressView trip={sampleTrip} />)
-    expect(within(currentCard()).getByText('施設の存在：情報源と整合')).toBeTruthy()
+    // sampleTripの根拠は、すべて模擬データ。実測の「情報源と整合」「矛盾あり」とは書かない。
+    expect(within(currentCard()).getByText('施設の存在：デモ用の想定')).toBeTruthy()
     await user().click(forwardButton())
-    expect(within(currentCard()).getByText('営業時間：矛盾あり')).toBeTruthy()
+    expect(within(currentCard()).getByText('営業時間：デモ用の想定（食い違いあり）')).toBeTruthy()
     await user().click(forwardButton())
-    expect(within(currentCard()).getByText('営業時間：確認できない')).toBeTruthy()
+    expect(within(currentCard()).getByText('営業時間：デモ用の想定（確認できない）')).toBeTruthy()
 
     const noEvidence: Trip = {
       ...sampleTrip,
@@ -228,6 +256,72 @@ describe('根拠の状態', () => {
     cleanup()
     render(<TripProgressView trip={noEvidence} />)
     expect(within(currentCard()).getByText(/根拠：未照合/)).toBeTruthy()
+    expect(currentCard().textContent).not.toContain('デモ用の想定')
+  })
+
+  it('実際の根拠（places・routes）は、従来どおりの見出しと印で示し、デモ用の表示を付けない', () => {
+    const trip = tripWithEvidence(
+      'stop-morning',
+      [
+        evidenceOf('real-hours', 'opening_hours', 'consistent', 'places'),
+        evidenceOf('real-travel', 'travel_time', 'conflicting', 'routes'),
+      ],
+      false,
+    )
+    render(<TripProgressView trip={trip} />)
+    const hours = within(evidenceList()).getByText('営業時間：情報源と整合')
+    expect(checkMark(hours.closest('li') as HTMLElement)).not.toBeNull()
+    expect(within(evidenceList()).getByText('移動時間：矛盾あり')).toBeTruthy()
+    expect(demoMark(evidenceList())).toBeNull()
+    expect(currentCard().textContent).not.toContain('デモ用の想定')
+    expect(currentCard().textContent).not.toContain(SIM_NOTE)
+  })
+
+  it('模擬データには、実測を思わせる文言を使わず、補足と、チェックではない「デモ」の印を付ける', () => {
+    render(<TripProgressView trip={sampleTrip} />)
+    expect(currentCard().textContent).not.toMatch(realLookingWords)
+    expect(currentCard().textContent).toContain(SIM_NOTE)
+    // 緑のチェックではなく、破線の枠＋「デモ」の文字で区別する（色だけに頼らない）。
+    const item = within(evidenceList()).getByText('施設の存在：デモ用の想定').closest('li')
+    expect(checkMark(item as HTMLElement)).toBeNull()
+    expect(demoMark(item as HTMLElement)?.textContent).toBe('デモ')
+  })
+
+  it('実際の根拠と模擬が混在するとき、実際の分は従来どおり、模擬の分だけがデモ用になる', () => {
+    // 朝の庭園には、元の模擬の根拠（施設の存在・整合）がある。そこへ実際の根拠と、別の模擬を足す。
+    const trip = tripWithEvidence('stop-morning', [
+      evidenceOf('real-place', 'place_identity', 'consistent', 'places'),
+      evidenceOf('real-hours', 'opening_hours', 'consistent', 'places'),
+      evidenceOf('sim-hours', 'opening_hours', 'consistent', 'simulation'),
+    ])
+    render(<TripProgressView trip={trip} />)
+    const items = within(evidenceList()).getAllByRole('listitem')
+    const summary = items.map((item) => ({
+      text: item.querySelector('.min-w-0')?.textContent,
+      demo: demoMark(item) !== null,
+      check: checkMark(item) !== null,
+    }))
+    expect(summary).toEqual([
+      { text: '施設の存在：情報源と整合', demo: false, check: true },
+      { text: '施設の存在：デモ用の想定', demo: true, check: false },
+      { text: '営業時間：情報源と整合', demo: false, check: true },
+      { text: '営業時間：デモ用の想定', demo: true, check: false },
+    ])
+  })
+
+  it('模擬の「整合」が、実際の矛盾を隠したり、実際の整合に数えられたりしない', () => {
+    const trip = tripWithEvidence(
+      'stop-morning',
+      [
+        evidenceOf('real-hours', 'opening_hours', 'conflicting', 'places'),
+        evidenceOf('sim-hours', 'opening_hours', 'consistent', 'simulation'),
+      ],
+      false,
+    )
+    render(<TripProgressView trip={trip} />)
+    expect(within(evidenceList()).getByText('営業時間：矛盾あり')).toBeTruthy()
+    expect(within(evidenceList()).getByText('営業時間：デモ用の想定')).toBeTruthy()
+    expect(within(evidenceList()).queryByText('営業時間：情報源と整合')).toBeNull()
   })
 })
 
@@ -238,23 +332,67 @@ describe('次の予定までの移動の根拠', () => {
     render(<TripProgressView trip={sampleTrip} />)
     expect(within(nextCard()).getByText('移動時間は未確認')).toBeTruthy()
     expect(textOfNext()).not.toContain('間に合う')
+    expect(textOfNext()).not.toContain('デモ用の想定')
   })
 
   it.each([
     ['consistent', '間に合う見込み（情報源と整合）'],
     ['conflicting', '間に合わない見込み（矛盾あり）'],
     ['unverifiable', '移動時間を確認できない'],
-  ] as const)('%s のとき「%s」', (evidenceStatus, text) => {
+  ] as const)('実際の根拠が %s のとき「%s」。デモ用の表示は付かない', (evidenceStatus, text) => {
     render(<TripProgressView trip={tripWithLunchTravel([travelEvidence(evidenceStatus)])} />)
     expect(within(nextCard()).getByText(text)).toBeTruthy()
-    expect(within(nextCard()).queryByText(/模擬データ/)).toBeNull()
+    expect(textOfNext()).not.toContain('デモ用の想定')
+    expect(textOfNext()).not.toContain(SIM_NOTE)
   })
 
-  it('模擬データ由来なら、実測ではないと併記する', () => {
+  it.each([
+    ['consistent', 'デモ用の想定'],
+    ['conflicting', 'デモ用の想定（食い違いあり）'],
+    ['unverifiable', 'デモ用の想定（確認できない）'],
+  ] as const)(
+    '模擬が %s のときは、実測ではなく「%s」。「移動時間は未確認」も併せて示す',
+    (evidenceStatus, text) => {
+      render(
+        <TripProgressView
+          trip={tripWithLunchTravel([travelEvidence(evidenceStatus, 'simulation')])}
+        />,
+      )
+      expect(within(nextCard()).getByText(text)).toBeTruthy()
+      expect(within(nextCard()).getByText('移動時間は未確認')).toBeTruthy()
+      expect(textOfNext()).not.toMatch(realLookingWords)
+      // 補足は1回だけ。見出しがデモ用なので、別の「情報源：模擬データ」は併記しない。
+      expect(textOfNext().split(SIM_NOTE)).toHaveLength(2)
+      expect(textOfNext()).not.toContain('情報源：模擬データ')
+    },
+  )
+
+  it('実際の根拠と模擬が混在するとき、実際の分は従来どおり、模擬は別にデモ用で示す', () => {
     render(
-      <TripProgressView trip={tripWithLunchTravel([travelEvidence('consistent', 'simulation')])} />,
+      <TripProgressView
+        trip={tripWithLunchTravel([
+          travelEvidence('conflicting', 'routes'),
+          { ...travelEvidence('consistent', 'simulation'), id: 'travel-demo' },
+        ])}
+      />,
     )
-    expect(within(nextCard()).getByText('情報源：模擬データ（実測ではありません）')).toBeTruthy()
+    expect(within(nextCard()).getByText('間に合わない見込み（矛盾あり）')).toBeTruthy()
+    expect(within(nextCard()).getByText('デモ用の想定')).toBeTruthy()
+    expect(within(nextCard()).queryByText('移動時間は未確認')).toBeNull()
+    expect(textOfNext()).not.toContain('間に合う見込み')
+  })
+
+  it('実際の整合と模擬の矛盾が混在するとき、模擬は数えず、実際の整合はそのまま示す', () => {
+    render(
+      <TripProgressView
+        trip={tripWithLunchTravel([
+          travelEvidence('consistent', 'routes'),
+          { ...travelEvidence('conflicting', 'simulation'), id: 'travel-demo' },
+        ])}
+      />,
+    )
+    expect(within(nextCard()).getByText('間に合う見込み（情報源と整合）')).toBeTruthy()
+    expect(within(nextCard()).getByText('デモ用の想定（食い違いあり）')).toBeTruthy()
   })
 
   it('予定上の間隔を、現在時刻に頼らず予定の時刻から示す', () => {
@@ -271,6 +409,17 @@ describe('次の予定までの移動の根拠', () => {
     }
     render(<TripProgressView trip={overlapping} />)
     expect(textOfNext()).toContain('予定が重なっています')
+  })
+})
+
+describe('模擬データ（sampleTrip）を、照合済みに見せない', () => {
+  it('いまの予定・次の予定・路線のどこにも、実測・照合を思わせる文言が出ない', async () => {
+    const { container } = render(<TripProgressView trip={sampleTrip} />)
+    for (let step = 0; step < 3; step += 1) {
+      expect(container.textContent).not.toMatch(realLookingWords)
+      expect(currentCard().textContent).toContain('デモ用の想定')
+      if (step < 2) await user().click(forwardButton())
+    }
   })
 })
 

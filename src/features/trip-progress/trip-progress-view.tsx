@@ -13,7 +13,8 @@ import {
   stepBack,
   stepForward,
   stopEndTime,
-  travelBasisOf,
+  simulatedNote,
+  travelBasesOf,
   type StopProgress,
 } from './progress-model'
 import { CheckIcon, FixedChip, ProgressChip, StatusLine } from './progress-parts'
@@ -175,14 +176,20 @@ function CurrentCard({ stop, onReplan }: { stop: Stop; onReplan?: (stopId: strin
           </li>
         ) : (
           lines.map((line) => (
-            <li key={line.subject}>
+            <li key={`${line.subject}-${line.simulated ? 'demo' : 'real'}`}>
               <StatusLine
                 kind={line.status}
+                simulated={line.simulated}
               >{`${line.subjectLabel}：${line.statusLabel}`}</StatusLine>
             </li>
           ))
         )}
       </ul>
+      {lines.some((line) => line.simulated) && (
+        <p className={`mt-1.5 text-xs text-(color:--tp-muted) ${wrapClass}`}>
+          「デモ用の想定」は、{simulatedNote}。
+        </p>
+      )}
       {onReplan &&
         (stop.isFixed ? (
           <p className={`mt-3 text-sm text-(color:--tp-muted) ${wrapClass}`}>
@@ -220,7 +227,7 @@ function NextCard({ current, next }: { current: Stop; next: Stop | undefined }) 
 }
 
 function NextBody({ current, next }: { current: Stop; next: Stop }) {
-  const basis = travelBasisOf(next)
+  const bases = travelBasesOf(next)
   const gap = gapMinutes(current, next)
   return (
     <>
@@ -235,10 +242,18 @@ function NextBody({ current, next }: { current: Stop; next: Stop }) {
       <p className={`text-xl font-black leading-snug ${wrapClass}`}>{next.name}</p>
       <div className="mt-3 grid gap-1.5">
         <p className="text-xs font-bold text-(color:--tp-muted)">次の予定までの移動</p>
-        <StatusLine kind={basis.kind}>{basis.text}</StatusLine>
-        {basis.simulated && (
+        {bases.map((basis) => (
+          <StatusLine
+            key={basis.simulated ? 'demo' : 'real'}
+            kind={basis.kind}
+            simulated={basis.simulated}
+          >
+            {basis.text}
+          </StatusLine>
+        ))}
+        {bases.some((basis) => basis.simulated) && (
           <p className={`text-xs text-(color:--tp-muted) ${wrapClass}`}>
-            情報源：模擬データ（実測ではありません）
+            「デモ用の想定」は、{simulatedNote}。
           </p>
         )}
         <p className={`text-xs text-(color:--tp-muted) ${wrapClass}`}>

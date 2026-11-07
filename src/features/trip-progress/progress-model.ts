@@ -75,6 +75,19 @@ function worstOf(evidence: readonly Evidence[]): Evidence | null {
   return worst
 }
 
+// 模擬データ（デモ用の想定）か。実際の照合結果（places・routesなど）とは、必ず分けて扱う。
+const isSimulated = (item: Evidence): boolean => item.source.kind === 'simulation'
+
+// 模擬データの状態の見出し。「確認できた」「情報源と整合」など、実際の照合を思わせる文言を使わない。
+export const simulatedStatusLabels = {
+  consistent: 'デモ用の想定',
+  conflicting: 'デモ用の想定（食い違いあり）',
+  unverifiable: 'デモ用の想定（確認できない）',
+} satisfies Record<EvidenceStatus, string>
+
+// 模擬データの補足。見出しの下に添える。
+export const simulatedNote = '実際の施設・営業時間・移動を確認した結果ではありません'
+
 export const evidenceSubjectLabels = {
   place_identity: '施設の存在',
   opening_hours: '営業時間',
@@ -94,20 +107,31 @@ export interface EvidenceLine {
   subjectLabel: string
   status: EvidenceStatus
   statusLabel: string
+  // 模擬データ由来（デモ用の想定）か。実際の照合結果とは別の行になる。
+  simulated: boolean
 }
 
-// 予定の根拠の状態を、確認項目ごとに1行にまとめる（項目ごとに最も重い状態）。根拠が無ければ空。
+// 予定の根拠の状態を、確認項目ごとに1行にまとめる（実際の根拠と模擬を分け、それぞれ最も重い状態）。
+// 同じ項目に実際の根拠と模擬が混在するときは、実際の行のあとに、模擬の行（デモ用の想定）を並べる。
+// 模擬を実際の根拠に数えない。根拠が無ければ空。
 export function evidenceLines(stop: Pick<Stop, 'evidence'>): EvidenceLine[] {
   const lines: EvidenceLine[] = []
   for (const subject of SUBJECT_ORDER) {
-    const worst = worstOf(stop.evidence.filter((item) => item.subject === subject))
-    if (worst) {
-      lines.push({
-        subject,
-        subjectLabel: evidenceSubjectLabels[subject],
-        status: worst.status,
-        statusLabel: evidenceStatusLabels[worst.status],
-      })
+    for (const simulated of [false, true]) {
+      const worst = worstOf(
+        stop.evidence.filter((item) => item.subject === subject && isSimulated(item) === simulated),
+      )
+      if (worst) {
+        lines.push({
+          subject,
+          subjectLabel: evidenceSubjectLabels[subject],
+          status: worst.status,
+          statusLabel: simulated
+            ? simulatedStatusLabels[worst.status]
+            : evidenceStatusLabels[worst.status],
+          simulated,
+        })
+      }
     }
   }
   return lines
@@ -119,7 +143,7 @@ export type TravelBasisKind = 'unchecked' | EvidenceStatus
 export interface TravelBasis {
   kind: TravelBasisKind
   text: string
-  // 模擬データ由来のときは、実測ではないことを併記するために使う。
+  // 模擬データ由来（デモ用の想定）のとき。実際の移動の確認結果ではない。
   simulated: boolean
 }
 
@@ -130,14 +154,23 @@ export const travelBasisTexts = {
   unverifiable: '移動時間を確認できない',
 } satisfies Record<TravelBasisKind, string>
 
-// 次の予定に付いた「移動時間」の根拠から、前の予定の終了後の移動の見通しを説明する。
+// 次の予定に付いた「移動時間」の根拠から、前の予定の終了後の移動の見通しを説明する（表示する順に返す）。
 // 「情報源と整合」は、現実の正しさを保証しない。根拠が無いときに、間に合うと断定しない。
-export function travelBasisOf(nextStop: Pick<Stop, 'evidence'>): TravelBasis {
-  const worst = worstOf(nextStop.evidence.filter((item) => item.subject === 'travel_time'))
-  if (!worst) return { kind: 'unchecked', text: travelBasisTexts.unchecked, simulated: false }
-  return {
-    kind: worst.status,
-    text: travelBasisTexts[worst.status],
-    simulated: worst.source.kind === 'simulation',
+// 実際の根拠（最も重い状態）がある間は、それを示す。実際の根拠が無ければ「移動時間は未確認」とする。
+// 模擬データは実際の根拠に数えず、あれば最後に「デモ用の想定」として別に示す（間に合う見込みなどとは書かない）。
+export function travelBasesOf(nextStop: Pick<Stop, 'evidence'>): TravelBasis[] {
+  const travel = nextStop.evidence.filter((item) => item.subject === 'travel_time')
+  const real = worstOf(travel.filter((item) => !isSimulated(item)))
+  const simulated = worstOf(travel.filter(isSimulated))
+  const bases: TravelBasis[] = real
+    ? [{ kind: real.status, text: travelBasisTexts[real.status], simulated: false }]
+    : [{ kind: 'unchecked', text: travelBasisTexts.unchecked, simulated: false }]
+  if (simulated) {
+    bases.push({
+      kind: simulated.status,
+      text: simulatedStatusLabels[simulated.status],
+      simulated: true,
+    })
   }
+  return bases
 }
