@@ -49,13 +49,11 @@ GroundTripの核は **「AIの提案を、人間が根拠で選ぶ（Own the Why
 
 ## 3. 状態の意味を分離する
 
-| 軸 | 値・意味 | 利用者への表示方針 |
-| --- | --- | --- |
-| 根拠の照合 | `consistent`／`conflicting`／`unverifiable` | 情報源と整合／矛盾あり／確認できない |
-| まだ照合していない | `evidence: []` | **未照合**。「確認できない」と混同しない |
-| 制約検証 | `not_checked`／`satisfied`／`violated`／`unknown` | 予定への影響を平易に説明し、裏付けを詳しく確認可能にする |
-| 本人の判断 | `pending`／`approved`／`rejected` | 候補／承認／却下。承認とサーバーへの適用・保存は別 |
-| 固定 | `Stop.isFixed` | ロックと「固定予定」。予約の有無は示さない |
+- **根拠の照合：** `consistent`／`conflicting`／`unverifiable`。情報源と整合／矛盾あり／確認できない。
+- **まだ照合していない：** `evidence: []`は「未照合」。「確認できない」と混同しない。
+- **制約検証：** `not_checked`／`satisfied`／`violated`／`unknown`。予定への影響を平易に説明し、裏付けを詳しく確認可能にする。
+- **本人の判断：** `pending`／`approved`／`rejected`。候補／承認／却下。承認とサーバーへの適用・保存は別。
+- **固定：** `Stop.isFixed`。ロックと「固定予定」。予約の有無は示さない。
 
 **表示の原則：**
 
