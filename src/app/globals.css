@@ -14,6 +14,8 @@
   --gt-muted: #5c615f;
   --gt-rule: #d8d8d0;
   --gt-line: #e4572e;
+  /* 白い文字を載せる操作ボタン用。--gt-lineは白文字だとコントラストが不足する */
+  --gt-line-strong: #b93a1f;
   --gt-ok: #17694a;
   --gt-ok-bg: #dcefe5;
   --gt-warn: #a8231b;
@@ -29,6 +31,7 @@
   --color-gt-muted: var(--gt-muted);
   --color-gt-rule: var(--gt-rule);
   --color-gt-line: var(--gt-line);
+  --color-gt-line-strong: var(--gt-line-strong);
   --color-gt-ok: var(--gt-ok);
   --color-gt-ok-bg: var(--gt-ok-bg);
   --color-gt-warn: var(--gt-warn);

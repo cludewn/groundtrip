@@ -27,10 +27,13 @@ export function RouteFailure({
   title,
   message,
   action,
+  note,
 }: {
   title: string
   message: string
   action?: string
+  // 保持されているものがあれば、実際に保証できる範囲だけを書く（呼び出し側が責任を持つ）。
+  note?: string
 }) {
   return (
     <div role="alert" className="rounded-2xl border-2 border-gt-warn bg-gt-warn-bg p-4 text-gt-ink">
@@ -45,7 +48,7 @@ export function RouteFailure({
       </p>
       {action && <p className="mt-1 text-sm">{action}</p>}
       <p className="mt-1 text-sm">詳細：{message}</p>
-      <p className="mt-2 text-xs text-gt-muted">元の旅程や入力内容は変更されていません。</p>
+      {note && <p className="mt-2 text-xs text-gt-muted">{note}</p>}
     </div>
   )
 }

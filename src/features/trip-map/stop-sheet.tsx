@@ -12,7 +12,8 @@ interface StopSheetProps {
   stop: Stop
   index: number
   meta: RouteStopMeta
-  kind: StopKind
+  // 種別が取得できていなければundefined（「予定」と中立に表示する。観光とは決めつけない）。
+  kind?: StopKind
   // 部分修正を始める。未提供なら、修正の操作は表示しない（未実装の操作を見せない）。
   onStartRevision?: (stopId: string) => void
   onToggleFixed: (stopId: string, fixed: boolean) => void
@@ -56,8 +57,8 @@ export function StopSheet({
         {stop.name}
       </h2>
       <p className="text-[13px] text-gt-muted">
-        {index + 1}番目・{stopKindLabels[kind]}・{stop.plannedStartTime}〜{endTime(stop)}（
-        {stop.durationMinutes}分）
+        {index + 1}番目・{kind ? stopKindLabels[kind] : '予定'}・{stop.plannedStartTime}〜
+        {endTime(stop)}（{stop.durationMinutes}分）
       </p>
 
       {stop.isFixed && (
@@ -114,7 +115,7 @@ export function StopSheet({
             type="button"
             disabled={stop.isFixed}
             onClick={() => onStartRevision(stop.id)}
-            className="min-h-12 flex-1 rounded-xl bg-gt-line px-4 text-[15px] font-black text-white disabled:cursor-not-allowed disabled:opacity-45"
+            className="min-h-12 flex-1 rounded-xl bg-gt-line-strong px-4 text-[15px] font-black text-white disabled:cursor-not-allowed disabled:opacity-45"
           >
             {stop.isFixed ? '固定中は変更できません' : 'この予定だけ変更'}
           </button>

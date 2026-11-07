@@ -178,6 +178,8 @@ export function TripPlanner({ generate, renderTrip = defaultRenderTrip }: TripPl
           title={failureGuidance[state.failure.kind].title}
           action={failureGuidance[state.failure.kind].action}
           message={state.failure.message}
+          // 再生成に失敗すると、以前の旅程は表示から消える。保持されているのは、フォームの入力内容だけ。
+          note="入力内容は保持されています。"
         />
       )}
 

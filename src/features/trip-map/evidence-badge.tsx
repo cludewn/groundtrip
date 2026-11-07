@@ -60,12 +60,16 @@ export function EvidenceBadge({ evidence }: { evidence: Pick<Evidence, 'subject'
 }
 
 // まだ照合していない（evidenceが空）。「確認できない」とは別の状態として示す。
-export function UnverifiedBadge() {
+// 暗い背景（固定予定のチケット）の上では、明るい地に濃い文字にして、文字のコントラストを確保する。
+export function UnverifiedBadge({ onDark = false }: { onDark?: boolean }) {
+  const tone = onDark ? 'border-white bg-white text-gt-ink' : 'border-gt-muted text-gt-muted'
   return (
-    <span className="inline-flex items-center gap-1 rounded-md border-[1.5px] border-dotted border-gt-muted py-0.5 pl-1 pr-2 text-[11.5px] font-bold leading-tight text-gt-muted">
+    <span
+      className={`inline-flex items-center gap-1 rounded-md border-[1.5px] border-dotted py-0.5 pl-1 pr-2 text-[11.5px] font-bold leading-tight ${tone}`}
+    >
       <span
         aria-hidden="true"
-        className="inline-flex size-4 items-center justify-center rounded-full border-[1.5px] border-dotted border-gt-muted text-[10px] leading-none"
+        className={`inline-flex size-4 items-center justify-center rounded-full border-[1.5px] border-dotted text-[10px] leading-none ${onDark ? 'border-gt-ink' : 'border-gt-muted'}`}
       >
         −
       </span>
@@ -105,8 +109,21 @@ export function EvidenceDetail({ evidence }: { evidence: Evidence }) {
           <dt className="text-gt-muted">情報源</dt>
           <dd>
             {evidenceSourceLabels[evidence.source.kind]}（{evidence.source.label}）
+            {evidence.source.url && (
+              <>
+                {' '}
+                <a
+                  href={evidence.source.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline"
+                >
+                  情報源を開く<span className="sr-only">（新しいタブで開きます）</span>
+                </a>
+              </>
+            )}
           </dd>
-          <dt className="text-gt-muted">取得日時</dt>
+          <dt className="text-gt-muted">照合日時</dt>
           <dd>{checkedAtFormat.format(new Date(evidence.checkedAt))}</dd>
           <dt className="text-gt-muted">説明</dt>
           <dd>{evidence.explanation}</dd>

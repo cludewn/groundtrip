@@ -2,8 +2,11 @@ import type { Stop, Trip } from '@/domain'
 
 import { EvidenceBadge, UnverifiedBadge } from './evidence-badge'
 import { LockIcon } from './icons'
+import { evidenceStatusLabels } from '@/domain'
+
 import {
   endTime,
+  evidenceSubjectLabels,
   stopKindLabels,
   worstEvidence,
   type RouteMeta,
@@ -18,6 +21,9 @@ interface RouteMapProps {
   selectedStopId?: string | null
   onSelectStop: (stopId: string) => void
 }
+
+// 予定のボタンのid。詳細シートを閉じたあとのフォーカスの復帰先に使う。
+export const stopButtonId = (stopId: string) => `stop-button-${stopId}`
 
 const RAIL_WIDTH = 68
 const NODE_CENTER_Y = 34
@@ -57,11 +63,11 @@ function Node({ stop, index, kind }: { stop: Stop; index: number; kind: StopKind
   )
 }
 
-function Evidence({ stop }: { stop: Stop }) {
+function Evidence({ stop, onDark = false }: { stop: Stop; onDark?: boolean }) {
   const worst = worstEvidence(stop.evidence)
   return (
     <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
-      {worst ? <EvidenceBadge evidence={worst} /> : <UnverifiedBadge />}
+      {worst ? <EvidenceBadge evidence={worst} /> : <UnverifiedBadge onDark={onDark} />}
       {stop.evidence.length > 1 && (
         <span className="text-xs text-gt-muted">ほか{stop.evidence.length - 1}件</span>
       )}
@@ -107,13 +113,19 @@ function StopButton({
   selected: boolean
   onSelect: () => void
 }) {
-  const label = `${stop.plannedStartTime} ${stop.name}${stop.isFixed ? '（固定予定）' : ''}の詳細を開く`
+  const worst = worstEvidence(stop.evidence)
+  // 読み上げでも、時刻・滞在時間・固定の有無・根拠の代表状態が分かるようにする。
+  const evidenceLabel = worst
+    ? `${evidenceSubjectLabels[worst.subject]}：${evidenceStatusLabels[worst.status]}`
+    : '未照合'
+  const label = `${stop.plannedStartTime}から${stop.durationMinutes}分 ${stop.name}${stop.isFixed ? '（固定予定）' : ''}、${evidenceLabel}。詳細を開く`
   const selectedRing = selected ? 'outline outline-[3px] outline-offset-2 outline-gt-line/60' : ''
   const isTicket = stop.isFixed || kind === 'meal' || kind === 'reserved'
 
   if (!isTicket) {
     return (
       <button
+        id={stopButtonId(stop.id)}
         type="button"
         onClick={onSelect}
         aria-label={label}
@@ -134,6 +146,7 @@ function StopButton({
   const dark = stop.isFixed
   return (
     <button
+      id={stopButtonId(stop.id)}
       type="button"
       onClick={onSelect}
       aria-label={label}
@@ -175,7 +188,7 @@ function StopButton({
           {meta.price ? `・${meta.price}` : ''}
         </span>
         <span className="mt-1.5 block">
-          <Evidence stop={stop} />
+          <Evidence stop={stop} onDark={dark} />
         </span>
       </span>
     </button>

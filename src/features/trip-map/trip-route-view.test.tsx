@@ -119,7 +119,7 @@ describe('旅程の路線図: 選択と詳細', () => {
     expect(stopButton(/昼食店A/).getAttribute('aria-pressed')).toBe('true')
   })
 
-  it('根拠の詳細（確認項目・情報源・取得日時・説明）をタップで確認できる', async () => {
+  it('根拠の詳細（確認項目・情報源・照合日時・説明）をタップで確認できる', async () => {
     const user = userEvent.setup()
     renderView()
     await user.click(stopButton(/昼食店A/))
@@ -129,7 +129,8 @@ describe('旅程の路線図: 選択と詳細', () => {
     expect(detail).toContain('確認項目')
     expect(detail).toContain('情報源')
     expect(detail).toContain('模擬データ')
-    expect(detail).toContain('取得日時')
+    expect(detail).toContain('照合日時')
+    expect(detail).not.toContain('取得日時')
     expect(detail).toContain('2026/11/08')
     expect(detail).toContain('情報源との矛盾があります')
   })
@@ -271,7 +272,7 @@ describe('旅程一覧の状態表示', () => {
     expect(screen.getByText('旅程を生成しています。しばらくお待ちください。')).toBeTruthy()
   })
 
-  it('失敗・情報不足の表示は、原因・次の行動・元データが保持されていることを伝える', () => {
+  it('失敗・情報不足の表示は、原因と次の行動を伝え、保証できないことは言わない', () => {
     render(
       <RouteFailure
         title="旅程を作るための情報が足りません"
@@ -284,6 +285,14 @@ describe('旅程一覧の状態表示', () => {
     expect(alert.textContent).toContain('エラー：旅程を作るための情報が足りません')
     expect(alert.textContent).toContain('旅行先をより具体的にしてください。')
     expect(alert.textContent).toContain('詳細：AIの回答: 地域を特定できません')
-    expect(alert.textContent).toContain('変更されていません')
+    // 元の旅程が保持されているとは、呼び出し側が明示しない限り、言わない。
+    expect(alert.textContent).not.toContain('元の旅程')
+    expect(alert.textContent).not.toContain('変更されていません')
+  })
+
+  it('保持されているものがあれば、呼び出し側が渡した説明だけを表示する', () => {
+    render(<RouteFailure title="失敗" message="詳細" note="入力内容は保持されています。" />)
+
+    expect(screen.getByRole('alert').textContent).toContain('入力内容は保持されています。')
   })
 })

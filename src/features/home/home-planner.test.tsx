@@ -51,4 +51,29 @@ describe('HomePlanner: 入力から路線図まで', () => {
     expect(within(dialog).queryByRole('button', { name: /この予定だけ変更/ })).toBeNull()
     expect(dialog.textContent).toContain('照合していません')
   })
+
+  it('再生成に失敗すると、以前の旅程は表示から消える。保持されていると案内しない（保持されるのは入力内容だけ）', async () => {
+    const generate = vi
+      .fn<GenerateTrip>()
+      .mockResolvedValueOnce({ ok: true, trip: generatedTrip })
+      .mockResolvedValueOnce({
+        ok: false,
+        failure: { kind: 'external_service_error', message: '接続できませんでした' },
+      })
+    const user = userEvent.setup()
+    render(<HomePlanner generate={generate} />)
+
+    await user.type(screen.getByLabelText(/旅行先/), '京都市東山エリア')
+    fireEvent.change(screen.getByLabelText(/日付/), { target: { value: '2026-11-14' } })
+    await user.click(screen.getByRole('button', { name: '旅程を作成する' }))
+    expect(await screen.findByRole('list', { name: '旅程の路線図' })).toBeTruthy()
+
+    await user.click(screen.getByRole('button', { name: '旅程を作成する' }))
+    const alert = await screen.findByRole('alert')
+
+    expect(screen.queryByRole('list', { name: '旅程の路線図' })).toBeNull()
+    expect(alert.textContent).toContain('入力内容は保持されています。')
+    expect(alert.textContent).not.toContain('元の旅程')
+    expect((screen.getByLabelText(/旅行先/) as HTMLInputElement).value).toBe('京都市東山エリア')
+  })
 })
