@@ -586,6 +586,19 @@ describe('LearningReview: 再レビューの指摘', () => {
     expect((feedback() as HTMLTextAreaElement).value).toBe('')
   })
 
+  it('地域変更のリセット表示は、次に候補を作る操作で消える（残り続けない）', async () => {
+    // 地域が変わったあとの旅程に合う候補（すべての旅行向け）を返す。
+    const { user, rerender } = setup(proposed({ ...sampleLearning, scope: { kind: 'all_trips' } }))
+    rerender({ trip: { ...sampleTrip, region: '別の地域' } })
+    expect(screen.getByText(/旅程の地域が変わったため/)).toBeTruthy()
+
+    await user.type(feedback(), '感想')
+    await user.click(makeButton())
+    await screen.findByRole('heading', { name: /学びの候補（/ })
+
+    expect(screen.queryByText(/旅程の地域が変わったため/)).toBeNull()
+  })
+
   it('地域が変わったあとに届いた、旧地域の応答は採用しない', async () => {
     const pending = deferred()
     const request = vi.fn<RequestCandidates>(() => pending.promise)

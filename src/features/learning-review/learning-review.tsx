@@ -129,13 +129,11 @@ export function LearningReview({
   const contextKey = useMemo(() => JSON.stringify([trip, revisions]), [trip, revisions])
   const contextKeyRef = useRef(contextKey)
   const reviewRef = useRef(review)
-  const tripRef = useRef(trip)
   // 更新のコミットと同時に（描画の反映の直後、ブラウザの描画前に）同期する。
   // 通常の副作用では、コミットから実行までの間に旧リクエストの応答が届くことがある（startTransition など）。
   useLayoutEffect(() => {
     contextKeyRef.current = contextKey
     reviewRef.current = review
-    tripRef.current = trip
   })
 
   // 別の旅程、または同じ旅程の別の地域になったら、前の候補・承認状態・入力を消す（描画中の状態調整）。
@@ -208,6 +206,7 @@ export function LearningReview({
       return
     }
     setFeedbackError('')
+    setResetNotice('')
 
     inFlightRef.current = true
     const seq = (seqRef.current += 1)
