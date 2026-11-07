@@ -284,6 +284,66 @@ describe('reviseTrip: 成立しない候補は提案しない', () => {
   })
 })
 
+describe('reviseTrip: 隣の予定の区間が未測定のときは「確認できない」', () => {
+  const withoutGarden: MapsSetup['places'] = {
+    ...basePlaces,
+    朝の庭園: { status: 'no_candidates' },
+  }
+  const withoutExhibition: MapsSetup['places'] = {
+    ...basePlaces,
+    '14時の予約展示': { status: 'no_candidates' },
+  }
+  const explanationOf = (response: Awaited<ReturnType<typeof reviseTrip>>) => {
+    const [revision] = proposed(response)
+    expect(revision.constraintCheck.status).toBe('unknown')
+    expect(revision.approval).toEqual({ status: 'pending' })
+    return revision.constraintCheck.explanation
+  }
+  const routes = route({ WALK: walk(10) })
+
+  it('次の予定の施設を特定できない（候補なし）なら unknown', async () => {
+    const setup = { places: withoutExhibition, routes }
+    const { response } = await run(setup, clientReturning(draft([{ name: '昼食店B' }])))
+
+    expect(explanationOf(response)).toContain('次の予定への移動')
+  })
+
+  it('前の予定の施設を特定できない（候補なし）なら unknown', async () => {
+    const setup = { places: withoutGarden, routes }
+    const { response } = await run(setup, clientReturning(draft([{ name: '昼食店B' }])))
+
+    expect(explanationOf(response)).toContain('前の予定からの移動')
+  })
+
+  it('隣の予定のPlaces検索が失敗（MapsCallError）したなら unknown', async () => {
+    const places = { ...basePlaces, '14時の予約展示': new MapsCallError('network', 'x') }
+    const { response } = await run(
+      { places, routes },
+      clientReturning(draft([{ name: '昼食店B' }])),
+    )
+
+    expect(explanationOf(response)).toContain('次の予定への移動')
+  })
+
+  it('隣の予定が乗車・乗換（transport）で施設として特定できないなら unknown', async () => {
+    const trip = TripSchema.parse({
+      ...sampleTrip,
+      stops: sampleTrip.stops.map((stop) =>
+        stop.id === 'stop-exhibition'
+          ? { ...stop, name: '電車で嵐山へ移動（乗換あり）', kind: 'transport' }
+          : stop,
+      ),
+    })
+    const { response } = await run(
+      { places: withoutExhibition, routes },
+      clientReturning(draft([{ name: '昼食店B' }])),
+      { ...request, trip },
+    )
+
+    expect(explanationOf(response)).toContain('次の予定への移動')
+  })
+})
+
 describe('reviseTrip: 候補の整理', () => {
   it('元の予定・重複と同じ名称は、候補にしない（照合は残った1件だけ）', async () => {
     const client = clientReturning(
@@ -427,6 +487,42 @@ describe('checkRevisionConstraints（適用の直前の再検証）', () => {
     expect(result.status).toBe('external_service_error')
   })
 
+  it('固定予定を対象にしたRevisionは、再検証で not_possible', async () => {
+    const revision = await revisionFor()
+    const fixedTrip = TripSchema.parse({
+      ...sampleTrip,
+      stops: sampleTrip.stops.map((stop) => ({ ...stop, isFixed: true })),
+    })
+    const result = await checkRevisionConstraints(fixedTrip, revision, deps(fitting))
+
+    expect(result).toEqual({ status: 'not_possible', explanation: '固定予定は変更できません。' })
+  })
+
+  it('変更前の予定のIDが、対象の予定と一致しないRevisionは not_possible', async () => {
+    const revision = await revisionFor()
+    const mismatched = {
+      ...revision,
+      diff: { ...revision.diff, before: { ...revision.diff.before, id: 'stop-other' } },
+    }
+    const result = await checkRevisionConstraints(sampleTrip, mismatched, deps(fitting))
+
+    expect(result.status).toBe('not_possible')
+  })
+
+  it('変更後の名称が、他の予定の名称と同じ（括弧書きを除いて比べる）Revisionは not_possible', async () => {
+    const revision = await revisionFor()
+    const duplicated = {
+      ...revision,
+      diff: { ...revision.diff, after: { ...revision.diff.after, name: '朝の庭園' } },
+    }
+    const result = await checkRevisionConstraints(sampleTrip, duplicated, deps(fitting))
+
+    expect(result).toEqual({
+      status: 'not_possible',
+      explanation: '他の予定と同じ名称には変更できません。',
+    })
+  })
+
   it('確認できない項目があれば unknown（承認の条件を満たさない）', async () => {
     const revision = await revisionFor()
     const result = await checkRevisionConstraints(
@@ -546,6 +642,8 @@ describe('変更前後の移動区間の比較（comparisons）', () => {
     expect(firstComparison.before.fromPrevious).toEqual({ presence: 'none', reason: 'first_stop' })
     expect(firstComparison.after.fromPrevious).toEqual({ presence: 'none', reason: 'first_stop' })
     expect(firstComparison.after.toNext.presence).toBe('segment')
+    // 区間が無いことは「未測定」ではないので、他が整合なら satisfied。
+    expect(first.response.revisions[0].constraintCheck.status).toBe('satisfied')
 
     const last = await run(setup, clientReturning(draft([{ name: '夕の候補' }])), {
       ...request,
@@ -557,6 +655,7 @@ describe('変更前後の移動区間の比較（comparisons）', () => {
     expect(lastComparison.before.toNext).toEqual({ presence: 'none', reason: 'last_stop' })
     expect(lastComparison.after.toNext).toEqual({ presence: 'none', reason: 'last_stop' })
     expect(lastComparison.after.fromPrevious.presence).toBe('segment')
+    expect(last.response.revisions[0].constraintCheck.status).toBe('satisfied')
   })
 
   it('除外された候補の比較は返さない（比較は、返したRevisionに対してだけ）', async () => {

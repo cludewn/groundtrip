@@ -7,9 +7,12 @@ import type { ConstraintCheck, Evidence } from '../../domain'
 export interface CandidateChecks {
   identity: Evidence | null
   hours: Evidence | null
-  // 前の予定 → 候補。対象が最初の予定なら無い。
+  // 前の予定 → 候補。対象が最初の予定なら、区間が無い（expectsTravelBefore=false）。
+  // 区間が有るのに根拠がnullなのは、未測定（隣の施設を特定できない等）で、「確認できない」として扱う。
+  expectsTravelBefore: boolean
   travelBefore: Evidence | null
-  // 候補 → 次の予定。対象が最後の予定なら無い。
+  // 候補 → 次の予定。対象が最後の予定なら、区間が無い（expectsTravelAfter=false）。
+  expectsTravelAfter: boolean
   travelAfter: Evidence | null
 }
 
@@ -30,16 +33,21 @@ export function judgeCandidate(checks: CandidateChecks): CandidateJudgement {
     }
   }
 
-  const items: { label: string; evidence: Evidence | null }[] = [
-    { label: '営業時間', evidence: checks.hours },
-    { label: '前の予定からの移動', evidence: checks.travelBefore },
-    { label: '次の予定への移動', evidence: checks.travelAfter },
-  ]
-  const present = items.filter(
-    (item): item is { label: string; evidence: Evidence } => item.evidence !== null,
-  )
+  const items: { label: string; evidence: Evidence | null; expected: boolean }[] = [
+    { label: '営業時間', evidence: checks.hours, expected: true },
+    {
+      label: '前の予定からの移動',
+      evidence: checks.travelBefore,
+      expected: checks.expectsTravelBefore,
+    },
+    {
+      label: '次の予定への移動',
+      evidence: checks.travelAfter,
+      expected: checks.expectsTravelAfter,
+    },
+  ].filter((item) => item.expected || item.evidence !== null)
 
-  const conflicting = present.filter((item) => item.evidence.status === 'conflicting')
+  const conflicting = items.filter((item) => item.evidence?.status === 'conflicting')
   if (conflicting.length > 0) {
     return {
       status: 'excluded',
@@ -49,18 +57,18 @@ export function judgeCandidate(checks: CandidateChecks): CandidateJudgement {
   }
 
   // 営業時間は必須の確認項目。移動は、対象の位置によって、前後のどちらかが無いことがある。
-  const allConsistent =
-    checks.hours !== null && present.every((i) => i.evidence.status === 'consistent')
+  // 区間が有るのに根拠が無い項目（未測定）は、整合とは扱わない。
+  const allConsistent = items.every((item) => item.evidence?.status === 'consistent')
   if (allConsistent) {
     return {
       status: 'candidate',
       constraintCheck: {
         status: 'satisfied',
-        explanation: `${present.map((item) => item.label).join('・')}は、情報源と整合しています。臨時休業・渋滞・遅延は考慮していません。`,
+        explanation: `${items.map((item) => item.label).join('・')}は、情報源と整合しています。臨時休業・渋滞・遅延は考慮していません。`,
       },
     }
   }
-  const unverified = present.filter((item) => item.evidence.status !== 'consistent')
+  const unverified = items.filter((item) => item.evidence?.status !== 'consistent')
   return {
     status: 'candidate',
     constraintCheck: {

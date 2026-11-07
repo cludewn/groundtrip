@@ -60,6 +60,9 @@ const GEMINI_FAILURE_MESSAGES: Record<GeminiCallFailureReason, string> = {
 const MAPS_FAILURE_MESSAGE =
   'Google Mapsとの通信に失敗したため、候補を確認できませんでした。時間をおいて、もう一度お試しください。元の旅程は、そのままです。'
 
+// 名称の比較キー。括弧書き（支店名など）を除いた名称で比べる：同じ店の別の支店も、同じ名称として扱う（保守的）。
+const nameKey = (name: string): string => parseName(name).base
+
 const externalFailure = (message: string): ProposalFailure => ({
   status: 'external_service_error',
   message,
@@ -189,7 +192,14 @@ async function evaluateCandidate(
   const noSides: MeasuredSides = { fromPrevious: null, toNext: null }
   // 施設を特定できない候補は、候補にしないため、移動は調べない（Routesの呼び出しを節約）。
   if (!place) {
-    const checks: CandidateChecks = { identity, hours: null, travelBefore: null, travelAfter: null }
+    const checks: CandidateChecks = {
+      identity,
+      hours: null,
+      expectsTravelBefore: previous !== null,
+      travelBefore: null,
+      expectsTravelAfter: next !== null,
+      travelAfter: null,
+    }
     return {
       kind: 'judged',
       after: candidate,
@@ -243,7 +253,14 @@ async function evaluateCandidate(
       ...(travelAfter ? [travelAfter] : []),
     ],
   }
-  const judgement = judgeCandidate({ identity, hours, travelBefore, travelAfter })
+  const judgement = judgeCandidate({
+    identity,
+    hours,
+    expectsTravelBefore: previous !== null,
+    travelBefore,
+    expectsTravelAfter: next !== null,
+    travelAfter,
+  })
   return { kind: 'judged', after, judgement, sides, travelBefore, travelAfter }
 }
 
@@ -272,6 +289,20 @@ export async function checkRevisionConstraints(
   })
   if (!surroundings)
     return { status: 'not_possible', explanation: '対象の予定が、旅程にありません。' }
+  // クライアントが返したRevisionの不変条件。固定予定は変更できず、変更前の予定は対象と一致し、
+  // 変更後の名称は他の予定と重複しない（生成時の重複除外と同じ基準）。
+  if (surroundings.target.isFixed) {
+    return { status: 'not_possible', explanation: '固定予定は変更できません。' }
+  }
+  if (revision.diff.before.id !== revision.targetStopId) {
+    return { status: 'not_possible', explanation: '変更前の予定が、対象の予定と一致しません。' }
+  }
+  const afterKey = nameKey(revision.diff.after.name)
+  if (
+    trip.stops.some((stop) => stop.id !== revision.targetStopId && nameKey(stop.name) === afterKey)
+  ) {
+    return { status: 'not_possible', explanation: '他の予定と同じ名称には変更できません。' }
+  }
   const checkedAt = (deps.now?.() ?? new Date()).toISOString()
   const evaluation = await evaluateCandidate(trip, surroundings, revision.diff.after.name, {
     ...deps,
@@ -370,8 +401,6 @@ export async function reviseTrip(
   }
 
   // 元の予定・他の予定・候補どうしと同じ名称は、差し替えの候補にならない。
-  // 括弧書き（支店名など）を除いた名称で比べる：同じ店の別の支店も、同じ名称の候補として除く（保守的）。
-  const nameKey = (name: string): string => parseName(name).base
   const taken = new Set(trip.stops.map((stop) => nameKey(stop.name)))
   const candidates = draft.candidates.filter((candidate) => {
     const key = nameKey(candidate.name)

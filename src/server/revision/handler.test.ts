@@ -109,6 +109,25 @@ describe('POST /api/trips/revise', () => {
     expect(revise).not.toHaveBeenCalled()
   })
 
+  it('予定の時刻が重なっている旅程は400（AI・Mapsを呼ばない）', async () => {
+    const { revise, deps } = setup()
+    const overlapping = {
+      ...sampleReviseTripRequest,
+      trip: {
+        ...sampleReviseTripRequest.trip,
+        // 昼食（12:00開始）が、14:00開始の展示にかかる長さになる。
+        stops: sampleReviseTripRequest.trip.stops.map((stop) =>
+          stop.id === 'stop-lunch' ? { ...stop, durationMinutes: 180 } : stop,
+        ),
+      },
+    }
+    const response = await handleReviseTripRequest(post(JSON.stringify(overlapping)), deps)
+
+    expect(response.status).toBe(400)
+    expect((await response.json()).status).toBe('invalid_request')
+    expect(revise).not.toHaveBeenCalled()
+  })
+
   it('想定外の例外は500にし、内容を漏らさない', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined)
     const revise = vi.fn().mockRejectedValue(new Error('秘密のトークン abc'))

@@ -1,6 +1,7 @@
 import { ReviseTripRequestSchema, ReviseTripResponseSchema } from '../../domain'
 import type { ReviseTripRequest, ReviseTripResponse } from '../../domain'
 import { errorResponse, noStoreHeaders, readBodyWithLimit } from '../http'
+import { hasTimeConflict } from '../verification/travel'
 
 // POST /api/trips/revise のHTTP処理。1地点の部分修正の候補（未承認のRevision）を返す。
 // 元の旅程は更新しない。承認・適用はこのAPIでは行わない。
@@ -76,6 +77,14 @@ export async function handleReviseTripRequest(
         path: issue.path.join('.'),
         message: issue.message,
       })),
+    })
+  }
+
+  // 予定の時刻が重なっている・時刻順でない旅程は、部分修正の対象にしない（決定論的な検証。AI・Mapsを呼ばない）。
+  if (hasTimeConflict(parsed.data.trip.stops)) {
+    return errorResponse(400, {
+      status: 'invalid_request',
+      message: '予定の時刻が重なっているか、時刻順に並んでいません。',
     })
   }
 
