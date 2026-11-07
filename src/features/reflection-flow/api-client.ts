@@ -40,6 +40,9 @@ export type TripList = z.infer<typeof TripListSchema>
 export type LearningList = z.infer<typeof LearningListResponseSchema>
 export type ReflectionHistory = { trip: Trip; revisions: Revision[] }
 
+// サーバーが返す固定コードに加え、この画面の検査で止めた理由（別の旅程の学びIDとの重複）も同じ形で表す。
+export const ID_COLLISION_CODE = 'id_collision'
+
 export class ReflectionApiError extends Error {
   constructor(
     message: string,
@@ -55,6 +58,28 @@ const INTERRUPTED_MESSAGE = '通信に失敗しました。接続を確認して
 const INVALID_RESPONSE_MESSAGE = '保存サービスから想定外の応答が返されました。'
 const PARTIAL_LIST_MESSAGE =
   '保存データの一覧をすべて確認できませんでした。誤った記録を使わないため、操作を中止しました。'
+
+// サーバーのエラー本文を読めないとき（プロキシのHTMLエラーなど）に、ステータスだけで選ぶ案内。
+function fallbackMessage(status: number): string {
+  if (status === 401) {
+    return '認証を確認できません。以前の匿名データを復元できるか確認してください。'
+  }
+  if (status === 409)
+    return '保存した内容がほかの操作で更新されました。最新の内容を確認してください。'
+  if (status === 503) return '保存機能は現在利用できません。時間をおいて、もう一度お試しください。'
+  if (status === 502 || status === 504) {
+    return '保存サービスに接続できませんでした。時間をおいて、もう一度お試しください。'
+  }
+  return '保存データを取得・更新できませんでした。'
+}
+
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text)
+  } catch {
+    return undefined
+  }
+}
 
 async function authorizedJson<T>(
   path: string,
@@ -73,6 +98,7 @@ async function authorizedJson<T>(
   if (signal?.aborted) throw new ReflectionApiError(INTERRUPTED_MESSAGE)
 
   let response: Response
+  let text: string
   try {
     response = await fetchFn(path, {
       method,
@@ -81,33 +107,22 @@ async function authorizedJson<T>(
       cache: 'no-store',
       signal,
     })
+    text = await response.text()
   } catch {
     throw new ReflectionApiError(INTERRUPTED_MESSAGE)
   }
   if (signal?.aborted) throw new ReflectionApiError(INTERRUPTED_MESSAGE)
 
-  let json: unknown
-  try {
-    json = await response.json()
-  } catch {
-    throw new ReflectionApiError(INVALID_RESPONSE_MESSAGE, response.status)
-  }
+  const json = parseJson(text)
+  // 本文がJSONかどうかより先にステータスを見る。プロキシが返すHTMLの502/503でも、状況に合う案内を使う。
   if (!response.ok) {
     const error = ErrorSchema.safeParse(json)
-    const fallback =
-      response.status === 401
-        ? '認証を確認できません。以前の匿名データを復元できるか確認してください。'
-        : response.status === 409
-          ? '保存した内容がほかの操作で更新されました。再読み込みして確認してください。'
-          : response.status === 503
-            ? '保存機能は現在利用できません。'
-            : '保存データを取得・更新できませんでした。'
-    throw new ReflectionApiError(
-      error.success ? error.data.error.message : fallback,
-      response.status,
-      error.success ? error.data.error.code : undefined,
-    )
+    if (error.success) {
+      throw new ReflectionApiError(error.data.error.message, response.status, error.data.error.code)
+    }
+    throw new ReflectionApiError(fallbackMessage(response.status), response.status)
   }
+  if (json === undefined) throw new ReflectionApiError(INVALID_RESPONSE_MESSAGE, response.status)
   const parsed = schema.safeParse(json)
   if (!parsed.success) throw new ReflectionApiError(INVALID_RESPONSE_MESSAGE, response.status)
   return parsed.data
@@ -145,17 +160,61 @@ export async function loadSavedLearnings(
   return authorizedJson('/api/learnings', LearningListResponseSchema, options)
 }
 
-function sameLearning(a: ApprovedLearning, b: ApprovedLearning): boolean {
+// 内容が同じ学びか。適用範囲は、キーの並び順に依存しないよう、項目ごとに比べる。
+export function sameLearning(a: ApprovedLearning, b: ApprovedLearning): boolean {
+  const sameScope =
+    a.scope.kind === 'all_trips'
+      ? b.scope.kind === 'all_trips'
+      : b.scope.kind === 'region' && a.scope.region === b.scope.region
   return (
     a.sourceTripId === b.sourceTripId &&
     a.category === b.category &&
     a.content === b.content &&
-    JSON.stringify(a.scope) === JSON.stringify(b.scope)
+    sameScope
   )
+}
+
+type SaveFailure = Extract<SaveResult, { ok: false }>
+
+// 再試行しても直らない失敗。保存できない理由を言い切り、「再読み込み」は版の食い違いのときだけ案内する
+// （再読み込みは、画面の承認と入力を消すため）。
+const NON_RETRYABLE_REASONS: Readonly<Record<string, string>> = {
+  version_conflict:
+    '保存済みの学びが、ほかの操作で更新されていました。上書きを防ぐため、保存を止めました。' +
+    'ページを再読み込みすると最新の内容を確認できますが、いまの承認と入力した内容は消えます。',
+  already_exists:
+    '同じIDの学びが、ほかの操作で先に保存されていました。上書きを防ぐため、保存を止めました。' +
+    'ページを再読み込みすると最新の内容を確認できますが、いまの承認と入力した内容は消えます。',
+  storage_limit_reached:
+    '保存できる学びの数が上限に達しているため、新しい学びは保存できません。' +
+    'もう一度保存しても、結果は変わりません。',
+  learning_revoked:
+    '撤回済みの学びと同じIDのため、保存できません。もう一度保存しても保存されません。' +
+    '学びの候補を作り直して、新しい学びとして承認してください。',
+  [ID_COLLISION_CODE]:
+    '別の旅行で使われている学びIDと重複しているため、保存できません。' +
+    'もう一度保存しても保存されません。学びの候補を作り直してください。',
+}
+
+function describeSaveFailure(error: unknown, savedIds: readonly string[]): SaveFailure {
+  const code = error instanceof ReflectionApiError ? error.code : undefined
+  const fixed = code === undefined ? undefined : NON_RETRYABLE_REASONS[code]
+  const reason =
+    fixed ??
+    (error instanceof ReflectionApiError
+      ? error.message
+      : error instanceof z.ZodError
+        ? '入力した学びの内容が保存条件を満たしていません。'
+        : error instanceof Error
+          ? error.message
+          : '保存に失敗しました。')
+  const prefix = savedIds.length > 0 ? String(savedIds.length) + '件は保存済みです。' : ''
+  return { ok: false, message: prefix + reason, savedIds, retryable: fixed === undefined }
 }
 
 // LearningReviewが要求する全件保存ポート。各候補の成功を確認するまで保存完了としない。
 // APIは1件ずつなので、一部成功したときは再取得して成功分のversionを引き継いで再試行する。
+// 1件でも保存できたときは、成功・失敗にかかわらずonSavedを呼ぶ（保存済みの一覧を取り直し、画面を事実に合わせる）。
 export function createFirestoreLearningStore(
   onSaved?: () => void,
   fetchFn: typeof fetch = fetch,
@@ -174,7 +233,8 @@ export function createFirestoreLearningStore(
       ) {
         return { ok: false, message: '学びの形式またはIDを確認できませんでした。' }
       }
-      let completed = 0
+      // 保存できた（またはすでに同じ内容で保存されていた）学びのID。
+      const savedIds: string[] = []
       try {
         const saved = await loadSavedLearnings({ signal: options?.signal, fetchFn })
         if (saved.listInfo.skippedInvalid || saved.listInfo.truncated) {
@@ -189,11 +249,15 @@ export function createFirestoreLearningStore(
             (existing.learning.sourceTripId !== learning.sourceTripId ||
               existing.learning.category !== learning.category)
           ) {
-            throw new ReflectionApiError('別の旅程で使われている学びIDと重複しています。')
+            throw new ReflectionApiError(
+              '別の旅程で使われている学びIDと重複しています。',
+              undefined,
+              ID_COLLISION_CODE,
+            )
           }
           if (existing && sameLearning(existing.learning, learning)) {
             observed.set(learning.id, existing)
-            completed += 1
+            savedIds.push(learning.id)
             continue
           }
           if (existing) {
@@ -227,24 +291,13 @@ export function createFirestoreLearningStore(
           }
           current.set(learning.id, result)
           observed.set(learning.id, result)
-          completed += 1
+          savedIds.push(learning.id)
         }
-        onSaved?.()
         return { ok: true }
       } catch (error) {
-        const reason =
-          error instanceof ReflectionApiError
-            ? error.message
-            : error instanceof z.ZodError
-              ? '入力した学びの内容が保存条件を満たしていません。'
-              : error instanceof Error
-                ? error.message
-                : '保存に失敗しました。'
-        const prefix =
-          completed > 0
-            ? String(completed) + '件は保存されましたが、残りを確認できませんでした。'
-            : ''
-        return { ok: false, message: prefix + reason + ' 再読み込みして確認してください。' }
+        return describeSaveFailure(error, savedIds)
+      } finally {
+        if (savedIds.length > 0) onSaved?.()
       }
     },
   }
