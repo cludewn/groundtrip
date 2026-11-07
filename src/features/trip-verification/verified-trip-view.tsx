@@ -6,6 +6,9 @@ import Link from 'next/link'
 import type { Trip } from '@/domain'
 import { GoogleMapsSourceBox } from '@/features/legal/google-maps-attribution'
 import { RevisionRouteView } from '@/features/revision-review/revision-route-view'
+import { requestRevisions } from '@/features/revision-review/api-client'
+import { OnSiteReplanningFlow } from '@/features/onsite-flow/onsite-replanning-flow'
+import { TripSavePanel } from '@/features/trip-save/trip-save-panel'
 
 import {
   requestTripVerification,
@@ -63,6 +66,7 @@ export function VerifiedTripView({
   verify?: VerifyTrip
 }) {
   const [displayTrip, setDisplayTrip] = useState(trip)
+  const [mode, setMode] = useState<'planning' | 'on_site'>('planning')
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' })
   const latestRef = useRef(trip)
   const sequenceRef = useRef(0)
@@ -77,6 +81,11 @@ export function VerifiedTripView({
     },
     [],
   )
+
+  const updateTrip = (next: Trip) => {
+    latestRef.current = next
+    setDisplayTrip(next)
+  }
 
   async function runVerification() {
     if (busyRef.current) return
@@ -172,12 +181,40 @@ export function VerifiedTripView({
         </p>
       </div>
 
-      <RevisionRouteView
-        trip={displayTrip}
-        onTripChange={(next) => {
-          latestRef.current = next
-        }}
-      />
+      <div role="group" aria-label="旅程の操作モード" className="grid grid-cols-2 gap-2">
+        <button
+          type="button"
+          aria-pressed={mode === 'planning'}
+          onClick={() => setMode('planning')}
+          className="min-h-11 rounded-xl border border-gt-rule px-3 py-2 font-semibold aria-pressed:bg-gt-ink aria-pressed:text-white"
+        >
+          旅行前
+        </button>
+        <button
+          type="button"
+          aria-pressed={mode === 'on_site'}
+          onClick={() => setMode('on_site')}
+          className="min-h-11 rounded-xl border border-gt-rule px-3 py-2 font-semibold aria-pressed:bg-gt-ink aria-pressed:text-white"
+        >
+          旅行中・困ったとき
+        </button>
+      </div>
+
+      {mode === 'planning' ? (
+        <RevisionRouteView
+          trip={displayTrip}
+          generate={requestRevisions}
+          onTripChange={updateTrip}
+        />
+      ) : (
+        <OnSiteReplanningFlow
+          trip={displayTrip}
+          generate={requestRevisions}
+          onTripChange={updateTrip}
+        />
+      )}
+
+      <TripSavePanel trip={displayTrip} />
 
       {hasMapsEvidence(displayTrip) && (
         <GoogleMapsSourceBox caption="確認に使った情報源">

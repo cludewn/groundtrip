@@ -27,6 +27,8 @@ interface TripPlannerProps {
   generate?: GenerateTrip
   // 生成された旅程の表示。#8の旅程一覧UIはここへ差し込む。省略時は暫定の一覧を出す。
   renderTrip?: (trip: Trip) => ReactNode
+  // 明示的に開いたときだけ、本人が承認した学びを選べる（選択IDはサーバーで再検証）。
+  renderLearningPicker?: (region: string) => ReactNode
 }
 
 const defaultRenderTrip = (trip: Trip) => <TripProposalPreview trip={trip} />
@@ -35,8 +37,13 @@ const inputClassName = 'gt-field px-3 py-3'
 
 // 旅行条件の入力から旅程の生成・表示までの入口。生成された旅程は提案であり、
 // 自動で承認・確定・保存しない。入力値は生成の成否にかかわらず保持する。
-export function TripPlanner({ generate, renderTrip = defaultRenderTrip }: TripPlannerProps) {
+export function TripPlanner({
+  generate,
+  renderTrip = defaultRenderTrip,
+  renderLearningPicker,
+}: TripPlannerProps) {
   const [values, setValues] = useState<TripFormValues>(initialFormValues)
+  const [showLearningPicker, setShowLearningPicker] = useState(false)
   const [errors, setErrors] = useState<TripFormErrors>({})
   const [fixedStopErrors, setFixedStopErrors] = useState<FixedStopErrorMap>({})
   const [fixedStopNotice, setFixedStopNotice] = useState('')
@@ -238,6 +245,25 @@ export function TripPlanner({ generate, renderTrip = defaultRenderTrip }: TripPl
             onRemove={removeFixedStop}
             onChange={updateFixedStop}
           />
+
+          {renderLearningPicker && (
+            <section className="space-y-2">
+              <button
+                type="button"
+                aria-expanded={showLearningPicker}
+                className="min-h-11 rounded-xl border border-gt-rule px-4 py-2 font-semibold"
+                onClick={() => setShowLearningPicker((current) => !current)}
+              >
+                前の旅の学びを選ぶ（任意）
+              </button>
+              {showLearningPicker &&
+                (values.region.trim() ? (
+                  renderLearningPicker(values.region.trim())
+                ) : (
+                  <p className="text-sm">まず旅行先を入力してください。</p>
+                ))}
+            </section>
+          )}
 
           <button
             type="submit"

@@ -1,5 +1,10 @@
 'use client'
 
+import { useCallback, useRef } from 'react'
+
+import { LearningReusePicker } from '@/features/learning-reuse/learning-reuse-picker'
+import { requestTripGeneration } from '@/features/trip-planner/api-client'
+import { requestTripWithSelectedLearnings } from '@/features/learning-reuse/generate-selected-client'
 import { TripPlanner } from '@/features/trip-planner/trip-planner'
 import type { GenerateTrip } from '@/features/trip-planner/use-trip-generation'
 import { VerifiedTripView, type VerifyTrip } from '@/features/trip-verification/verified-trip-view'
@@ -14,9 +19,31 @@ export function HomePlanner({
   generate?: GenerateTrip
   verify?: VerifyTrip
 }) {
+  // 本人が選んだIDのみを保持する。内容や承認状態はサーバーで再検証する。
+  const selectedIds = useRef<string[]>([])
+  const onSelectionChange = useCallback((ids: string[]) => {
+    selectedIds.current = ids
+  }, [])
+  const renderLearningPicker = useCallback(
+    (region: string) => (
+      <LearningReusePicker region={region} onSelectionChange={onSelectionChange} />
+    ),
+    [onSelectionChange],
+  )
+  const generateWithSelection = useCallback<GenerateTrip>(
+    (request, options) => {
+      if (generate) return generate(request, options)
+      return selectedIds.current.length > 0
+        ? requestTripWithSelectedLearnings(request, selectedIds.current, options)
+        : requestTripGeneration(request, options)
+    },
+    [generate],
+  )
+
   return (
     <TripPlanner
-      generate={generate}
+      generate={generateWithSelection}
+      renderLearningPicker={renderLearningPicker}
       renderTrip={(trip) => <VerifiedTripView key={trip.id} trip={trip} verify={verify} />}
     />
   )
