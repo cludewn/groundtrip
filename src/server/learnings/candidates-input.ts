@@ -35,7 +35,14 @@ export function isSimulated(revision: Revision): boolean {
   return revision.context.phase === 'on_site' && revision.context.report.kind === 'simulated'
 }
 
-// 材料があるか（感想か、承認済みの変更のどちらか）。無ければAIを呼ばずに、情報不足とする。
+// 学びの材料にできる変更履歴：本人が承認した、実際の報告に基づくものだけ。
+// 模擬報告（デモ用の想定）は、実際に起きた出来事ではないため、材料にもプロンプトにも含めない。
+// AIへの指示だけに頼らず、アプリケーション側で確実に除外する（材料判定とプロンプト生成で共通に使う）。
+export function usableRevisions(revisions: readonly Revision[]): Revision[] {
+  return approvedRevisions(revisions).filter((revision) => !isSimulated(revision))
+}
+
+// 材料があるか（感想か、学びの材料にできる変更のどちらか）。無ければAIを呼ばずに、情報不足とする。
 export function hasMaterial(input: Pick<LearningReviewInput, 'revisions' | 'feedback'>): boolean {
-  return input.feedback.length > 0 || approvedRevisions(input.revisions).length > 0
+  return input.feedback.length > 0 || usableRevisions(input.revisions).length > 0
 }
