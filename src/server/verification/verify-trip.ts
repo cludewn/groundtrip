@@ -142,16 +142,13 @@ export function identityEvidence(
 }
 
 // 旅程のタイムゾーンと、施設の現地時刻が同じと確かめられないときの理由（確かめられるときはnull）。
-// MVPが対象とするのは、日本（Asia/Tokyo）の旅程と、日本国内の施設だけ。
-function timeZoneProblem(trip: Trip, place: PlaceCandidate): string | null {
-  if (trip.timeZone !== 'Asia/Tokyo') {
-    return `旅程のタイムゾーン（${trip.timeZone}）では、施設の現地時刻との対応を確認できないため、営業時間を確認できません。`
-  }
-  const address = place.address?.normalize('NFKC').toLowerCase() ?? ''
-  if (!address.includes('日本') && !address.includes('japan')) {
-    return '施設の所在地が日本国内と確認できず、現地時刻が旅程のタイムゾーンと異なる可能性があるため、営業時間を確認できません。'
-  }
-  return null
+// MVPが対象とするのは、日本（Asia/Tokyo）の旅程だけ。採用する施設は、住所の行政区画（都道府県・市区町村）を
+// 日本の住所として読み取れ、旅程の地域と一致したものだけ（施設の同定の条件。`name-match.ts`）なので、
+// 施設の現地時刻は、日本標準時と同じ。住所に「Japan」の文字が含まれるかどうかでは、判定しない。
+function timeZoneProblem(trip: Trip): string | null {
+  return trip.timeZone === 'Asia/Tokyo'
+    ? null
+    : `旅程のタイムゾーン（${trip.timeZone}）では、施設の現地時刻との対応を確認できないため、営業時間を確認できません。`
 }
 
 export function hoursEvidence(
@@ -191,7 +188,7 @@ export function hoursEvidence(
     )
   }
   // 営業時間は、施設の現地時刻で表される。旅程のタイムゾーンと同じと確かめられるときだけ、照合する。
-  const zoneProblem = timeZoneProblem(trip, place)
+  const zoneProblem = timeZoneProblem(trip)
   if (zoneProblem) {
     return evidence(
       stop,

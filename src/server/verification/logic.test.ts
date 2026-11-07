@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import type { OpeningPeriod, PlaceCandidate } from '../maps'
 import {
   addressMatchesRegion,
+  administrativeUnits,
   compareNames,
   parseName,
   regionTokens,
@@ -28,8 +29,15 @@ const place = (
 describe('名称の解析と一致', () => {
   it('空白・記号・全角半角・大文字小文字の違いを吸収する', () => {
     expect(parseName('奥丹 清水').base).toBe(parseName('奥丹清水').base)
-    expect(parseName('ＡＢＣ・カフェ').base).toBe(parseName('abcカフェ').base)
+    expect(parseName('ＡＢＣ　カフェ').base).toBe(parseName('abcカフェ').base)
     expect(parseName('「茶寮 都路里」').base).toBe('茶寮都路里')
+  })
+
+  it('識別に必要な記号は、無視しない（「A/B」と「AB」・「A・B」と「AB」は別の名称）', () => {
+    expect(parseName('A/B').base).not.toBe(parseName('AB').base)
+    expect(parseName('A・B').base).not.toBe(parseName('AB').base)
+    expect(compareNames('A/B', 'AB')).toBe('none')
+    expect(compareNames('カフェ・ド・クリエ', 'カフェドクリエ')).toBe('none')
   })
 
   it('括弧書きは、比較用の名称から分け、識別情報として保持する', () => {
@@ -52,8 +60,11 @@ describe('名称の解析と一致', () => {
     expect(compareNames('麺処いちょう庵（四条店）', '麺処いちょう庵')).toBe('none')
   })
 
-  it('支店の指定ではない補足（架空・サンプルなど）は、無視する', () => {
-    expect(compareNames('洛東食事処（サンプル）', '洛東食事処')).toBe('exact')
+  it('括弧書きが一方にしかなければ、補足に見えても、同じ施設と確かめられない', () => {
+    expect(compareNames('資料館（別館）', '資料館')).toBe('none')
+    expect(compareNames('資料館', '資料館（別館）')).toBe('none')
+    expect(compareNames('洛東食事処（サンプル）', '洛東食事処')).toBe('none')
+    expect(compareNames('資料館（別館）', '資料館（別館）')).toBe('exact')
   })
 
   it('部分一致は認めない（別の施設を採用しない）', () => {
@@ -76,6 +87,33 @@ describe('名称の解析と一致', () => {
   })
 })
 
+describe('住所の行政区画', () => {
+  it('都道府県と市区町村（郡を含む）を、先頭から順に読み取る。町名・丁目は含めない', () => {
+    expect(administrativeUnits(KYOTO_ADDRESS)).toEqual(['京都府', '京都市', '東山区'])
+    expect(administrativeUnits('日本、〒153-0043 東京都目黒区東山1丁目')).toEqual([
+      '東京都',
+      '目黒区',
+    ])
+    expect(administrativeUnits('日本、〒250-0521 神奈川県足柄下郡箱根町仙石原')).toEqual([
+      '神奈川県',
+      '足柄下郡',
+      '箱根町',
+    ])
+    expect(administrativeUnits('北海道札幌市中央区北1条西2丁目')).toEqual([
+      '北海道',
+      '札幌市',
+      '中央区',
+    ])
+  })
+
+  it('日本の住所と読み取れないときは null（「Japan」の文字や地域の語が含まれていても）', () => {
+    expect(administrativeUnits(undefined)).toBeNull()
+    expect(administrativeUnits('')).toBeNull()
+    expect(administrativeUnits('Japan Street, Kentucky, United States 京都市')).toBeNull()
+    expect(administrativeUnits('1 Infinite Loop, Cupertino, CA')).toBeNull()
+  })
+})
+
 describe('所在地と地域', () => {
   it('地域を語に分け、「周辺」などの語尾は外す', () => {
     expect(regionTokens('京都・東山')).toEqual(['京都', '東山'])
@@ -88,14 +126,31 @@ describe('所在地と地域', () => {
     expect(addressMatchesRegion('日本、〒600-8216 京都府京都市下京区東塩小路町', REGION)).toBe(true)
   })
 
-  it('住所が無い・地域の語が無い・地域が空なら、裏付けなし', () => {
+  it('住所が無い・日本の住所と読み取れない・地域の語が無い・地域が空なら、裏付けなし', () => {
+    expect(addressMatchesRegion('Kyoto, 京都市 Street, Japan', REGION)).toBe(false)
     expect(addressMatchesRegion(undefined, REGION)).toBe(false)
     expect(addressMatchesRegion(OSAKA_ADDRESS, REGION)).toBe(false)
     expect(addressMatchesRegion(KYOTO_ADDRESS, '')).toBe(false)
   })
 
-  it('「京都」は、「東京都」の一部としては数えない', () => {
+  it('「京都」は、「東京都」の一部としては数えない（行政区画の名称で照合する）', () => {
     expect(addressMatchesRegion('日本、〒100-0001 東京都千代田区千代田', '京都')).toBe(false)
+  })
+
+  it('別の都道府県の同名の地名（東京都目黒区東山）を、「京都・東山」としない', () => {
+    const meguro = '日本、〒153-0043 東京都目黒区東山1丁目'
+
+    expect(addressMatchesRegion(meguro, '京都・東山')).toBe(false)
+    expect(addressMatchesRegion(meguro, '東京・目黒')).toBe(true)
+  })
+
+  it('行政区画として確認できない地域の語（駅名・町名など）は、裏付けにならない', () => {
+    expect(addressMatchesRegion(KYOTO_ADDRESS, '京都駅周辺')).toBe(false)
+    expect(addressMatchesRegion(KYOTO_ADDRESS, '清水')).toBe(false)
+  })
+
+  it('郡・町を含む地域（箱根）も、行政区画の名称と一致すれば、一致とする', () => {
+    expect(addressMatchesRegion('日本、〒250-0521 神奈川県足柄下郡箱根町仙石原', '箱根')).toBe(true)
   })
 })
 
@@ -236,6 +291,26 @@ describe('営業時間の照合（通常営業時間）', () => {
   it('営業の区間を解釈できない（閉店が無く24時間でもない）場合は unverifiable', () => {
     expect(checkOpeningHours([period(open(6, 9))], SAT, '10:00', 60).status).toBe('unverifiable')
     expect(checkOpeningHours([], SAT, '10:00', 60).status).toBe('unverifiable')
+  })
+
+  it('開店と閉店が同じ曜日・時刻の区間は、丸1週間の営業とせず、不完全なデータとして扱う', () => {
+    const sameTime = [period(open(6, 9), open(6, 9))]
+
+    // 別の曜日（月曜）・同じ曜日（土曜）のどちらでも、営業中と断定しない。
+    expect(checkOpeningHours(sameTime, '2026-11-09', '10:00', 60).status).toBe('unverifiable')
+    expect(checkOpeningHours(sameTime, SAT, '09:30', 60).status).toBe('unverifiable')
+
+    // 他に確認できた区間があれば、そこに収まる場合だけ「整合」。同時刻の区間は、営業時間外の根拠にしない。
+    const mixed = [period(open(6, 9), open(6, 12)), period(open(1, 9), open(1, 9))]
+    expect(checkOpeningHours(mixed, SAT, '10:00', 60).status).toBe('consistent')
+    expect(checkOpeningHours(mixed, '2026-11-09', '10:00', 60).status).toBe('unverifiable')
+  })
+
+  it('週をまたぐ営業として扱うのは、閉店が開店より小さい（日曜0:00をまたぐ）場合だけ', () => {
+    const wrap = [period(open(6, 22), open(0, 2))]
+
+    expect(checkOpeningHours(wrap, '2026-11-08', '01:00', 60).status).toBe('consistent')
+    expect(checkOpeningHours(wrap, '2026-11-10', '01:00', 60).status).toBe('conflicting')
   })
 
   it('24時間営業の正規の表現は、ちょうど1件だけ。他の区間と並ぶ「閉店なし」は24時間営業としない', () => {

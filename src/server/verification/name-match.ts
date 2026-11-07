@@ -6,19 +6,23 @@ import type { PlaceCandidate } from '../maps'
 //
 // 採用する条件（すべて満たすときだけ）：
 // - 名称が完全に一致する（部分一致は採用しない。「清水寺」と「清水寺 奥の院」のような別施設を避ける）。
-// - 括弧書きは、支店名などの識別情報として扱う。両方にある場合は、一致が必要。
-//   一方だけにある場合は、支店名の表記なら不一致、補足（「サンプル」など）なら無視する。
-// - 候補の所在地が、旅程の地域と矛盾しない（地域の語のどれかが、住所に含まれる）。
+//   比較で無視するのは、空白と、引用符・括弧類（「」『』【】“”）の装飾だけ。「/」「・」などの記号は、
+//   名称の一部として扱う（「A/B」と「AB」を同じにしない）。
+// - 括弧書きは、施設の識別情報（支店・別館など）として扱う。両方にあれば一致が必要。
+//   一方にしかなければ、同じ施設と確かめられないため、不一致とする（「資料館（別館）」と「資料館」）。
+// - 候補の所在地が、住所の行政区画（都道府県・市区町村）で、旅程の地域と一致する。
+//   地域の語が、住所の文字列のどこかに含まれるだけでは、一致としない（東京都目黒区東山を、京都・東山としない）。
 
-const STRIP = /[\s・･,、。.\-‐‑–—―~〜～'"“”「」『』【】[\]()!！?？/／]/g
+// 比較で無視する文字：空白と、引用符・括弧類の装飾だけ。
+const IGNORED = /[\s「」『』【】“”"]/g
 const PAREN_GROUP = /\(([^)]*)\)/g
 
-const strip = (text: string): string => text.replace(STRIP, '')
+const strip = (text: string): string => text.replace(IGNORED, '')
 
 export interface ParsedName {
   // 括弧書きを除いた名称（比較用）
   base: string
-  // 括弧書きの内容（支店名・補足）
+  // 括弧書きの内容（支店名・別館など。識別情報）
   qualifier: string
 }
 
@@ -33,22 +37,14 @@ export function parseName(name: string): ParsedName {
   return { base: strip(base), qualifier: qualifiers.join('') }
 }
 
-// 括弧書きが、支店・店舗の指定にあたるか（施設の識別に必要な情報か）。
-const BRANCH_QUALIFIER = /(店|支店|本店|分店|号店|店舗|営業所)$/
-
 export type NameMatchKind = 'exact' | 'none'
 
 export function compareNames(generated: string, found: string): NameMatchKind {
   const a = parseName(generated)
   const b = parseName(found)
   if (a.base.length === 0 || b.base.length === 0 || a.base !== b.base) return 'none'
-
-  if (a.qualifier && b.qualifier) return a.qualifier === b.qualifier ? 'exact' : 'none'
-  // 見つかった施設だけが、支店などを名乗る：生成した名称には支店の指定がなく、同じ施設と確かめられない。
-  if (b.qualifier) return 'none'
-  // 生成した名称だけに括弧書きがある：支店名の表記なら、その支店と確かめられない。補足なら無視する。
-  if (a.qualifier && BRANCH_QUALIFIER.test(a.qualifier)) return 'none'
-  return 'exact'
+  // 括弧書きは、識別情報。両方にあれば一致が必要で、一方にしかなければ、同じ施設と確かめられない。
+  return a.qualifier === b.qualifier ? 'exact' : 'none'
 }
 
 const REGION_SUFFIX = /(周辺|付近|近辺|エリア|地区|方面|一帯)$/
@@ -66,22 +62,38 @@ export function regionTokens(region: string): string[] {
   )
 }
 
-// 「京都」は「東京都」にも含まれるため、その場合だけ区別する。
-const containsToken = (text: string, token: string): boolean => {
-  let from = text.indexOf(token)
-  while (from !== -1) {
-    if (!(token === '京都' && text[from - 1] === '東')) return true
-    from = text.indexOf(token, from + 1)
+// 日本の住所の行政区画：都道府県の名称と、市区町村（郡を含む）の名称を、住所の先頭から順に読み取る。
+// 読み取れない（日本の住所と確かめられない）ときは、null。町名・丁目・建物名は、行政区画として扱わない。
+const COUNTRY_PREFIX = /^(日本|japan)[、,\s]*/
+const POSTAL_CODE = /^〒?\s*\d{3}-?\d{4}\s*/
+const PREFECTURE = /^(北海道|東京都|京都府|大阪府|[^\s\d、,]{2,3}県)/
+const MUNICIPALITY = /^([^\s\d、,]{1,6}?)(郡|市|区|町|村)/
+
+export function administrativeUnits(address: string | undefined): string[] | null {
+  if (!address) return null
+  let rest = address.normalize('NFKC').trim().replace(COUNTRY_PREFIX, '').replace(POSTAL_CODE, '')
+  const prefecture = PREFECTURE.exec(rest)?.[1]
+  if (!prefecture) return null
+  const units = [prefecture]
+  rest = rest.slice(prefecture.length)
+  for (let match = MUNICIPALITY.exec(rest); match; match = MUNICIPALITY.exec(rest)) {
+    units.push(match[0])
+    rest = rest.slice(match[0].length)
   }
-  return false
+  return units
 }
 
-// 候補の所在地が、旅程の地域と矛盾しないか。住所が無い・地域の語が住所に無いときは、裏付けなし。
+// 地域の語は、行政区画の名称（「京都」と「京都市」「京都府」、「東山」と「東山区」）と一致するときだけ、一致とする。
+// 住所に文字列として含まれるだけ（別の都道府県の「東山」町など）では、一致としない。
+const unitMatches = (unit: string, token: string): boolean =>
+  token === unit || token === unit.slice(0, -1)
+
+// 候補の所在地が、旅程の地域と、行政区画で一致するか。住所が無い・日本の住所と確かめられない・
+// 地域の語が行政区画に無いときは、裏付けなし（確認できない）。
 export function addressMatchesRegion(address: string | undefined, region: string): boolean {
-  if (!address) return false
-  const text = address.normalize('NFKC').toLowerCase().replace(/\s/g, '')
-  const tokens = regionTokens(region)
-  return tokens.length > 0 && tokens.some((token) => containsToken(text, token))
+  const units = administrativeUnits(address)
+  if (!units) return false
+  return regionTokens(region).some((token) => units.some((unit) => unitMatches(unit, token)))
 }
 
 export type PlaceSelection =
