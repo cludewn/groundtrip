@@ -41,8 +41,12 @@ describe('名称の解析と一致', () => {
   })
 
   it('括弧書きは、比較用の名称から分け、識別情報として保持する', () => {
-    expect(parseName('昼食店A（架空）')).toEqual({ base: '昼食店a', qualifier: '架空' })
-    expect(parseName('カフェ(京都駅店)')).toEqual({ base: 'カフェ', qualifier: '京都駅店' })
+    expect(parseName('昼食店A（架空）')).toEqual({
+      base: '昼食店a',
+      qualifier: '架空',
+      full: '昼食店a(架空)',
+    })
+    expect(parseName('カフェ(京都駅店)')).toMatchObject({ base: 'カフェ', qualifier: '京都駅店' })
   })
 
   it('正規化後に同じなら exact', () => {
@@ -58,6 +62,14 @@ describe('名称の解析と一致', () => {
   it('見つかった施設だけが支店を名乗る・生成した名称だけが支店を指定する場合は、確かめられない', () => {
     expect(compareNames('麺処いちょう庵', '麺処いちょう庵（河原町店）')).toBe('none')
     expect(compareNames('麺処いちょう庵（四条店）', '麺処いちょう庵')).toBe('none')
+  })
+
+  it('括弧書きの位置が異なる名称は、同じ施設としない（識別情報が失われない）', () => {
+    expect(compareNames('A（本店）B', 'AB（本店）')).toBe('none')
+    expect(compareNames('（本店）AB', 'AB（本店）')).toBe('none')
+    expect(compareNames('A（本店）B', 'A（本店）B')).toBe('exact')
+    // 括弧の全角・半角の違いと、括弧内の空白は、無視する。
+    expect(compareNames('AB（本店）', 'AB( 本店 )')).toBe('exact')
   })
 
   it('括弧書きが一方にしかなければ、補足に見えても、同じ施設と確かめられない', () => {
@@ -106,6 +118,25 @@ describe('住所の行政区画', () => {
     ])
   })
 
+  it('町・村は、郡の下にあるものだけを行政区画とする（町名を、行政区画として読み取らない）', () => {
+    expect(administrativeUnits('日本、〒101-0051 東京都千代田区神田神保町1丁目')).toEqual([
+      '東京都',
+      '千代田区',
+    ])
+    expect(administrativeUnits('東京都新宿区市谷田町1丁目')).toEqual(['東京都', '新宿区'])
+    expect(administrativeUnits('東京都八王子市本町')).toEqual(['東京都', '八王子市'])
+  })
+
+  it('都道府県までしか読み取れない住所は、都道府県だけを返す', () => {
+    expect(administrativeUnits('日本、〒960-8043 福島県')).toEqual(['福島県'])
+    expect(administrativeUnits('日本、〒553-0003 大阪府大阪市福島区福島1丁目')).toEqual([
+      '大阪府',
+      '大阪市',
+      '福島区',
+    ])
+    expect(administrativeUnits('福島県郡山市朝日2丁目')).toEqual(['福島県', '郡山市'])
+  })
+
   it('日本の住所と読み取れないときは null（「Japan」の文字や地域の語が含まれていても）', () => {
     expect(administrativeUnits(undefined)).toBeNull()
     expect(administrativeUnits('')).toBeNull()
@@ -121,9 +152,46 @@ describe('所在地と地域', () => {
     expect(regionTokens('  ・ ')).toEqual([])
   })
 
-  it('住所に、地域の語のどれかが含まれていれば、矛盾しない', () => {
+  it('地域のすべての要素が、同じ住所の行政区画の階層で確認できれば、一致', () => {
     expect(addressMatchesRegion(KYOTO_ADDRESS, REGION)).toBe(true)
-    expect(addressMatchesRegion('日本、〒600-8216 京都府京都市下京区東塩小路町', REGION)).toBe(true)
+    expect(addressMatchesRegion(KYOTO_ADDRESS, '東山・京都')).toBe(true)
+    // 「京都市東山」のように、続けて書いた地域も、京都市→東山区の階層として読み取る。
+    expect(addressMatchesRegion(KYOTO_ADDRESS, '京都市東山エリア')).toBe(true)
+    expect(addressMatchesRegion(KYOTO_ADDRESS, '京都市・東山（架空デモ）')).toBe(true)
+    expect(addressMatchesRegion(KYOTO_ADDRESS, '京都')).toBe(true)
+  })
+
+  it('地域の要素の一部しか確認できない住所は、一致としない（下京区の施設を「京都・東山」としない）', () => {
+    const shimogyo = '日本、〒600-8216 京都府京都市下京区東塩小路町'
+
+    expect(addressMatchesRegion(shimogyo, REGION)).toBe(false)
+    expect(addressMatchesRegion(shimogyo, '京都')).toBe(true)
+  })
+
+  it('複合地域「福島・郡山」：大阪市福島区や、福島県までしか分からない住所は、一致としない', () => {
+    const osakaFukushima = '日本、〒553-0003 大阪府大阪市福島区福島1丁目'
+    const prefectureOnly = '日本、〒960-8043 福島県'
+    const koriyama = '日本、〒963-8002 福島県郡山市駅前2丁目'
+
+    expect(addressMatchesRegion(osakaFukushima, '福島・郡山')).toBe(false)
+    expect(addressMatchesRegion(prefectureOnly, '福島・郡山')).toBe(false)
+    expect(addressMatchesRegion(koriyama, '福島・郡山')).toBe(true)
+    // 1つの要素の地域なら、その要素が確認できればよい。
+    expect(addressMatchesRegion(osakaFukushima, '福島')).toBe(true)
+  })
+
+  it('同じ行政区画を、2つの要素に使い回さない', () => {
+    expect(addressMatchesRegion(KYOTO_ADDRESS, '京都・京都府')).toBe(true) // 京都府と京都市
+    // 1つの行政区画（福島県）を、2つの要素（福島・福島）に使い回して、一致にしない。
+    expect(addressMatchesRegion('日本、〒960-8043 福島県', '福島・福島')).toBe(false)
+  })
+
+  it('町名は、行政区画として読み取らない（「神保町」は、千代田区の町名）', () => {
+    const jimbocho = '日本、〒101-0051 東京都千代田区神田神保町1丁目'
+
+    expect(addressMatchesRegion(jimbocho, '神保町')).toBe(false)
+    expect(addressMatchesRegion(jimbocho, '神田神保町')).toBe(false)
+    expect(addressMatchesRegion(jimbocho, '東京・千代田')).toBe(true)
   })
 
   it('住所が無い・日本の住所と読み取れない・地域の語が無い・地域が空なら、裏付けなし', () => {
@@ -150,7 +218,10 @@ describe('所在地と地域', () => {
   })
 
   it('郡・町を含む地域（箱根）も、行政区画の名称と一致すれば、一致とする', () => {
-    expect(addressMatchesRegion('日本、〒250-0521 神奈川県足柄下郡箱根町仙石原', '箱根')).toBe(true)
+    const hakone = '日本、〒250-0521 神奈川県足柄下郡箱根町仙石原'
+
+    expect(addressMatchesRegion(hakone, '箱根')).toBe(true)
+    expect(addressMatchesRegion(hakone, '神奈川・箱根')).toBe(true)
   })
 })
 
@@ -192,6 +263,26 @@ describe('施設の選択（名称・所在地のゲート）', () => {
     ])
 
     expect(result).toMatchObject({ status: 'matched', place: { placeId: 'kyoto' } })
+  })
+
+  it('複合地域「福島・郡山」：大阪市福島区の同名施設と、福島県までしか分からない候補は、採用しない', () => {
+    const osakaFukushima = '日本、〒553-0003 大阪府大阪市福島区福島1丁目'
+    const prefectureOnly = '日本、〒960-8043 福島県'
+    const koriyama = '日本、〒963-8002 福島県郡山市駅前2丁目'
+
+    expect(selectPlace('資料館', '福島・郡山', [place('osaka', '資料館', osakaFukushima)])).toEqual(
+      { status: 'region_mismatch' },
+    )
+    expect(selectPlace('資料館', '福島・郡山', [place('pref', '資料館', prefectureOnly)])).toEqual({
+      status: 'region_mismatch',
+    })
+    expect(
+      selectPlace('資料館', '福島・郡山', [
+        place('osaka', '資料館', osakaFukushima),
+        place('pref', '資料館', prefectureOnly),
+        place('koriyama', '資料館', koriyama),
+      ]),
+    ).toMatchObject({ status: 'matched', place: { placeId: 'koriyama' } })
   })
 
   it('支店名が異なる候補しかなければ、採用しない（誤ったPlace IDを根拠に伝えない）', () => {
