@@ -37,7 +37,7 @@ describe('振り返りの保存済みデータ取得', () => {
   })
 
   it('旅程と変更履歴の両方が揃って初めて振り返りに渡す', async () => {
-    const fetchFn = vi.fn(async (path: string) =>
+    const fetchFn = vi.fn().mockImplementation(async (path: string) =>
       path.endsWith('/revisions')
         ? json({ revisions: [sampleRevision], listInfo: { ...listInfo, returned: 1 } })
         : json({ trip: sampleTrip }),
@@ -48,7 +48,7 @@ describe('振り返りの保存済みデータ取得', () => {
   })
 
   it('履歴が欠けている場合は学び作成に使わない', async () => {
-    const fetchFn = vi.fn(async (path: string) =>
+    const fetchFn = vi.fn().mockImplementation(async (path: string) =>
       path.endsWith('/revisions')
         ? json({ revisions: [], listInfo: { ...listInfo, truncated: true } })
         : json({ trip: sampleTrip }),
@@ -68,7 +68,7 @@ describe('振り返りの保存済みデータ取得', () => {
 
 describe('承認済み学びのFirestore保存', () => {
   it('本人が承認した学びをexpectedVersion=0で新規保存する', async () => {
-    const fetchFn = vi.fn(async (path: string) => {
+    const fetchFn = vi.fn().mockImplementation(async (path: string) => {
       if (path === '/api/learnings') return json({ learnings: [], listInfo })
       return json({ version: 1, learning: sampleApprovedLearning })
     })
@@ -93,7 +93,7 @@ describe('承認済み学びのFirestore保存', () => {
 
   it('保存済みなら同じ内容を再送信せず、内容を変えたときだけ版を更新する', async () => {
     const updated = { ...sampleApprovedLearning, content: '次回は歩く距離を短くする' }
-    const fetchFn = vi.fn(async (path: string) =>
+    const fetchFn = vi.fn().mockImplementation(async (path: string) =>
       path === '/api/learnings'
         ? json({
             learnings: [{ version: 4, learning: sampleApprovedLearning }],
@@ -112,7 +112,7 @@ describe('承認済み学びのFirestore保存', () => {
     const second = { ...sampleApprovedLearning, id: 'learning-second', content: '次は休憩を多めに' }
     let firstSaved = false
     let failed = false
-    const fetchFn = vi.fn(async (path: string) => {
+    const fetchFn = vi.fn().mockImplementation(async (path: string) => {
       if (path === '/api/learnings') {
         const learnings = firstSaved ? [{ version: 1, learning: sampleApprovedLearning }] : []
         return json({ learnings, listInfo: { ...listInfo, returned: learnings.length } })
@@ -149,7 +149,7 @@ describe('承認済み学びのFirestore保存', () => {
 
   it('409の競合や503の保存不可を成功と扱わない', async () => {
     for (const status of [409, 503]) {
-      const fetchFn = vi.fn(async (path: string) =>
+      const fetchFn = vi.fn().mockImplementation(async (path: string) =>
         path === '/api/learnings'
           ? json({ learnings: [], listInfo })
           : json({ error: { code: 'version_conflict', message: '版が一致しません' } }, status),
