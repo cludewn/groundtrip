@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -216,6 +216,78 @@ describe('LearningReview: 保存の成功・失敗・再試行', () => {
     const [first, again] = screen.getAllByLabelText('学びの内容') as HTMLTextAreaElement[]
     expect(first.value).toBe('候補Aの内容')
     expect(again.value).toBe('候補Bの内容（編集中）')
+  })
+})
+
+describe('LearningReview: 保存先が返す、項目ごとの結果（任意の拡張）', () => {
+  const twoCandidates = () =>
+    vi.fn<RequestCandidates>().mockResolvedValue({
+      ok: true,
+      learnings: [
+        { ...sampleLearning, id: 'learning-a', content: '候補Aの内容' },
+        { ...sampleLearning, id: 'learning-b', content: '候補Bの内容' },
+      ],
+    })
+  const approveBoth = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.type(screen.getByLabelText(/感想・変更した理由/), '感想')
+    await user.click(screen.getByRole('button', { name: /学びの候補を作/ }))
+    await screen.findByRole('heading', { name: /学びの候補（2件）/ })
+    await user.click(screen.getAllByRole('button', { name: '承認する' })[0])
+    await user.click(screen.getAllByRole('button', { name: '承認する' })[0])
+  }
+  const approvedItems = () =>
+    within(
+      screen.getByRole('heading', { name: /承認済みの学び（2件）/ }).parentElement as HTMLElement,
+    ).getAllByRole('listitem')
+
+  it('保存できた学びのIDが返されたら、状態行と項目ごとに、保存済みと未保存を分けて示す', async () => {
+    const { user } = setup(
+      async () => ({
+        ok: false,
+        message: '1件は保存済みです。残りは保存できません。',
+        savedIds: ['learning-a'],
+        retryable: false,
+      }),
+      { requestCandidates: twoCandidates() },
+    )
+    await approveBoth(user)
+    await user.click(saveButton())
+
+    await screen.findByRole('alert')
+    expect(statusText()).toContain('2件のうち、1件は保存済み、1件は未保存です')
+    const [itemA, itemB] = approvedItems()
+    expect(itemA.textContent).toContain('候補Aの内容')
+    expect(itemA.textContent).toContain('保存済み')
+    expect(itemB.textContent).toContain('候補Bの内容')
+    expect(itemB.textContent).toContain('未保存')
+    // 再試行しても直らない失敗では、「もう一度、保存できます」と案内しない。
+    expect(screen.getByRole('alert').textContent).not.toContain('もう一度、保存できます')
+  })
+
+  it('IDが返されないときは、これまでどおり件数だけを示し、項目ごとの表示は出さない', async () => {
+    const { user } = setup(async () => ({ ok: false, message: '失敗しました。' }), {
+      requestCandidates: twoCandidates(),
+    })
+    await approveBoth(user)
+    await user.click(saveButton())
+
+    const alert = await screen.findByRole('alert')
+    expect(statusText()).toContain('保存に失敗しました（承認済みの学び2件は未保存です）')
+    for (const item of approvedItems()) expect(item.textContent).not.toMatch(/— (保存済み|未保存)/)
+    expect(alert.textContent).toContain('もう一度、保存できます')
+  })
+
+  it('承認済みの内容を変えたら、失敗の時点の項目ごとの表示は消える', async () => {
+    const { user } = setup(async () => ({ ok: false, message: '失敗', savedIds: ['learning-a'] }), {
+      requestCandidates: twoCandidates(),
+    })
+    await approveBoth(user)
+    await user.click(saveButton())
+    await screen.findByRole('alert')
+
+    await user.type(screen.getAllByLabelText('学びの内容')[0], '（編集）')
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(document.body.textContent).not.toMatch(/— (保存済み|未保存)/)
   })
 })
 

@@ -456,6 +456,12 @@ export function LearningReview({
               <li key={item.id}>
                 {item.content}（
                 {item.scope.kind === 'all_trips' ? 'すべての旅行' : `${item.scope.region}の旅行`}）
+                {/* 保存先が、保存できた学びのIDを返したときだけ、項目ごとの結果を文字で示す。 */}
+                {save.status.kind === 'failed' && save.status.savedIds && (
+                  <b className="ml-1 whitespace-nowrap">
+                    {save.status.savedIds.includes(item.id) ? '— 保存済み' : '— 未保存'}
+                  </b>
+                )}
               </li>
             ))}
           </ul>
@@ -595,8 +601,14 @@ function saveStatusText(status: SaveStatus): string {
         : `未保存の変更あり（承認済みの学び${status.count}件に、まだ保存していない変更があります）`
     case 'empty':
       return '保存できる承認済みの学びはまだありません'
-    case 'failed':
+    case 'failed': {
+      // 保存先が保存できた学びを返したときは、保存済みと未保存を分けて示す。
+      if (status.savedIds && status.savedIds.length > 0) {
+        const saved = status.savedIds.length
+        return `保存に失敗しました（承認済みの学び${status.count}件のうち、${saved}件は保存済み、${status.count - saved}件は未保存です）`
+      }
       return `保存に失敗しました（承認済みの学び${status.count}件は未保存です）`
+    }
   }
 }
 
@@ -618,7 +630,8 @@ function SavePanel({ status, notice, onSave }: SavePanelProps) {
       {status.kind === 'failed' && (
         <p role="alert" className={`rounded border-2 border-current p-3 text-sm ${wrapClass}`}>
           保存できませんでした。{status.message}
-          承認済みの学びと入力中の内容は、そのまま残っています。もう一度、保存できます。
+          承認済みの学びと入力中の内容は、そのまま残っています。
+          {status.retryable && 'もう一度、保存できます。'}
         </p>
       )}
       <button

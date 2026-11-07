@@ -15,10 +15,26 @@ export type SaveStatus =
   | { kind: 'unsaved'; count: number }
   // 承認済みが0件で、保存した内容もない。
   | { kind: 'empty' }
-  | { kind: 'failed'; message: string; count: number }
+  // savedIds は、失敗するまでに保存できた学びのうち、いまの承認済みに含まれるもの（保存先が返したときだけ）。
+  // retryable が false のときは、同じ内容で保存し直しても結果が変わらない。
+  | {
+      kind: 'failed'
+      message: string
+      count: number
+      savedIds?: readonly string[]
+      retryable: boolean
+    }
 
 type SavePhase =
-  { kind: 'idle' } | { kind: 'saving' } | { kind: 'failed'; key: string; message: string }
+  | { kind: 'idle' }
+  | { kind: 'saving' }
+  | {
+      kind: 'failed'
+      key: string
+      message: string
+      savedIds?: readonly string[]
+      retryable: boolean
+    }
 
 const DEFAULT_FAILURE = '時間をおいて、もう一度お試しください。'
 const EMPTY_NOTICE =
@@ -85,7 +101,17 @@ export function useApprovedSave({ store, approved, approvedKey, scopeKey, announ
     // 以前に保存した内容があるときは、0件になっても「未保存の変更あり」とする（保存した内容とは違うため）。
     if (approved.length === 0 && savedKey === null) return { kind: 'empty' }
     if (phase.kind === 'failed' && phase.key === approvedKey) {
-      return { kind: 'failed', message: phase.message, count: approved.length }
+      // 保存済みと示すのは、いまの承認済みに含まれる学びだけ（承認済みの内容は、失敗の時点から変わっていない）。
+      const savedIds = phase.savedIds
+        ? approved.map((item) => item.id).filter((id) => phase.savedIds?.includes(id))
+        : undefined
+      return {
+        kind: 'failed',
+        message: phase.message,
+        count: approved.length,
+        savedIds,
+        retryable: phase.retryable,
+      }
     }
     if (savedKey === approvedKey) return { kind: 'saved', count: approved.length }
     return { kind: 'unsaved', count: approved.length }
@@ -146,7 +172,13 @@ export function useApprovedSave({ store, approved, approvedKey, scopeKey, announ
     // 失敗しても、承認済みの内容と入力中の内容は残す。失敗は、再試行できる。
     // 失敗の通知は、role="alert"（画面側）が担うため、ライブリージョンには入れない。
     const reason = result.message || DEFAULT_FAILURE
-    setPhase({ kind: 'failed', key: submittedKey, message: reason })
+    setPhase({
+      kind: 'failed',
+      key: submittedKey,
+      message: reason,
+      savedIds: result.savedIds,
+      retryable: result.retryable !== false,
+    })
   }, [store, approved, approvedKey, announce])
 
   return { status, notice, save }
