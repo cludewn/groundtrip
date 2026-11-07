@@ -32,10 +32,9 @@ export function createMapsAuth(project: string, getAccessToken: AccessTokenFn): 
       let token: string | null | undefined
       try {
         token = await getAccessToken()
-      } catch (cause) {
-        throw new MapsCallError('auth_failed', 'Google Maps Platformの認証に失敗しました', {
-          cause,
-        })
+      } catch {
+        // 認証ライブラリの例外は、メッセージに機微な情報を含み得るため、保持しない。
+        throw new MapsCallError('auth_failed', 'Google Maps Platformの認証に失敗しました')
       }
       if (!token) {
         throw new MapsCallError('auth_failed', 'Google Maps Platformの認証に失敗しました')

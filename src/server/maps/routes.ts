@@ -13,6 +13,12 @@ export const ROUTES_COMPUTE_URL = 'https://routes.googleapis.com/directions/v2:c
 // 請求・遅延を抑えるため、所要時間と距離だけを要求する。
 const FIELD_MASK = 'routes.duration,routes.distanceMeters'
 
+// 日帰り旅程の移動として、現実的な上限（7日分の秒数）。これを超える値は、不正な応答として扱う。
+export const MAX_ROUTE_SECONDS = 7 * 24 * 60 * 60
+
+// 距離も、地球上の経路として現実的な上限（2万km）を超える値は、不正として扱う。
+export const MAX_ROUTE_DISTANCE_METERS = 20_000_000
+
 export const SUPPORTED_TRAVEL_MODES = ['WALK', 'DRIVE'] as const
 export type TravelMode = (typeof SUPPORTED_TRAVEL_MODES)[number]
 
@@ -22,7 +28,7 @@ const RawResponseSchema = z.object({
       z.object({
         // "123s" の形式（秒）。
         duration: z.string().regex(/^\d+(\.\d+)?s$/),
-        distanceMeters: z.int().nonnegative().optional(),
+        distanceMeters: z.int().nonnegative().max(MAX_ROUTE_DISTANCE_METERS).optional(),
       }),
     )
     .optional(),
@@ -71,6 +77,10 @@ export async function computeRoute(
   if (!route) return { status: 'no_route' }
 
   const durationSeconds = Math.ceil(Number.parseFloat(route.duration))
+  // 桁数の多い文字列は、数値に変換するとInfinityになる。有限で、現実的な範囲の値だけを受け入れる。
+  if (!Number.isFinite(durationSeconds) || durationSeconds > MAX_ROUTE_SECONDS) {
+    throw new MapsCallError('invalid_response', 'Routesの応答の値が想定の範囲外です')
+  }
   return {
     status: 'found',
     durationSeconds,

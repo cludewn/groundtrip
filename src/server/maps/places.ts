@@ -14,8 +14,10 @@ import { postJson, type MapsTransportDeps } from './transport'
 
 export const PLACES_SEARCH_TEXT_URL = 'https://places.googleapis.com/v1/places:searchText'
 
-// 請求は、要求したフィールドのうち最も高い区分で決まるとされる（要確認）。
-// displayName・businessStatusはPro、formattedAddress・locationはEssentials、id はIDs Only。
+// 請求は、複数のSKUのフィールドを指定した場合、最も高いSKUで決まる（公式の説明。レビューでの指摘）。
+// Text Searchでの区分（公式のデータフィールド一覧、2026-11-07 確認）：
+// id はEssentials（IDs Only）、displayName・businessStatus・formattedAddress・locationはPro。
+// したがって、このFieldMaskの既定（営業時間なし）は、Text Search Proで課金される。
 const BASE_FIELD_MASK = [
   'places.id',
   'places.displayName',
@@ -23,7 +25,7 @@ const BASE_FIELD_MASK = [
   'places.location',
   'places.businessStatus',
 ]
-// regularOpeningHoursはEnterprise。営業時間が必要なときだけ要求する（既定は要求しない）。
+// regularOpeningHoursはEnterprise。要求するとリクエスト全体がEnterpriseになるため、営業時間が必要なときだけ要求する（既定は要求しない）。
 const OPENING_HOURS_FIELD = 'places.regularOpeningHours.periods'
 
 const TimeOfWeekSchema = z.object({
@@ -36,7 +38,13 @@ const RawPlaceSchema = z.object({
   id: z.string().min(1),
   displayName: z.object({ text: z.string() }).optional(),
   formattedAddress: z.string().optional(),
-  location: z.object({ latitude: z.number(), longitude: z.number() }).optional(),
+  // 範囲外の座標は、正常な結果として受け入れず、応答全体を不正（invalid_response）とする。
+  location: z
+    .object({
+      latitude: z.number().min(-90).max(90),
+      longitude: z.number().min(-180).max(180),
+    })
+    .optional(),
   businessStatus: z.string().optional(),
   regularOpeningHours: z
     .object({
@@ -55,8 +63,10 @@ export type OpeningPeriod = {
   close?: { day: number; hour: number; minute: number }
 }
 
-// 営業時間の取得状態。「要求していない」「データが無い」「取得できた」を区別する。
-// データが無い場合を「営業している」とも「休み」とも解釈しない（照合側が「確認できない」にする）。
+// 営業時間の取得状態。「要求していない」「データが無い（欠落）」「取得できた」を区別する。
+// 欠落（regularOpeningHoursまたはperiodsが無い）と、空配列（periods: []）は、意味が異なる。
+// 空配列は欠落にせず、`available`の空の配列として保持する。その意味の解釈は照合側の責務で、
+// アダプターは「営業している」とも「休み」とも解釈しない。欠落は照合側が「確認できない」にする。
 export type OpeningHours =
   | { status: 'not_requested' }
   | { status: 'unavailable' }
@@ -155,7 +165,7 @@ export async function searchPlaces(
         businessStatus: place.businessStatus,
         openingHours: !includeOpeningHours
           ? { status: 'not_requested' }
-          : periods && periods.length > 0
+          : periods !== undefined
             ? {
                 status: 'available',
                 periods: periods.map((period) => ({

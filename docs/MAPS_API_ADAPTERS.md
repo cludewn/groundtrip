@@ -25,19 +25,32 @@ const route = await maps.computeRoute({ originPlaceId, destinationPlaceId, mode:
 
 `reason`：`not_configured`／`invalid_request`／`unsupported_mode`／`auth_failed`／`timeout`／`network`／
 `api_error`／`invalid_response`。例外にはクエリ・トークン・応答本文を含めない（`apiStatus`はGoogleの状態名のみ）。
+**外部由来の例外（認証ライブラリの例外・JSON解析エラーなど）は、`cause`にも保持しない。** メッセージや応答の断片に、
+トークンや応答本文が含まれ得るため、安全な分類情報（`reason`・`status`・`apiStatus`）だけを公開する。
 
-営業時間は`openingHours`で、`not_requested`（要求していない）／`unavailable`（データなし）／
-`available`（曜日0=日曜・時・分の期間）を区別する。データなしを「営業」とも「休み」とも解釈しない。
+**外部APIの値の検証**：範囲外・不正な値は、正常な結果にせず`invalid_response`とする。緯度は-90〜90、経度は-180〜180、
+距離は0〜2万km、所要時間は有限で7日分の秒数以下（桁数の多い文字列は、数値にするとInfinityになる）。
+
+営業時間は`openingHours`で、`not_requested`（要求していない）／`unavailable`（データの欠落）／
+`available`（曜日0=日曜・時・分の期間）を区別する。データの欠落を「営業」とも「休み」とも解釈しない。
+**`periods`が空配列のときは、欠落（`unavailable`）にせず、`available`の空の配列として保持する**（空配列と欠落は
+意味が異なる。空配列の解釈は照合側の責務で、アダプターは解釈しない）。
 名称が取得できない施設は`name: ''`で返す（名称一致の対象にならない）。
 
 ## 費用・規約
 
-- 呼び出しは1回だけで、自動再試行しない。タイムアウトは15秒。
+- 呼び出しは1回だけで、自動再試行しない。タイムアウトは15秒で、**認証（トークン取得）にも同じ期限を設ける**。
+  期限が切れたら`timeout`とし、あとで認証が完了しても、Mapsは呼ばない。
+- **Places Text SearchのSKU**：`id`はEssentials（IDs Only）、`displayName`・`businessStatus`・`formattedAddress`・`location`は
+  **Pro**、`regularOpeningHours`は**Enterprise**。複数のSKUのフィールドを指定したときは、最も高いSKUで課金される
+  （レビューでの指摘。公式の原文は未確認で、安全側の前提）。営業時間を要求すると、リクエスト全体がEnterpriseになる。
 - Placesの営業時間（`regularOpeningHours`、Enterprise）は、`includeOpeningHours: true`のときだけ要求する。
 - 公共交通（`TRANSIT`）は対象外で、呼び出さずに`unsupported_mode`とする（理由は`API_CONNECTIVITY_FINDINGS.md`）。
 - **保存してよいのはPlace IDだけ。** 名称・住所・座標・営業時間・所要時間は、処理中にのみ使い、DBやキャッシュへ保存しない。
 - Googleマップ以外の画面にPlaces・Routes由来のデータを表示するときは、Googleの帰属表示が必要
   （詳細は`API_CONNECTIVITY_FINDINGS.md`§5）。この帰属表示は、UI側の対応事項。
+- 公開するアプリには、アプリ自身の利用規約・プライバシーポリシーが必要になる見込み（現行の規約の原文は未確認。
+  詳細は`API_CONNECTIVITY_FINDINGS.md`§5）。規約ページ自体は、このアダプターの範囲外。
 
 ## 含まないもの
 
