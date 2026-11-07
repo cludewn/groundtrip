@@ -149,9 +149,9 @@ export interface TravelBasis {
 
 export const travelBasisTexts = {
   unchecked: '移動時間は未確認',
-  // 「移動時間の値が情報源と一致した」だけを示す。予定の間隔に収まるかは、決定論的な制約チェックの責務。
-  consistent: '移動時間の値は情報源と一致',
-  conflicting: '移動時間の値は情報源と食い違い',
+  // 照合結果の表示で、予定間隔に収まるかの根拠。制約全体の成立の断定はしない。
+  consistent: '移動の根拠：情報源と整合',
+  conflicting: '移動の根拠：矛盾あり',
   unverifiable: '移動時間を確認できない',
 } satisfies Record<TravelBasisKind, string>
 

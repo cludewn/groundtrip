@@ -102,8 +102,8 @@ describe('移動の根拠の文言', () => {
   })
 
   it.each([
-    ['consistent', '移動時間の値は情報源と一致'],
-    ['conflicting', '移動時間の値は情報源と食い違い'],
+    ['consistent', '移動の根拠：情報源と整合'],
+    ['conflicting', '移動の根拠：矛盾あり'],
     ['unverifiable', '移動時間を確認できない'],
   ] as const)('実際の根拠 %s は「%s」', (status, text) => {
     expect(travelBasesOf(stopWith([evidence('e1', 'travel_time', status)]))).toEqual([
@@ -147,7 +147,7 @@ describe('移動の根拠の文言', () => {
       ]),
     )
     expect(bases).toEqual([
-      { kind: 'consistent', text: '移動時間の値は情報源と一致', simulated: false },
+      { kind: 'consistent', text: '移動の根拠：情報源と整合', simulated: false },
       { kind: 'conflicting', text: 'デモ用の想定（食い違いあり）', simulated: true },
     ])
   })
@@ -161,7 +161,7 @@ describe('移動の根拠の文言', () => {
     )
     expect(bases[0]).toEqual({
       kind: 'conflicting',
-      text: '移動時間の値は情報源と食い違い',
+      text: '移動の根拠：矛盾あり',
       simulated: false,
     })
     expect(bases.filter((basis) => !basis.simulated)).toHaveLength(1)
