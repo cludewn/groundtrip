@@ -2,12 +2,17 @@ import { z } from 'zod'
 
 import { TripSchema, type Trip } from '../../domain'
 import { errorResponse, noStoreHeaders, readBodyWithLimit } from '../http'
+import { hasTimeConflict } from './travel'
 import type { VerifyTripResult } from './verify-trip'
 
 // POST /api/trips/verify のHTTP処理。生成された旅程に、Places/Routesの照合結果（根拠）を付ける。
 // 旅程の内容（予定・時刻・固定）と版は変えない。承認・保存はこのAPIでは行わない。
 // 課金を伴うMaps呼び出しの入口なので、認証・利用制限が入るまでは機能フラグ（既定は無効）で停止する。
 // 無効の間はMapsを呼ばず、リクエスト本文も読まない。
+//
+// 移動の確認は、徒歩だけ（車を使えるとは限らないため）。このAPIは、移動手段の指定を受け付けない。
+// 内部の`verifyTrip`は、`travelModes`で車を明示的に許可できるが、公開APIには出していない
+// （必要になったときに、リクエストの検証から接続する）。
 
 // 旅程1件を含む入力の上限。巨大な入力でMapsの呼び出し回数が膨らむのを、予定数の上限と合わせて防ぐ。
 export const MAX_VERIFY_REQUEST_BYTES = 64 * 1024
@@ -83,6 +88,14 @@ export async function handleVerifyTripRequest(
         path: issue.path.join('.'),
         message: issue.message,
       })),
+    })
+  }
+
+  // 予定の時刻が重なっている・時刻順でない旅程は、照合の対象にしない（決定論的な検証。Mapsを呼ばない）。
+  if (hasTimeConflict(parsed.data.trip.stops)) {
+    return errorResponse(400, {
+      status: 'invalid_request',
+      message: '予定の時刻が重なっているか、時刻順に並んでいません。',
     })
   }
 

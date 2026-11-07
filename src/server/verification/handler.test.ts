@@ -46,6 +46,38 @@ describe('POST /api/trips/verify', () => {
     expect(verify).toHaveBeenCalledTimes(1)
   })
 
+  it('予定の時刻が重なっている旅程は、400で返し、照合もMapsの呼び出しもしない', async () => {
+    const { verify, deps } = setup()
+    const overlapping = {
+      ...sampleTrip,
+      learningApplications: [],
+      stops: sampleTrip.stops.map((stop, index) =>
+        index === 1 ? { ...stop, durationMinutes: 150 } : stop,
+      ),
+    }
+    const response = await handleVerifyTripRequest(
+      post(JSON.stringify({ trip: overlapping })),
+      deps,
+    )
+
+    expect(response.status).toBe(400)
+    expect(await response.json()).toMatchObject({ status: 'invalid_request' })
+    expect(verify).not.toHaveBeenCalled()
+  })
+
+  it('移動手段の指定（travelModes）は受け付けない。照合は、徒歩だけで確認する', async () => {
+    const { verify, deps } = setup()
+    const response = await handleVerifyTripRequest(
+      post(JSON.stringify({ trip: sampleTrip, travelModes: ['drive'] })),
+      deps,
+    )
+
+    expect(response.status).toBe(200)
+    // 呼び出しには、旅程だけが渡される（車の指定は、照合処理に渡らない）。
+    expect(verify).toHaveBeenCalledWith(expect.objectContaining({ id: sampleTrip.id }))
+    expect(verify.mock.calls[0]).toHaveLength(1)
+  })
+
   it('外部サービスの失敗は502で返し、旅程は返さない', async () => {
     const { deps } = setup({ status: 'external_service_error', message: '照合できませんでした' })
     const response = await handleVerifyTripRequest(post(validBody), deps)
