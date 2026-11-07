@@ -28,46 +28,50 @@ export const stopButtonId = (stopId: string) => `stop-button-${stopId}`
 const RAIL_WIDTH = 68
 const NODE_CENTER_Y = 34
 
+// 駅の印。形（輪・二重輪）は予定の「種類」で決め、固定は種類とは別に、ロックの印を重ねて示す。
 function Node({ stop, index, kind }: { stop: Stop; index: number; kind: StopKind }) {
-  const base = 'absolute flex items-center justify-center font-mono text-[11px] font-black'
-  if (stop.isFixed) {
-    return (
-      <span
-        aria-hidden="true"
-        className={`${base} size-7 rounded-[7px] bg-gt-ink text-white`}
-        style={{ left: 20, top: NODE_CENTER_Y - 14 }}
-      >
-        <LockIcon size={14} />
-      </span>
-    )
-  }
-  if (kind === 'station') {
-    return (
-      <span
-        aria-hidden="true"
-        className={`${base} size-[34px] rounded-full border-[6px] border-gt-ink bg-gt-paper`}
-        style={{ left: 17, top: NODE_CENTER_Y - 17 }}
-      >
-        {index + 1}
-      </span>
-    )
-  }
+  const station = kind === 'station'
+  const size = station ? 34 : 28
   return (
     <span
       aria-hidden="true"
-      className={`${base} size-7 rounded-full border-[5px] border-gt-line bg-gt-paper`}
-      style={{ left: 20, top: NODE_CENTER_Y - 14 }}
+      className="absolute"
+      style={{ left: station ? 17 : 20, top: NODE_CENTER_Y - size / 2, width: size, height: size }}
     >
-      {index + 1}
+      <span
+        className={`flex size-full items-center justify-center rounded-full bg-gt-paper font-mono text-[11px] font-black ${
+          station ? 'border-[6px] border-gt-ink' : 'border-[5px] border-gt-line'
+        }`}
+      >
+        {index + 1}
+      </span>
+      {stop.isFixed && (
+        <span
+          data-fixed-mark
+          className="absolute -right-2.5 -top-2.5 flex size-[18px] items-center justify-center rounded-full border-2 border-gt-bg bg-gt-ink text-white"
+        >
+          <LockIcon size={9} />
+        </span>
+      )}
     </span>
   )
 }
 
-function Evidence({ stop, onDark = false }: { stop: Stop; onDark?: boolean }) {
+// 「固定予定」のラベル。固定は予約済みを意味しない。表示の形（駅・チケット）とは独立に付ける。
+function FixedChip() {
+  return (
+    <span className="mb-1 inline-flex items-center gap-1 rounded-[5px] border-[1.5px] border-gt-ink bg-gt-paper py-px pl-1.5 pr-2 text-[11px] font-black text-gt-ink">
+      <LockIcon size={11} />
+      固定予定
+    </span>
+  )
+}
+
+function Evidence({ stop }: { stop: Stop }) {
   const worst = worstEvidence(stop.evidence)
   return (
     <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
-      {worst ? <EvidenceBadge evidence={worst} /> : <UnverifiedBadge onDark={onDark} />}
+      {worst ? <EvidenceBadge evidence={worst} /> : <UnverifiedBadge />}
       {stop.evidence.length > 1 && (
         <span className="text-xs text-gt-muted">ほか{stop.evidence.length - 1}件</span>
       )}
@@ -120,18 +124,21 @@ function StopButton({
     : '未照合'
   const label = `${stop.plannedStartTime}から${stop.durationMinutes}分 ${stop.name}${stop.isFixed ? '（固定予定）' : ''}、${evidenceLabel}。詳細を開く`
   const selectedRing = selected ? 'outline outline-[3px] outline-offset-2 outline-gt-line/60' : ''
-  const isTicket = stop.isFixed || kind === 'meal' || kind === 'reserved'
+  // チケットにするかは、予定の「種類」だけで決める（食事・要予約）。固定かどうかでは変えない。
+  const isTicket = kind === 'meal' || kind === 'reserved'
 
   if (!isTicket) {
     return (
       <button
         id={stopButtonId(stop.id)}
+        data-variant="station"
         type="button"
         onClick={onSelect}
         aria-label={label}
         aria-pressed={selected}
         className={`block min-h-11 w-full rounded-lg py-1 text-left ${selectedRing}`}
       >
+        {stop.isFixed && <FixedChip />}
         <span className="block font-mono text-[13px] font-semibold text-gt-muted">
           {stop.plannedStartTime}〜{endTime(stop)}・{stop.durationMinutes}分
         </span>
@@ -143,28 +150,22 @@ function StopButton({
     )
   }
 
-  const dark = stop.isFixed
   return (
     <button
       id={stopButtonId(stop.id)}
+      data-variant="ticket"
       type="button"
       onClick={onSelect}
       aria-label={label}
       aria-pressed={selected}
-      className={`relative flex w-full rounded-[14px] text-left shadow-[0_1px_0_rgba(0,0,0,.06),0_8px_18px_-10px_rgba(0,0,0,.35)] ${dark ? 'bg-gt-ink text-white' : 'bg-gt-paper'} ${selectedRing}`}
+      className={`relative flex w-full rounded-[14px] bg-gt-paper text-left shadow-[0_1px_0_rgba(0,0,0,.06),0_8px_18px_-10px_rgba(0,0,0,.35)] ${selectedRing}`}
     >
-      <span
-        className={`flex w-[70px] flex-none flex-col justify-center gap-1 border-r-2 border-dashed py-3 pl-3 pr-2 ${dark ? 'border-white/30' : 'border-gt-rule'}`}
-      >
+      <span className="flex w-[70px] flex-none flex-col justify-center gap-1 border-r-2 border-dashed border-gt-rule py-3 pl-3 pr-2">
         <span className="font-mono text-[18px] font-semibold leading-none">
           {stop.plannedStartTime}
         </span>
-        <span className={`text-[10.5px] font-bold ${dark ? 'text-white/70' : 'text-gt-muted'}`}>
-          {kind === 'meal'
-            ? stopKindLabels.meal
-            : kind === 'reserved'
-              ? stopKindLabels.reserved
-              : '固定'}
+        <span className="text-[10.5px] font-bold text-gt-muted">
+          {kind === 'meal' ? stopKindLabels.meal : stopKindLabels.reserved}
         </span>
       </span>
       <span
@@ -176,26 +177,22 @@ function StopButton({
         className="absolute -bottom-2 left-[62px] size-4 rounded-full bg-gt-bg"
       />
       <span className="min-w-0 flex-1 px-3 py-2.5">
-        {stop.isFixed && (
-          <span className="mb-1 inline-flex items-center gap-1 rounded-[5px] bg-white py-px pl-1.5 pr-2 text-[11px] font-black text-gt-ink">
-            <LockIcon size={11} />
-            固定予定
-          </span>
-        )}
+        {stop.isFixed && <FixedChip />}
         <span className="block text-[15.5px] font-black leading-snug">{stop.name}</span>
-        <span className={`mt-0.5 block text-[12.5px] ${dark ? 'text-white/70' : 'text-gt-muted'}`}>
+        <span className="mt-0.5 block text-[12.5px] text-gt-muted">
           {stop.plannedStartTime}〜{endTime(stop)}・{stop.durationMinutes}分
           {meta.price ? `・${meta.price}` : ''}
         </span>
         <span className="mt-1.5 block">
-          <Evidence stop={stop} onDark={dark} />
+          <Evidence stop={stop} />
         </span>
       </span>
     </button>
   )
 }
 
-// 旅程を一本の路線図として表示する。駅＝予定、予約や固定の予定はチケット。
+// 旅程を一本の路線図として表示する。駅＝予定。食事・要予約の予定は、種類に応じてチケットにする。
+// 固定は、種類とは別の軸として、ロックの印と「固定予定」のラベルで示す（固定しても、駅はチケットにならない）。
 // 路線図は旅の順番を表すもので、実際の地図ではない。
 export function RouteMap({ trip, meta = {}, selectedStopId = null, onSelectStop }: RouteMapProps) {
   const last = trip.stops.length - 1

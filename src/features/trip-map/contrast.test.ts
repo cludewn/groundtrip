@@ -45,9 +45,7 @@ describe('路線図UIの文字のコントラスト（4.5:1以上）', () => {
     ['チケット（白）の上の本文', () => ratio(token('ink'), token('paper'))],
     ['地の上の補足（muted）', () => ratio(token('muted'), token('bg'))],
     ['チケット（白）の上の補足', () => ratio(token('muted'), token('paper'))],
-    ['暗い固定予定チケットの上の白い文字', () => ratio(WHITE, token('ink'))],
-    ['暗いチケット上の補足（白70%）', () => ratio(blend(WHITE, token('ink'), 0.7), token('ink'))],
-    ['暗いチケット上の「未照合」（白地に濃い文字）', () => ratio(token('ink'), WHITE)],
+    ['ロックの印（白い印）', () => ratio(WHITE, token('ink'))],
     ['部分修正ボタン（白い文字）', () => ratio(WHITE, token('line-strong'))],
     ['情報源と整合', () => ratio(token('ok'), token('ok-bg'))],
     ['矛盾あり', () => ratio(token('warn'), token('warn-bg'))],
@@ -59,9 +57,5 @@ describe('路線図UIの文字のコントラスト（4.5:1以上）', () => {
 
   it('白い文字を載せるボタンに、元のアクセント色（--gt-line）は使えない（だから別トークンにしている）', () => {
     expect(ratio(WHITE, token('line'))).toBeLessThan(4.5)
-  })
-
-  it('暗いチケット上に、薄い灰色（muted）の「未照合」を置くと不足する（だから明るい地にしている）', () => {
-    expect(ratio(token('muted'), token('ink'))).toBeLessThan(4.5)
   })
 })

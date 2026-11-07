@@ -47,7 +47,7 @@ describe('旅程の路線図: 表示', () => {
     expect(stopButton(/朝の庭園.*固定予定/)).toBeTruthy()
   })
 
-  it('固定された観光地のチケットは「予約」ではなく「固定」と表示する', () => {
+  it('固定された観光地は、チケットにせず、「予約」とも表示しない', () => {
     renderView()
     const items = screen.getAllByRole('listitem')
 

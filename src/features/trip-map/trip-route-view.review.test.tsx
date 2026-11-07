@@ -201,7 +201,7 @@ describe('詳細シートを閉じたあとのフォーカス（指摘3）', () 
 })
 
 describe('未照合の表示のコントラスト（指摘5）', () => {
-  it('暗い固定予定のチケット上の「未照合」は、明るい地に濃い文字で表示する', () => {
+  it('固定した予定の「未照合」も、固定でない予定と同じ表示（背景を暗くしない）', () => {
     const unverified = TripSchema.parse({
       ...sampleTrip,
       stops: sampleTrip.stops.map((stop) => ({ ...stop, evidence: [] })),
@@ -210,9 +210,8 @@ describe('未照合の表示のコントラスト（指摘5）', () => {
     const fixedBadge = within(items()[0]).getByText('未照合')
     const normalBadge = within(items()[1]).getByText('未照合')
 
-    expect(fixedBadge.className).toContain('bg-white')
-    expect(fixedBadge.className).toContain('text-gt-ink')
-    expect(normalBadge.className).toContain('text-gt-muted')
+    expect(fixedBadge.className).toBe(normalBadge.className)
+    expect(fixedBadge.className).toContain('text-gt-muted')
   })
 
   it('部分修正のボタンは、白い文字に十分なコントラストのある背景色を使う', async () => {
@@ -321,5 +320,79 @@ describe('予約に関する表示（#23の仕様：根拠のない「予約済�
 
     expect(items()[1].textContent).toContain('固定予定')
     expect(items()[1].textContent).not.toContain('要予約')
+  })
+})
+
+describe('固定と予定の種類の分離（#23・Cludewn案：固定は、ロックを重ねて示す）', () => {
+  const variantOf = (li: HTMLElement) => within(li).getAllByRole('button')[0].dataset.variant
+
+  const tripWith = (fixed: boolean[]) =>
+    TripSchema.parse({
+      ...sampleTrip,
+      stops: sampleTrip.stops.map((stop, index) => ({ ...stop, isFixed: fixed[index] })),
+    })
+  const meta = {
+    'stop-morning': { kind: 'sight' as const },
+    'stop-lunch': { kind: 'meal' as const },
+    'stop-exhibition': { kind: 'reserved' as const },
+  }
+
+  it('固定した観光地は、黒いチケットではなく、通常の駅のまま、ロックの印と「固定予定」を重ねる', () => {
+    render(<TripRouteView trip={tripWith([true, false, false])} meta={meta} />)
+    const li = items()[0]
+
+    expect(variantOf(li)).toBe('station')
+    expect(li.textContent).toContain('固定予定')
+    expect(li.querySelector('[data-fixed-mark]')).not.toBeNull()
+    // 予定のカード自体を黒くしない（ロックの印だけが黒い）。
+    expect(within(li).getAllByRole('button')[0].className).not.toContain('bg-gt-ink')
+  })
+
+  it('固定しても、駅はチケットにならない。固定を外しても、チケットは駅にならない（種類だけで決まる）', async () => {
+    const user = userEvent.setup()
+    render(<TripRouteView trip={tripWith([false, false, false])} meta={meta} />)
+    expect(items().map(variantOf)).toEqual(['station', 'ticket', 'ticket'])
+
+    await user.click(stopButton(/朝の庭園/))
+    await user.click(within(sheet()).getByRole('button', { name: 'この予定を固定する' }))
+    await user.click(stopButton(/昼食店A/))
+    await user.click(within(sheet()).getByRole('button', { name: 'この予定を固定する' }))
+
+    expect(items().map(variantOf)).toEqual(['station', 'ticket', 'ticket'])
+    expect(items()[0].querySelector('[data-fixed-mark]')).not.toBeNull()
+    expect(items()[1].querySelector('[data-fixed-mark]')).not.toBeNull()
+  })
+
+  it('食事のチケットも、固定したときはロックの印と「固定予定」を重ねる（種類と固定の組み合わせ）', () => {
+    render(<TripRouteView trip={tripWith([false, true, false])} meta={meta} />)
+    const li = items()[1]
+
+    expect(variantOf(li)).toBe('ticket')
+    expect(li.textContent).toContain('食事')
+    expect(li.textContent).toContain('固定予定')
+    expect(li.querySelector('[data-fixed-mark]')).not.toBeNull()
+  })
+
+  it('固定でない予定には、ロックの印も「固定予定」も付かない', () => {
+    render(<TripRouteView trip={tripWith([false, false, false])} meta={meta} />)
+
+    for (const li of items()) {
+      expect(li.querySelector('[data-fixed-mark]')).toBeNull()
+      expect(li.textContent).not.toContain('固定予定')
+    }
+  })
+
+  it('駅の印の番号は、固定しても残る（旅の順番が分かる）', () => {
+    render(<TripRouteView trip={tripWith([true, false, true])} meta={meta} />)
+
+    expect(items()[0].textContent).toContain('1')
+    expect(items()[2].textContent).toContain('3')
+  })
+
+  it('固定した予定を、種類が未指定でも「固定予定」と分かる（観光とは決めつけない）', () => {
+    render(<TripRouteView trip={tripWith([true, false, false])} />)
+
+    expect(variantOf(items()[0])).toBe('station')
+    expect(items()[0].textContent).toContain('固定予定')
   })
 })
