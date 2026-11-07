@@ -10,10 +10,11 @@ import {
 } from 'react'
 
 import type { Stop } from '@/domain'
+import { GoogleMapsSourceBox } from '@/features/legal/google-maps-attribution'
 
 import { EvidenceDetail, UnverifiedBadge } from './evidence-badge'
 import { LockIcon } from './icons'
-import { endTime, stopKindLabels, type RouteStopMeta, type StopKind } from './model'
+import { endTime, isGoogleSource, stopKindLabels, type RouteStopMeta, type StopKind } from './model'
 
 interface StopSheetProps {
   stop: Stop
@@ -46,6 +47,8 @@ export function StopSheet({
   onClose,
 }: StopSheetProps) {
   const titleId = useId()
+  const googleEvidence = stop.evidence.filter((item) => isGoogleSource(item.source.kind))
+  const otherEvidence = stop.evidence.filter((item) => !isGoogleSource(item.source.kind))
   const dialogRef = useRef<HTMLDialogElement>(null)
   const headingRef = useRef<HTMLHeadingElement>(null)
   const sheetRef = useRef<HTMLElement>(null)
@@ -263,7 +266,9 @@ export function StopSheet({
                 ? `${meta.segmentFromPrevious.mode === 'walk' ? '徒歩' : '車'}${meta.segmentFromPrevious.minutes}分`
                 : index === 0
                   ? '—'
-                  : '移動時間は未確認'}
+                  : stop.evidence.some((item) => item.subject === 'travel_time')
+                    ? '所要時間の数値は取得していません（下の根拠を参照）'
+                    : '移動時間は未確認'}
             </dd>
           </dl>
 
@@ -276,7 +281,21 @@ export function StopSheet({
                 </span>
               </div>
             ) : (
-              stop.evidence.map((item) => <EvidenceDetail key={item.id} evidence={item} />)
+              <>
+                {otherEvidence.map((item) => (
+                  <EvidenceDetail key={item.id} evidence={item} />
+                ))}
+                {googleEvidence.length > 0 && (
+                  // Places・Routes由来の根拠は枠で囲み、枠の下に常に見える帰属を付ける。
+                  <div className={otherEvidence.length > 0 ? 'mt-2' : undefined}>
+                    <GoogleMapsSourceBox caption="Google Maps Platformで確認した内容">
+                      {googleEvidence.map((item) => (
+                        <EvidenceDetail key={item.id} evidence={item} />
+                      ))}
+                    </GoogleMapsSourceBox>
+                  </div>
+                )}
+              </>
             )}
           </div>
 
