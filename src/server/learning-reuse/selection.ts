@@ -32,6 +32,7 @@ export async function resolveSelectedLearnings(
   if (!ownerUid.trim() || !region.trim() || !parsed.success) {
     throw new LearningSelectionError('invalid_selection')
   }
+  // 空選択なら、本人が学びを使わないと指定したものとして扱う。
   if (parsed.data.length === 0) return []
 
   // サーバーに保存された、本人の承認済みで適用地域が一致する学びだけを採用する。
