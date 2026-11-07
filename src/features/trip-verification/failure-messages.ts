@@ -1,5 +1,13 @@
 import type { VerificationFailureKind } from './api-client'
 
+// 確認の最中に旅程の内容が変わり、確認を中止した（結果を反映しなかった）ときの案内。
+// 通信の失敗ではないので、失敗の種類（VerificationFailureKind）とは分けて持つ。
+export const verificationInterruptedGuidance = {
+  title: '確認を中止しました：照合中に旅程の内容が変わりました',
+  action:
+    'この確認の結果は反映していません。最新の内容で照合し直してください。「根拠を確認する」を押すと、変更後の旅程を確認します。',
+} as const
+
 // 根拠の確認が失敗したときの見出しと、次にとれる行動の案内。
 // 失敗しても旅程は変わらない。その点を、すべての案内で伝える。
 export const verificationFailureGuidance: Record<

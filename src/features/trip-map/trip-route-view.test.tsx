@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { TripSchema } from '@/domain'
+import { TripSchema, type Evidence } from '@/domain'
 import { sampleTrip } from '@/domain/samples'
 
 import { RouteFailure, RouteLoading } from './route-states'
@@ -393,5 +393,96 @@ describe('旅程一覧の状態表示', () => {
     render(<RouteFailure title="失敗" message="詳細" note="入力内容は保持されています。" />)
 
     expect(screen.getByRole('alert').textContent).toContain('入力内容は保持されています。')
+  })
+})
+
+describe('旅程の路線図: 移動区間の根拠の状態', () => {
+  const travelEvidence = (
+    status: Evidence['status'],
+    // Routesが返した値が混ざっていても、表示しないことを確かめるための説明文。
+    explanation = '所要時間は徒歩17分、余裕3分',
+  ): Evidence => ({
+    id: `evidence-travel-${status}`,
+    subject: 'travel_time',
+    claim: '前の予定から徒歩で移動できる',
+    applicability: '徒歩のみ。公共交通は確認していない',
+    source: { kind: 'routes', label: 'Google Routes' },
+    checkedAt: '2026-11-08T10:01:00+09:00',
+    status,
+    explanation,
+  })
+
+  // 2番目と3番目の予定に、移動の根拠を付けた旅程（1番目の予定は移動元なので付けない）。
+  const withTravel = (second: Evidence | null, third: Evidence | null) =>
+    TripSchema.parse({
+      ...sampleTrip,
+      stops: sampleTrip.stops.map((stop, index) => ({
+        ...stop,
+        evidence: [index === 1 ? second : index === 2 ? third : null].filter(
+          (item) => item !== null,
+        ),
+      })),
+    })
+
+  it('移動の根拠の状態を、区間ごとに文で示す（整合・矛盾・確認できない）', () => {
+    render(
+      <TripRouteView
+        trip={withTravel(travelEvidence('consistent'), travelEvidence('conflicting'))}
+      />,
+    )
+
+    const labels = screen.getAllByText(/^次の地点まで/).map((node) => node.textContent)
+    expect(labels).toEqual([
+      '次の地点まで：徒歩移動は情報源と整合（所要時間の数値は取得していません）',
+      '次の地点まで：徒歩移動の条件に矛盾あり',
+    ])
+  })
+
+  it('確認できなかった移動は「確認できません」とする。根拠が無ければ従来どおり「未確認」', () => {
+    render(<TripRouteView trip={withTravel(travelEvidence('unverifiable'), null)} />)
+
+    const labels = screen.getAllByText(/^次の地点まで/).map((node) => node.textContent)
+    expect(labels).toEqual([
+      '次の地点まで：徒歩移動を確認できません',
+      '次の地点まで：移動時間は未確認',
+    ])
+  })
+
+  it('構造化された区間（分数）があればそれを優先し、根拠からは所要時間を推測しない', () => {
+    render(
+      <TripRouteView
+        trip={withTravel(travelEvidence('consistent'), travelEvidence('consistent'))}
+        meta={sampleRouteMeta}
+      />,
+    )
+
+    const labels = screen.getAllByText(/^次の地点まで/).map((node) => node.textContent)
+    // 2番目の予定への区間は、メタの「徒歩10分」を出す。3番目は分数が無いので、根拠の状態だけ。
+    expect(labels[0]).toBe('次の地点まで：徒歩10分')
+    expect(labels[1]).toBe(
+      '次の地点まで：徒歩移動は情報源と整合（所要時間の数値は取得していません）',
+    )
+  })
+
+  it('Routesの値（所要時間・余裕）や「正しい」という保証は、路線図に出さない', () => {
+    render(
+      <TripRouteView
+        trip={withTravel(travelEvidence('consistent'), travelEvidence('conflicting'))}
+      />,
+    )
+
+    const text = routeText()
+    expect(text).not.toContain('17分')
+    expect(text).not.toContain('余裕')
+    expect(text).not.toContain('正しい')
+    expect(text).not.toContain('保証')
+  })
+
+  it('詳細シートの「前の地点から」と矛盾しない（数値は取得していないと伝える）', async () => {
+    render(<TripRouteView trip={withTravel(travelEvidence('consistent'), null)} />)
+
+    await userEvent.setup().click(stopButton(/昼食店A/))
+
+    expect(sheet().textContent).toContain('所要時間の数値は取得していません')
   })
 })

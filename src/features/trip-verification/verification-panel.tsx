@@ -4,7 +4,7 @@ import { evidenceStatusLabels } from '@/domain'
 import { GoogleMapsSourceBox } from '@/features/legal/google-maps-attribution'
 import { checkedAtFormat, StatusBadge } from '@/features/trip-map/evidence-badge'
 
-import { verificationFailureGuidance } from './failure-messages'
+import { verificationFailureGuidance, verificationInterruptedGuidance } from './failure-messages'
 import type { VerificationPhase } from './use-trip-verification'
 import type { VerificationSummary } from './verification-summary'
 
@@ -17,6 +17,8 @@ export type PanelStatus =
 interface VerificationPanelProps {
   status: PanelStatus
   phase: VerificationPhase
+  // 確認の最中に旅程の内容が変わり、確認を中止した。次に確認を始めるまで、理由を出し続ける。
+  interrupted: boolean
   onVerify: () => void
 }
 
@@ -32,25 +34,49 @@ function Scope() {
 
 const statusOrder = ['consistent', 'conflicting', 'unverifiable'] as const
 
-function VerifiedResult({ summary }: { summary: VerificationSummary }) {
+// 結果の通知（role="status"）に載せる、状態の1文。件数や範囲の説明は含めず、毎回の読み上げを軽くする。
+function StatusLine({ status, verifying }: { status: PanelStatus; verifying: boolean }) {
+  if (verifying) {
+    return <p className="text-sm font-semibold">根拠を確認しています。しばらくお待ちください。</p>
+  }
+  if (status.kind === 'verified') {
+    const { total } = status.summary
+    return <p className="font-semibold">状態：照合結果あり{total > 0 && `（根拠 ${total}件）`}</p>
+  }
+  return (
+    <p className="flex flex-wrap items-center gap-2 font-semibold">
+      状態：
+      <StatusBadge tone="unverified">
+        {status.kind === 'withdrawn' ? '変更後は未確認' : '未確認'}
+      </StatusBadge>
+    </p>
+  )
+}
+
+function VerifiedDetails({ summary }: { summary: VerificationSummary }) {
   const body = (
     <div className="space-y-1">
-      <p className="font-semibold">状態：照合結果あり</p>
       {summary.total === 0 ? (
         <p className="text-sm">照合しましたが、根拠を付けられた予定はありませんでした。</p>
       ) : (
-        <p className="text-sm">
-          {statusOrder.map((key, index) => (
-            <span key={key}>
-              {index > 0 && '／'}
-              {evidenceStatusLabels[key]} {summary.counts[key]}件
-            </span>
-          ))}
-          {summary.latestCheckedAt &&
-            `（${checkedAtFormat.format(new Date(summary.latestCheckedAt))}時点）`}
-        </p>
+        <>
+          <p className="text-sm">
+            根拠 {summary.total}件の内訳：
+            {statusOrder.map((key, index) => (
+              <span key={key}>
+                {index > 0 && '／'}
+                {evidenceStatusLabels[key]} {summary.counts[key]}件
+              </span>
+            ))}
+            {summary.latestCheckedAt &&
+              `（${checkedAtFormat.format(new Date(summary.latestCheckedAt))}時点）`}
+          </p>
+          <p className="text-sm">
+            件数は、施設の存在・営業時間・移動の確認項目ごとの根拠の数です（予定の数ではありません）。
+            各予定の詳細で、確認項目ごとの内訳・情報源・照合日時・理由を見られます。
+          </p>
+        </>
       )}
-      <p className="text-sm">各予定の詳細で、確認項目・情報源・照合日時・理由を見られます。</p>
       <Scope />
     </div>
   )
@@ -62,14 +88,20 @@ function VerifiedResult({ summary }: { summary: VerificationSummary }) {
   )
 }
 
-function Failure({
-  failure,
-}: {
-  failure: Extract<VerificationPhase, { phase: 'failed' }>['failure']
-}) {
-  const guidance = verificationFailureGuidance[failure.kind]
+function UnverifiedDetails({ withdrawn }: { withdrawn: boolean }) {
   return (
-    <div className="gt-notice" data-tone="error">
+    <p className="text-sm">
+      {withdrawn
+        ? '旅程の内容を変更したため、前回の照合結果は取り下げました。変更後の旅程は、施設の存在・営業時間・移動をまだ外部の情報源と照合していません。'
+        : '施設の存在・営業時間・移動を、まだ外部の情報源と照合していません。AIが作った提案のままです。'}
+    </p>
+  )
+}
+
+// 失敗・中止の通知。結果の通知（role="status"）とは別に、見逃さないよう role="alert" で伝える。
+function Alert({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div role="alert" className="gt-notice" data-tone="error">
       <p className="flex items-center gap-2 font-black text-gt-warn">
         <span
           aria-hidden="true"
@@ -77,46 +109,27 @@ function Failure({
         >
           !
         </span>
-        エラー：{guidance.title}
+        {title}
       </p>
-      <p className="mt-1 text-sm">{guidance.action}</p>
-      <p className="mt-1 text-sm">詳細：{failure.message}</p>
+      {children}
     </div>
   )
 }
 
-export function VerificationPanel({ status, phase, onVerify }: VerificationPanelProps) {
+export function VerificationPanel({
+  status,
+  phase,
+  interrupted,
+  onVerify,
+}: VerificationPanelProps) {
   const headingId = useId()
   const verifying = phase.phase === 'verifying'
-
-  let content: ReactNode
-  if (verifying) {
-    content = (
-      <p className="text-sm font-semibold">根拠を確認しています。しばらくお待ちください。</p>
-    )
-  } else if (status.kind === 'verified') {
-    content = <VerifiedResult summary={status.summary} />
-  } else {
-    content = (
-      <div className="space-y-1">
-        <p className="flex flex-wrap items-center gap-2 font-semibold">
-          状態：
-          <StatusBadge tone="unverified">
-            {status.kind === 'withdrawn' ? '変更後は未確認' : '未確認'}
-          </StatusBadge>
-        </p>
-        <p className="text-sm">
-          {status.kind === 'withdrawn'
-            ? '旅程を変更したため、前回の照合結果は取り下げました。変更後の旅程は、施設の存在・営業時間・移動をまだ外部の情報源と照合していません。'
-            : '施設の存在・営業時間・移動を、まだ外部の情報源と照合していません。AIが作った提案のままです。'}
-        </p>
-      </div>
-    )
-  }
+  const failure = phase.phase === 'failed' ? phase.failure : null
+  const failureGuidance = failure && verificationFailureGuidance[failure.kind]
 
   const label = verifying
     ? '確認しています…'
-    : status.kind === 'verified' || phase.phase === 'failed'
+    : status.kind === 'verified' || failure
       ? 'もう一度確認する'
       : '根拠を確認する'
 
@@ -128,11 +141,28 @@ export function VerificationPanel({ status, phase, onVerify }: VerificationPanel
       <h3 id={headingId} className="text-base font-semibold">
         根拠の確認
       </h3>
-      {/* 結果の通知。状態が変わるたびに、テキストの更新として読み上げる。 */}
-      <div role="status" aria-live="polite" aria-atomic="true" className="space-y-3">
-        {content}
-        {!verifying && phase.phase === 'failed' && <Failure failure={phase.failure} />}
+      {/* 結果の通知。読み上げるのは状態の1文だけにして、件数・範囲の説明は下に置く（毎回は読み上げない）。 */}
+      <div role="status" aria-live="polite" aria-atomic="true">
+        <StatusLine status={status} verifying={verifying} />
       </div>
+      {verifying ? (
+        <p className="text-sm">確認中も、旅程を見たり、予定を固定したりできます。</p>
+      ) : status.kind === 'verified' ? (
+        <VerifiedDetails summary={status.summary} />
+      ) : (
+        <UnverifiedDetails withdrawn={status.kind === 'withdrawn'} />
+      )}
+      {!verifying && interrupted && (
+        <Alert title={verificationInterruptedGuidance.title}>
+          <p className="mt-1 text-sm">{verificationInterruptedGuidance.action}</p>
+        </Alert>
+      )}
+      {!verifying && failure && failureGuidance && (
+        <Alert title={`エラー：${failureGuidance.title}`}>
+          <p className="mt-1 text-sm">{failureGuidance.action}</p>
+          <p className="mt-1 text-sm">詳細：{failure.message}</p>
+        </Alert>
+      )}
       <div className="space-y-1">
         {/* 実行中も同じ位置に残し（フォーカスを失わない）、押下は受け付けない。 */}
         <button

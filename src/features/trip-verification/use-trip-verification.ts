@@ -16,7 +16,7 @@ export type VerificationPhase =
 const idle: VerificationPhase = { phase: 'idle' }
 
 // 旅程の照合APIの呼び出し。課金を伴うため、1回の操作で1回だけ呼び、実行中の再送信は受け付けない。
-// 画面を離れたとき、または旅程が変わったときは通信を中止し、その結果は反映しない。
+// 画面を離れたとき、または旅程の内容が変わったときは通信を中止し、その結果は反映しない。
 export function useTripVerification(verify: VerifyTrip = verifyTripFromBrowser) {
   const [state, setState] = useState<VerificationPhase>(idle)
   const controllerRef = useRef<AbortController | null>(null)
@@ -57,11 +57,14 @@ export function useTripVerification(verify: VerifyTrip = verifyTripFromBrowser) 
     [verify],
   )
 
-  // 進行中の確認を中止し、失敗の表示も消す（旅程が変わったとき・別の旅程に切り替わったとき）。
-  const cancel = useCallback(() => {
+  // 進行中の確認を中止し、失敗の表示も消す（旅程の内容が変わったとき・別の旅程に切り替わったとき）。
+  // 進行中の確認を中止したときだけ true を返す（呼び出し側が、中止した理由を利用者に伝えるため）。
+  const cancel = useCallback((): boolean => {
+    const wasRunning = controllerRef.current !== null
     controllerRef.current?.abort()
     controllerRef.current = null
     setState((current) => (current.phase === 'idle' ? current : idle))
+    return wasRunning
   }, [])
 
   return { state, run, cancel }

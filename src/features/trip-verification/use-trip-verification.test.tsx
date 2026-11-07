@@ -72,7 +72,12 @@ describe('useTripVerification', () => {
     act(() => {
       cancelled = result.current.run(sampleTrip)
     })
-    act(() => result.current.cancel())
+    let aborted: boolean | undefined
+    act(() => {
+      aborted = result.current.cancel()
+    })
+    // 進行中の確認を中止したことが分かる（呼び出し側が、中止した理由を利用者に伝えるため）。
+    expect(aborted).toBe(true)
     expect(verify.mock.calls[0][1]?.signal?.aborted).toBe(true)
     expect(result.current.state).toEqual({ phase: 'idle' })
 
@@ -84,6 +89,27 @@ describe('useTripVerification', () => {
 
     await act(async () => pending.resolve({ ok: true, trip: sampleTrip }))
     expect(await cancelled).toBeNull()
+  })
+
+  it('進行中でなければ、cancel は何も中止していないと返す', async () => {
+    const verify = vi.fn<VerifyTrip>().mockResolvedValue({ ok: true, trip: sampleTrip })
+    const { result } = renderHook(() => useTripVerification(verify))
+
+    let before: boolean | undefined
+    act(() => {
+      before = result.current.cancel()
+    })
+    expect(before).toBe(false)
+
+    // 完了した後も、中止するものはない。
+    await act(async () => {
+      await result.current.run(sampleTrip)
+    })
+    let after: boolean | undefined
+    act(() => {
+      after = result.current.cancel()
+    })
+    expect(after).toBe(false)
   })
 
   it('画面を離れたら通信を中止する', () => {
@@ -103,6 +129,7 @@ describe('VerificationPanel のボタン', () => {
     render(
       <VerificationPanel
         status={{ kind: 'unverified' }}
+        interrupted={false}
         phase={{ phase: 'verifying' }}
         onVerify={onVerify}
       />,
@@ -118,11 +145,79 @@ describe('VerificationPanel のボタン', () => {
     render(
       <VerificationPanel
         status={{ kind: 'unverified' }}
+        interrupted={false}
         phase={{ phase: 'idle' }}
         onVerify={onVerify}
       />,
     )
     await userEvent.setup().click(screen.getByRole('button', { name: '根拠を確認する' }))
     expect(onVerify).toHaveBeenCalledOnce()
+  })
+})
+
+describe('VerificationPanel の通知', () => {
+  const summary = {
+    counts: { consistent: 2, conflicting: 1, unverifiable: 1 },
+    total: 4,
+    latestCheckedAt: '2026-11-08T10:01:00+09:00',
+    usesGoogle: true,
+  }
+
+  it('結果の通知（status）は状態の1文だけ。内訳・範囲の説明は通知の外に置く', () => {
+    render(
+      <VerificationPanel
+        status={{ kind: 'verified', summary }}
+        interrupted={false}
+        phase={{ phase: 'idle' }}
+        onVerify={vi.fn()}
+      />,
+    )
+    const status = screen.getByRole('status')
+    expect(status.textContent).toBe('状態：照合結果あり（根拠 4件）')
+    expect(status.getAttribute('aria-atomic')).toBe('true')
+    const panel = screen.getByRole('region', { name: '根拠の確認' }).textContent ?? ''
+    expect(panel).toContain('根拠 4件の内訳')
+    expect(panel).toContain('予定の数ではありません')
+    expect(panel).toContain('確認した範囲')
+  })
+
+  it('中止の通知は role="alert" で、結果の通知の外に出す。確認中は出さない', () => {
+    const { rerender } = render(
+      <VerificationPanel
+        status={{ kind: 'unverified' }}
+        interrupted
+        phase={{ phase: 'idle' }}
+        onVerify={vi.fn()}
+      />,
+    )
+    const alert = screen.getByRole('alert')
+    expect(alert.textContent).toContain('確認を中止しました')
+    expect(alert.textContent).toContain('最新の内容で照合し直してください')
+    expect(screen.getByRole('status').contains(alert)).toBe(false)
+
+    rerender(
+      <VerificationPanel
+        status={{ kind: 'unverified' }}
+        interrupted
+        phase={{ phase: 'verifying' }}
+        onVerify={vi.fn()}
+      />,
+    )
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('失敗は role="alert" で、結果の通知（status）には載せない', () => {
+    render(
+      <VerificationPanel
+        status={{ kind: 'unverified' }}
+        interrupted={false}
+        phase={{ phase: 'failed', failure: { kind: 'service_unavailable', message: '停止中' } }}
+        onVerify={vi.fn()}
+      />,
+    )
+    const alert = screen.getByRole('alert')
+    expect(alert.textContent).toContain('停止中')
+    expect(screen.getByRole('status').textContent).not.toContain('停止中')
+    expect(screen.getByRole('button', { name: 'もう一度確認する' })).toBeTruthy()
   })
 })
