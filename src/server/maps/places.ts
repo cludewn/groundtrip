@@ -1,3 +1,5 @@
+import 'server-only'
+
 import { z } from 'zod'
 
 import { MapsCallError } from './errors'
@@ -74,8 +76,9 @@ export type OpeningHours =
 
 export interface PlaceCandidate {
   placeId: string
+  // Places由来の一時データ。照合に使い、Stop.nameへ転記しない。
   // 取得できなければ空文字。名称の一致判定の対象にならず、「確認できない」にすること。
-  name: string
+  displayName: string
   address?: string
   location?: { latitude: number; longitude: number }
   businessStatus?: string
@@ -159,7 +162,7 @@ export async function searchPlaces(
       const periods = place.regularOpeningHours?.periods
       return {
         placeId: place.id,
-        name: place.displayName?.text ?? '',
+        displayName: place.displayName?.text ?? '',
         address: place.formattedAddress,
         location: place.location,
         businessStatus: place.businessStatus,
