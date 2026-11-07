@@ -3,7 +3,11 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { sampleTrip } from '@/domain/samples'
-import { initializeAnonymousSession, startNewAnonymousSession, getAuthHeaders } from '@/lib/auth/client'
+import {
+  initializeAnonymousSession,
+  startNewAnonymousSession,
+  getAuthHeaders,
+} from '@/lib/auth/client'
 import { TripSavePanel } from './trip-save-panel'
 
 vi.mock('@/lib/auth/client', () => ({
