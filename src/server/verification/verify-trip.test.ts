@@ -601,3 +601,54 @@ describe('verifyTrip: 別の都道府県の同名の地名・記号の違いに�
     expect(result.trip.stops[1].placeId).toBeNull()
   })
 })
+
+describe('verifyTrip: 複合地域で、別の施設のPlace IDを根拠に伝えない', () => {
+  const candidate = (address: string): PlaceSearchResult => ({
+    status: 'found',
+    candidates: [
+      {
+        placeId: 'PX',
+        name: '資料館',
+        address,
+        openingHours: { status: 'available', periods: sundayAllDay },
+      },
+    ],
+  })
+
+  it.each([
+    ['大阪市福島区の同名施設', '日本、〒553-0003 大阪府大阪市福島区福島1丁目'],
+    ['福島県までしか分からない住所', '日本、〒960-8043 福島県'],
+  ])(
+    '「福島・郡山」の旅程で、%sは採用せず、営業時間・Routesの根拠にも伝えない',
+    async (_name, address) => {
+      const trip = renamed(1, '資料館', { region: '福島・郡山' })
+      const maps = makeMaps({
+        places: { ...allFound, 資料館: candidate(address) },
+        routes: route({ WALK: walk(10) }),
+      })
+      const result = await verifyTrip(trip, { maps, now: () => NOW })
+
+      expect(result.status).toBe('verified')
+      if (result.status !== 'verified') return
+      expect(result.trip.stops[1].placeId).toBeNull()
+      expect(byId(result.trip, 1, '-place')).toMatchObject({ status: 'unverifiable' })
+      expect(byId(result.trip, 1, '-hours')).toMatchObject({ status: 'unverifiable' })
+      expect(hasEvidence(result.trip, 1, '-travel')).toBe(false)
+      expect(hasEvidence(result.trip, 2, '-travel')).toBe(false)
+      expect(maps.computeRoute).not.toHaveBeenCalled()
+    },
+  )
+
+  it('「福島・郡山」の旅程でも、福島県郡山市の施設は、採用する', async () => {
+    const trip = renamed(1, '資料館', { region: '福島・郡山' })
+    const maps = makeMaps({
+      places: { ...allFound, 資料館: candidate('日本、〒963-8002 福島県郡山市駅前2丁目') },
+      routes: route({ WALK: walk(10) }),
+    })
+    const result = await verifyTrip(trip, { maps, now: () => NOW })
+
+    expect(result.status).toBe('verified')
+    if (result.status !== 'verified') return
+    expect(result.trip.stops[1].placeId).toBe('PX')
+  })
+})
