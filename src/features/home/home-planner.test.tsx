@@ -28,16 +28,18 @@ describe('HomePlanner: 入力から路線図まで', () => {
       stops: generatedTrip.stops.map((stop) => ({
         ...stop,
         placeId: `place-${stop.id}`,
-        evidence: [{
-          id: `evidence-${stop.id}`,
-          subject: 'place_identity' as const,
-          claim: '施設の一致',
-          applicability: '施設の存在',
-          source: { kind: 'places' as const, label: 'Google Places' },
-          checkedAt: '2026-11-08T12:00:00+09:00',
-          status: 'consistent' as const,
-          explanation: '名称と地域が一致しました。',
-        }],
+        evidence: [
+          {
+            id: `evidence-${stop.id}`,
+            subject: 'place_identity' as const,
+            claim: '施設の一致',
+            applicability: '施設の存在',
+            source: { kind: 'places' as const, label: 'Google Places' },
+            checkedAt: '2026-11-08T12:00:00+09:00',
+            status: 'consistent' as const,
+            explanation: '名称と地域が一致しました。',
+          },
+        ],
       })),
     })
     const verify = vi.fn<VerifyTrip>().mockResolvedValue({ ok: true, trip: verified })
