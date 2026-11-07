@@ -74,6 +74,10 @@ Geminiの説明自体を検証済み根拠にしない。`user_report`も客観�
 - 取得失敗・未対応を、移動時間0や判明済みに変換しない。実測していない所要時間を、AI（Gemini）で補完しない。
 - 公共交通は、日本のRoutes APIで未対応のため、`unknown`（`transit_unsupported`）として明示する。
 - 判明済みの値は、`checkedAt`の時点のもの。承認の根拠にするときは、適用直前に、サーバー側で再検証する。
+- **変更前後の比較（部分修正の応答）**：`ReviseTripResponse`の`proposed`に、任意の`comparisons`を持つ（Revisionごとに高々1件）。
+  変更前後それぞれの「前の予定→対象」「対象→次の予定」を、区間が存在しない（`none`：最初・最後の予定）か、
+  存在する（`segment`：`TravelSegment`の`known`／`unknown`）かで返す。詳細は`docs/PARTIAL_REVISION.md`。
+- **移動手段**：`ReviseTripRequest.travelModes?`（`walk`／`drive`）は、利用者が使える手段。省略時は徒歩だけ（車を使えるとは限らない）。
 - **価格は、まだ決めていない**（#24の次の段階）。
 
 ### 部分修正と元旅程の保護

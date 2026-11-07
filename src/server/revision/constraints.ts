@@ -1,6 +1,6 @@
-import type { ConstraintCheck, Evidence, Stop, Trip } from '../../domain'
+import type { ConstraintCheck, Evidence } from '../../domain'
 
-// 候補を旅程へ入れた状態で照合した結果（verifyTrip）から、決定論的な制約検証の結果を導く純粋ロジック。
+// 候補を照合した結果（根拠）から、決定論的な制約検証の結果を導く純粋ロジック。
 // 他の予定の時刻は動かさないため、次の予定が固定予定でも、「候補の終了＋移動時間 ≦ 次の予定の開始」で、
 // 固定予定への到達も判定できる。
 
@@ -11,22 +11,6 @@ export interface CandidateChecks {
   travelBefore: Evidence | null
   // 候補 → 次の予定。対象が最後の予定なら無い。
   travelAfter: Evidence | null
-}
-
-const byId = (stop: Stop, suffix: string): Evidence | null =>
-  stop.evidence.find((item) => item.id === `evidence-${stop.id}-${suffix}`) ?? null
-
-// 照合済みの旅程から、対象の予定（候補）と、その次の予定の根拠を取り出す。
-export function collectChecks(verified: Trip, targetStopId: string): CandidateChecks {
-  const index = verified.stops.findIndex((stop) => stop.id === targetStopId)
-  const target = verified.stops[index]
-  const next = verified.stops[index + 1]
-  return {
-    identity: target ? byId(target, 'place') : null,
-    hours: target ? byId(target, 'hours') : null,
-    travelBefore: target ? byId(target, 'travel') : null,
-    travelAfter: next ? byId(next, 'travel') : null,
-  }
 }
 
 export type CandidateJudgement =

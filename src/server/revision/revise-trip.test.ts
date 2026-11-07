@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { ReviseTripResponseSchema, type ReviseTripRequest } from '../../domain'
+import { ReviseTripResponseSchema, TripSchema, type ReviseTripRequest } from '../../domain'
 import { sampleTrip } from '../../domain/samples'
 import { GeminiCallError, type GeminiJsonClient } from '../gemini/client'
 import {
@@ -282,8 +282,8 @@ describe('reviseTrip: 候補の整理', () => {
     const { response, maps } = await run(fitting, client)
 
     expect(proposed(response)).toHaveLength(1)
-    // 昼食店B（1件）の照合だけ：旅程の3地点を1回ずつ。
-    expect(maps.searchPlaces).toHaveBeenCalledTimes(3)
+    // 前・次・元の施設（Place IDだけ）と、残った候補（昼食店B）の1件だけ：計4回。
+    expect(maps.searchPlaces).toHaveBeenCalledTimes(4)
   })
 
   it('他の予定（固定予定）と同じ名称は、候補にしない', async () => {
@@ -426,5 +426,245 @@ describe('checkRevisionConstraints（適用の直前の再検証）', () => {
     )
 
     expect(result).toMatchObject({ status: 'checked', constraintCheck: { status: 'unknown' } })
+  })
+})
+
+describe('変更前後の移動区間の比較（comparisons）', () => {
+  const withOriginal: MapsSetup = {
+    ...fitting,
+    places: { ...basePlaces, 昼食店A: found('P2', '昼食店A') },
+  }
+
+  it('各Revisionに、変更前後の「前→対象」「対象→次」を、構造化された移動区間（TravelSegment）で返す', async () => {
+    const { response } = await run(withOriginal, clientReturning(draft([{ name: '昼食店B' }])))
+    if (response.status !== 'proposed') throw new Error('提案を期待しました')
+    const [comparison] = response.comparisons ?? []
+
+    expect(comparison.revisionId).toBe(response.revisions[0].id)
+    for (const side of [comparison.before, comparison.after]) {
+      expect(side.fromPrevious).toMatchObject({
+        presence: 'segment',
+        segment: {
+          status: 'known',
+          mode: 'walk',
+          durationMinutes: 10,
+          fromStopId: 'stop-morning',
+          toStopId: 'stop-lunch',
+        },
+      })
+      expect(side.toNext).toMatchObject({
+        presence: 'segment',
+        segment: { status: 'known', fromStopId: 'stop-lunch', toStopId: 'stop-exhibition' },
+      })
+    }
+    expect(ReviseTripResponseSchema.safeParse(response).success).toBe(true)
+  })
+
+  it('数値は、説明文からではなく、構造化された結果から取る（前後で別の値を返せる）', async () => {
+    const slow: MapsSetup = {
+      ...withOriginal,
+      routes: (o) => (o.destinationPlaceId === 'P4' ? walk(25) : walk(10)),
+    }
+    const { response } = await run(slow, clientReturning(draft([{ name: '昼食店B' }])))
+    if (response.status !== 'proposed') throw new Error('提案を期待しました')
+    const { before, after } = response.comparisons![0]
+
+    expect(before.fromPrevious).toMatchObject({ segment: { durationMinutes: 10 } })
+    expect(after.fromPrevious).toMatchObject({ segment: { durationMinutes: 25 } })
+    expect(after.toNext).toMatchObject({ segment: { durationMinutes: 10 } })
+  })
+
+  it('変更前の経路も、同じリクエストの中で測る（元の施設を特定できれば known）', async () => {
+    const { maps } = await run(withOriginal, clientReturning(draft([{ name: '昼食店B' }])))
+    const pairs = maps.computeRoute.mock.calls.map(
+      ([o]) => `${o.originPlaceId}->${o.destinationPlaceId}`,
+    )
+
+    expect(pairs).toEqual(expect.arrayContaining(['P1->P2', 'P2->P3', 'P1->P4', 'P4->P3']))
+  })
+
+  it('変更前の施設を特定できなければ、「区間なし」ではなく「確認できない（未照会）」として返す', async () => {
+    const { response } = await run(fitting, clientReturning(draft([{ name: '昼食店B' }])))
+    if (response.status !== 'proposed') throw new Error('提案を期待しました')
+    const { before } = response.comparisons![0]
+
+    expect(before.fromPrevious).toMatchObject({
+      presence: 'segment',
+      segment: { status: 'unknown', reason: 'not_queried' },
+    })
+    expect(JSON.stringify(before.fromPrevious)).not.toContain('checkedAt')
+  })
+
+  it('経路を確認できなかった区間は、unknown（経路なし）で、照合時刻を持つ。候補は unknown', async () => {
+    const noRoute: MapsSetup = {
+      ...withOriginal,
+      routes: (o): RouteResult =>
+        o.destinationPlaceId === 'P4' ? { status: 'no_route' } : walk(10),
+    }
+    const { response } = await run(noRoute, clientReturning(draft([{ name: '昼食店B' }])))
+    if (response.status !== 'proposed') throw new Error('提案を期待しました')
+
+    expect(response.comparisons![0].after.fromPrevious).toMatchObject({
+      presence: 'segment',
+      segment: { status: 'unknown', reason: 'no_route', checkedAt: NOW.toISOString() },
+    })
+    expect(response.revisions[0].constraintCheck.status).toBe('unknown')
+  })
+
+  it('最初の予定には「前の区間」が、最後の予定には「次の区間」が無い（区間が存在しないことを区別する）', async () => {
+    const make = (target: 'stop-morning' | 'stop-exhibition') =>
+      TripSchema.parse({
+        ...sampleTrip,
+        stops: sampleTrip.stops.map((stop) => ({ ...stop, isFixed: stop.id !== target })),
+      })
+    const places: MapsSetup['places'] = {
+      ...basePlaces,
+      昼食店A: found('P2', '昼食店A'),
+      朝の庭園: found('P1', '朝の庭園'),
+      朝の候補: found('P7', '朝の候補'),
+      夕の候補: found('P8', '夕の候補'),
+    }
+    const setup: MapsSetup = { places, routes: route({ WALK: walk(5) }) }
+
+    const first = await run(setup, clientReturning(draft([{ name: '朝の候補' }])), {
+      ...request,
+      trip: make('stop-morning'),
+      targetStopId: 'stop-morning',
+    })
+    if (first.response.status !== 'proposed') throw new Error('提案を期待しました')
+    const firstComparison = first.response.comparisons![0]
+    expect(firstComparison.before.fromPrevious).toEqual({ presence: 'none', reason: 'first_stop' })
+    expect(firstComparison.after.fromPrevious).toEqual({ presence: 'none', reason: 'first_stop' })
+    expect(firstComparison.after.toNext.presence).toBe('segment')
+
+    const last = await run(setup, clientReturning(draft([{ name: '夕の候補' }])), {
+      ...request,
+      trip: make('stop-exhibition'),
+      targetStopId: 'stop-exhibition',
+    })
+    if (last.response.status !== 'proposed') throw new Error('提案を期待しました')
+    const lastComparison = last.response.comparisons![0]
+    expect(lastComparison.before.toNext).toEqual({ presence: 'none', reason: 'last_stop' })
+    expect(lastComparison.after.toNext).toEqual({ presence: 'none', reason: 'last_stop' })
+    expect(lastComparison.after.fromPrevious.presence).toBe('segment')
+  })
+
+  it('除外された候補の比較は返さない（比較は、返したRevisionに対してだけ）', async () => {
+    const { response } = await run(
+      fitting,
+      clientReturning(draft([{ name: '存在しない架空の店' }, { name: '昼食店B' }])),
+    )
+    if (response.status !== 'proposed') throw new Error('提案を期待しました')
+
+    expect(response.comparisons).toHaveLength(1)
+    expect(response.comparisons![0].revisionId).toBe(response.revisions[0].id)
+  })
+})
+
+describe('Maps APIの呼び出し回数', () => {
+  const withOriginal: MapsSetup = {
+    ...fitting,
+    places: { ...basePlaces, 昼食店A: found('P2', '昼食店A') },
+  }
+
+  it('1候補：施設検索は4回（前・次・元・候補）、経路は4回（変更前2＋変更後2）', async () => {
+    const { maps } = await run(withOriginal, clientReturning(draft([{ name: '昼食店B' }])))
+
+    expect(maps.searchPlaces).toHaveBeenCalledTimes(4)
+    expect(maps.computeRoute).toHaveBeenCalledTimes(4)
+  })
+
+  it('3候補でも、前・次・元の検索と変更前の経路は共有する（検索 3+3＝6回、経路 2+6＝8回）', async () => {
+    const places = { ...withOriginal.places, 昼食店D: found('P6', '昼食店D') }
+    const { maps } = await run(
+      { ...withOriginal, places },
+      clientReturning(draft([{ name: '昼食店B' }, { name: '昼食店C' }, { name: '昼食店D' }])),
+    )
+
+    expect(maps.searchPlaces).toHaveBeenCalledTimes(6)
+    expect(maps.computeRoute).toHaveBeenCalledTimes(8)
+  })
+
+  it('前・次・元の施設の検索では、営業時間（Enterprise）を要求しない。候補の検索だけが要求する', async () => {
+    const { maps } = await run(withOriginal, clientReturning(draft([{ name: '昼食店B' }])))
+    const requests = maps.searchPlaces.mock.calls.map(
+      ([o]) => o as { query: string; includeOpeningHours?: boolean },
+    )
+
+    expect(requests.filter((o) => o.includeOpeningHours === true)).toHaveLength(1)
+    expect(requests.find((o) => o.includeOpeningHours === true)?.query).toContain('昼食店B')
+  })
+
+  it('施設を特定できない候補は、経路を調べない（変更前の2区間だけ）', async () => {
+    const { maps } = await run(
+      withOriginal,
+      clientReturning(draft([{ name: '存在しない架空の店' }])),
+    )
+
+    expect(maps.computeRoute).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('移動手段の制約（利用者が車を使えるとは限らない）', () => {
+  // 庭園→昼食=使える60分、昼食→展示=使える45分。徒歩50分は、展示に間に合わない。車8分なら間に合う。
+  const driveOnlyFits: MapsSetup = {
+    places: basePlaces,
+    routes: route({ WALK: walk(50), DRIVE: walk(8) }),
+  }
+
+  it('既定は徒歩だけ：徒歩で間に合わず、車なら間に合う候補は、提案しない（車を調べない）', async () => {
+    const { response, maps } = await run(
+      driveOnlyFits,
+      clientReturning(draft([{ name: '昼食店B' }])),
+    )
+
+    expect(response.status).toBe('no_candidates')
+    expect(maps.computeRoute.mock.calls.every(([o]) => o.mode === 'WALK')).toBe(true)
+  })
+
+  it('車を使えると明示した（travelModes）ときだけ、車で確認し、車の区間として返す', async () => {
+    const { response } = await run(driveOnlyFits, clientReturning(draft([{ name: '昼食店B' }])), {
+      ...request,
+      travelModes: ['walk', 'drive'],
+    })
+    if (response.status !== 'proposed') throw new Error('提案を期待しました')
+    const revision = response.revisions[0]
+
+    expect(revision.constraintCheck.status).toBe('satisfied')
+    expect(response.comparisons![0].after.toNext).toMatchObject({
+      segment: { status: 'known', mode: 'drive', durationMinutes: 8 },
+    })
+    expect(revision.impactSummary).toContain('車で間に合う')
+  })
+
+  it('徒歩で間に合う区間は、車を使えると明示しても、車を調べない', async () => {
+    const maps = { places: basePlaces, routes: route({ WALK: walk(10), DRIVE: walk(2) }) }
+    const result = await run(maps, clientReturning(draft([{ name: '昼食店B' }])), {
+      ...request,
+      travelModes: ['walk', 'drive'],
+    })
+
+    expect(result.maps.computeRoute.mock.calls.every(([o]) => o.mode === 'WALK')).toBe(true)
+  })
+
+  it('適用前の再検証も、同じ移動手段の制約で判定する（既定は徒歩だけ）', async () => {
+    const { response } = await run(driveOnlyFits, clientReturning(draft([{ name: '昼食店B' }])), {
+      ...request,
+      travelModes: ['walk', 'drive'],
+    })
+    if (response.status !== 'proposed') throw new Error('提案を期待しました')
+    const revision = response.revisions[0]
+    const deps = (travelModes?: ('walk' | 'drive')[]) => ({
+      maps: makeMaps(driveOnlyFits),
+      now: () => NOW,
+      travelModes,
+    })
+
+    expect((await checkRevisionConstraints(sampleTrip, revision, deps())).status).toBe(
+      'not_possible',
+    )
+    expect(
+      await checkRevisionConstraints(sampleTrip, revision, deps(['walk', 'drive'])),
+    ).toMatchObject({ status: 'checked', constraintCheck: { status: 'satisfied' } })
   })
 })
