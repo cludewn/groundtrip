@@ -482,6 +482,66 @@ describe('認証セッションとの結び付け', () => {
   })
 })
 
+describe('読み直しで版が進んだ・撤回された学び', () => {
+  it('再承認で版が進んだ学びは、読み直した新しい版で選び、古い版の選択を持ち越さない', async () => {
+    const onSelectionChange = vi.fn()
+    const user = userEvent.setup()
+    // 1回目は版2、2回目（同じIDが再承認された後）は版3で本文も違う。
+    const load = vi
+      .fn<LoadLearningOptions>()
+      .mockImplementationOnce(async (scope) =>
+        okFor(scope, [{ version: 2, learning: sampleApprovedLearning }]),
+      )
+      // 途中の奈良市の読み込み。
+      .mockImplementationOnce(async (scope) => okFor(scope, []))
+      .mockImplementationOnce(async (scope) =>
+        okFor(scope, [
+          { version: 3, learning: { ...sampleApprovedLearning, content: '再承認後の本文' } },
+        ]),
+      )
+    const props = { session: sessionA, load, onSelectionChange }
+    const view = render(<LearningReusePicker {...props} region="京都市" />)
+    await user.click(await screen.findByRole('checkbox'))
+    expect(onSelectionChange).toHaveBeenLastCalledWith({
+      scope: scopeA,
+      value: [{ id: sampleApprovedLearning.id, version: 2 }],
+    })
+
+    // 地域を変えて戻すと読み直す。古い版の選択は戻らない。
+    view.rerender(<LearningReusePicker {...props} region="奈良市" />)
+    view.rerender(<LearningReusePicker {...props} region="京都市" />)
+    await screen.findByText('再承認後の本文')
+    expect((screen.getByRole('checkbox') as HTMLInputElement).checked).toBe(false)
+    await user.click(screen.getByRole('checkbox'))
+    expect(onSelectionChange).toHaveBeenLastCalledWith({
+      scope: scopeA,
+      value: [{ id: sampleApprovedLearning.id, version: 3 }],
+    })
+  })
+
+  it('撤回された学びは、読み直した一覧に出ず、選択も戻らない', async () => {
+    const onSelectionChange = vi.fn()
+    const user = userEvent.setup()
+    const load = vi
+      .fn<LoadLearningOptions>()
+      .mockImplementationOnce(async (scope) => okFor(scope))
+      // 途中の奈良市の読み込み。
+      .mockImplementationOnce(async (scope) => okFor(scope, []))
+      // 読み直したときには、sampleApprovedLearning が撤回されている。
+      .mockImplementationOnce(async (scope) => okFor(scope, [records[1]]))
+    const props = { session: sessionA, load, onSelectionChange }
+    const view = render(<LearningReusePicker {...props} region="京都市" />)
+    await screen.findByText(sampleApprovedLearning.content)
+    await user.click(screen.getAllByRole('checkbox')[0])
+
+    view.rerender(<LearningReusePicker {...props} region="奈良市" />)
+    view.rerender(<LearningReusePicker {...props} region="京都市" />)
+    await screen.findByText(approvedRegional.content)
+    expect(screen.queryByText(sampleApprovedLearning.content)).toBeNull()
+    expect(onSelectionChange).toHaveBeenLastCalledWith(null)
+  })
+})
+
 describe('取得・表示する一覧の整合', () => {
   const overLimit: ApprovedLearning = {
     ...sampleApprovedLearning,

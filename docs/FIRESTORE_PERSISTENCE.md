@@ -130,5 +130,8 @@ Stopごとの根拠16件、変更理由・現地報告各1000文字、Learning�
 - **#13** は `resolveSelectedLearnings(new FirestoreLearningStore(), actor.uid, region, selections)` を使い、
   利用者が画面で選んだ `{ id, version }` を、`listVersionedApproved` で取り出した本人の有効な承認済みLearningの現行版と照合する。
   生成APIでは本文中のLearningを認可に使わず、サーバーで採用・反映先を確定する（詳細は[学びの接続契約](LEARNINGS.md)）。
-  反映済みTripの保存を接続する際は、参照したLearningの存在・所有者・現行承認を保存トランザクション内で検証する。
+  画面の選択は、取得時の認証セッション（UID）と組で保持し、別のUIDのトークンで送らない。
+  `resolveSelectedLearnings` が返す値は、Firestoreを読んだ時点のスナップショット。外部のGemini呼び出しをトランザクションで囲まない。
+  反映済みTripの保存を接続する際は、参照したLearningの存在・所有者・現行承認と、生成時に検証した版を
+  保存トランザクション内で再検証する（現在の保存APIは適用記録つきのTripを受け付けない。提案は[学びの接続契約](LEARNINGS.md)）。
 - Trip・Revisionの削除や匿名UID喪失後のデータ保持期限は、後続のデータ運用で定める。
