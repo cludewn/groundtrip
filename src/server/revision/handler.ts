@@ -35,7 +35,9 @@ export async function handleReviseTripRequest(
       message: '部分修正は現在利用できません。',
     })
   }
-  if (!request.headers.get('content-type')?.toLowerCase().startsWith('application/json')) {
+  // メディアタイプを正確に比べる（パラメータは許す。application/jsonp などは受理しない）。
+  const mediaType = request.headers.get('content-type')?.split(';')[0].trim().toLowerCase()
+  if (mediaType !== 'application/json') {
     return errorResponse(415, {
       status: 'unsupported_media_type',
       message: 'Content-Typeにapplication/jsonを指定してください。',

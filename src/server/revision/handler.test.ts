@@ -70,6 +70,34 @@ describe('POST /api/trips/revise', () => {
     expect(revise).not.toHaveBeenCalled()
   })
 
+  it.each(['application/json', 'application/json; charset=utf-8', 'APPLICATION/JSON'])(
+    'Content-Type %s は受理する',
+    async (contentType) => {
+      const { revise, deps } = setup()
+      const response = await handleReviseTripRequest(
+        post(validBody, { 'Content-Type': contentType }),
+        deps,
+      )
+
+      expect(response.status).toBe(200)
+      expect(revise).toHaveBeenCalledTimes(1)
+    },
+  )
+
+  it.each(['application/jsonp', 'application/json-patch+json', 'text/plain'])(
+    'Content-Type %s は415',
+    async (contentType) => {
+      const { revise, deps } = setup()
+      const response = await handleReviseTripRequest(
+        post(validBody, { 'Content-Type': contentType }),
+        deps,
+      )
+
+      expect(response.status).toBe(415)
+      expect(revise).not.toHaveBeenCalled()
+    },
+  )
+
   it('大きすぎる入力は413（宣言・実際とも）', async () => {
     const { revise, deps } = setup()
     const declared = await handleReviseTripRequest(

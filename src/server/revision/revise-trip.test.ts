@@ -344,6 +344,94 @@ describe('reviseTrip: 隣の予定の区間が未測定のときは「確認で�
   })
 })
 
+// 乗車・乗換（transport）は施設ではない：予定名が実在の駅名で、Placesが一致を返しても、経路の端点にしない。
+describe('乗車・乗換の予定は、施設として照合しない', () => {
+  const stationPlaces: MapsSetup['places'] = { ...basePlaces, 京都駅: found('P-STATION', '京都駅') }
+  const routes = route({ WALK: walk(10) })
+  const tripWithTransport = (targetId: 'stop-exhibition' | 'stop-lunch') =>
+    TripSchema.parse({
+      ...sampleTrip,
+      stops: sampleTrip.stops.map((stop) =>
+        stop.id === targetId ? { ...stop, name: '京都駅', kind: 'transport' } : stop,
+      ),
+    })
+  const queriesOf = (searchPlaces: ReturnType<typeof makeMaps>['searchPlaces']) =>
+    searchPlaces.mock.calls.map(([o]) => (o as { query: string }).query)
+
+  it('隣が乗車・乗換なら、Placesが一致を返しても、経路を確認済みにしない（unknown）', async () => {
+    const trip = tripWithTransport('stop-exhibition')
+    const { response, maps } = await run(
+      { places: stationPlaces, routes },
+      clientReturning(draft([{ name: '昼食店B' }])),
+      { ...request, trip },
+    )
+
+    const [revision] = proposed(response)
+    expect(revision.constraintCheck.status).toBe('unknown')
+    expect(queriesOf(maps.searchPlaces).some((query) => query.includes('京都駅'))).toBe(false)
+    const endpoints = maps.computeRoute.mock.calls.flatMap(([o]) => JSON.stringify(o))
+    expect(endpoints.some((text) => text.includes('P-STATION'))).toBe(false)
+  })
+
+  it('候補生成と適用前再検証は、同じ旅程・同じ候補名で、同じ判定（unknown）になる', async () => {
+    const trip = tripWithTransport('stop-exhibition')
+    const { response } = await run(
+      { places: stationPlaces, routes },
+      clientReturning(draft([{ name: '昼食店B' }])),
+      { ...request, trip },
+    )
+    const [revision] = proposed(response)
+    const maps = makeMaps({ places: stationPlaces, routes })
+    const result = await checkRevisionConstraints(trip, revision, { maps, now: () => NOW })
+
+    expect(result).toMatchObject({
+      status: 'checked',
+      constraintCheck: { status: revision.constraintCheck.status },
+    })
+    expect(revision.constraintCheck.status).toBe('unknown')
+    expect(queriesOf(maps.searchPlaces).some((query) => query.includes('京都駅'))).toBe(false)
+  })
+
+  it('隣が通常の予定なら、従来どおり施設照合と経路検証で satisfied になる', async () => {
+    const { response } = await run(fitting, clientReturning(draft([{ name: '昼食店B' }])))
+
+    expect(proposed(response)[0].constraintCheck.status).toBe('satisfied')
+  })
+
+  it('差し替え対象が乗車・乗換なら、Gemini・Mapsを呼ばず insufficient_information', async () => {
+    const client = clientReturning(draft([{ name: '昼食店B' }]))
+    const { response, maps } = await run({ places: stationPlaces, routes }, client, {
+      ...request,
+      trip: tripWithTransport('stop-lunch'),
+    })
+
+    expect(response).toEqual({
+      status: 'insufficient_information',
+      message: '乗車・乗換の予定は、施設として差し替えられません。',
+    })
+    expect(client.generateJson).not.toHaveBeenCalled()
+    expect(maps.searchPlaces).not.toHaveBeenCalled()
+    expect(maps.computeRoute).not.toHaveBeenCalled()
+  })
+
+  it('適用前の再検証も、対象が乗車・乗換なら、Mapsを呼ばず not_possible', async () => {
+    const { response } = await run(fitting, clientReturning(draft([{ name: '昼食店B' }])))
+    const [revision] = proposed(response)
+    const maps = makeMaps({ places: stationPlaces, routes })
+    const result = await checkRevisionConstraints(tripWithTransport('stop-lunch'), revision, {
+      maps,
+      now: () => NOW,
+    })
+
+    expect(result).toEqual({
+      status: 'not_possible',
+      explanation: '乗車・乗換の予定は、施設として差し替えられません。',
+    })
+    expect(maps.searchPlaces).not.toHaveBeenCalled()
+    expect(maps.computeRoute).not.toHaveBeenCalled()
+  })
+})
+
 describe('reviseTrip: 候補の整理', () => {
   it('元の予定・重複と同じ名称は、候補にしない（照合は残った1件だけ）', async () => {
     const client = clientReturning(

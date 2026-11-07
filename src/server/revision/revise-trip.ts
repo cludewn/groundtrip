@@ -63,6 +63,9 @@ const MAPS_FAILURE_MESSAGE =
 // 名称の比較キー。括弧書き（支店名など）を除いた名称で比べる：同じ店の別の支店も、同じ名称として扱う（保守的）。
 const nameKey = (name: string): string => parseName(name).base
 
+// 乗車・乗換の予定は、予定名だけでは実際の終了地点を確定できないため、施設として差し替えない。
+const TRANSPORT_TARGET_MESSAGE = '乗車・乗換の予定は、施設として差し替えられません。'
+
 const externalFailure = (message: string): ProposalFailure => ({
   status: 'external_service_error',
   message,
@@ -91,8 +94,9 @@ async function resolveSurroundings(
   const target = trip.stops[index]
   const previous = trip.stops[index - 1] ?? null
   const next = trip.stops[index + 1] ?? null
+  // 乗車・乗換は施設ではないため、Placesを呼ばない（nullは「照会していない」。経路の根拠はunknownになる）。
   const placeId = async (stop: Stop | null) =>
-    stop
+    stop && stop.kind !== 'transport'
       ? ((await lookupPlace(maps, trip, stop, { includeOpeningHours: false })).place?.placeId ??
         null)
       : null
@@ -284,6 +288,10 @@ export async function checkRevisionConstraints(
   revision: Pick<Revision, 'targetStopId' | 'diff'>,
   deps: MapsDeps,
 ): Promise<RevisionRecheck> {
+  // Placesを呼ぶ前に弾く（乗車・乗換は施設として照合しない）。
+  if (trip.stops.find((stop) => stop.id === revision.targetStopId)?.kind === 'transport') {
+    return { status: 'not_possible', explanation: TRANSPORT_TARGET_MESSAGE }
+  }
   const surroundings = await resolveSurroundings(trip, revision.targetStopId, deps.maps, {
     includeOriginal: false,
   })
@@ -355,6 +363,10 @@ export async function reviseTrip(
   if (!target || target.isFixed) {
     // 契約の検証で弾かれるはずの入力。呼び出し側が検証を省いた場合の、最後の防波堤。
     return { status: 'no_candidates', message: '固定されていない予定を指定してください。' }
+  }
+  // Gemini・Mapsを呼ぶ前に弾く（乗車・乗換は施設として照合しない）。
+  if (target.kind === 'transport') {
+    return { status: 'insufficient_information', message: TRANSPORT_TARGET_MESSAGE }
   }
 
   const { systemInstruction, prompt } = buildRevisionPrompt(request)
