@@ -293,3 +293,33 @@ describe('一覧の読み上げ名と根拠の表示（推奨）', () => {
     expect(within(sheet()).queryByRole('link')).toBeNull()
   })
 })
+
+describe('予約に関する表示（#23の仕様：根拠のない「予約済み」表示は禁止）', () => {
+  it('予約が必要な予定の種別は「要予約」と表示する（予約済みの状態に見せない）', () => {
+    render(<TripRouteView trip={sampleTrip} meta={sampleRouteMeta} />)
+    const ticket = items()[2]
+
+    expect(ticket.textContent).toContain('要予約')
+    // 種別のラベルとして「予約」だけを単独で出さない。
+    expect(ticket.textContent).not.toMatch(/(^|[^要])予約(?!展示)/)
+  })
+
+  it('詳細でも種別は「要予約」で、予約の状態は反映されないことを明記する', async () => {
+    const user = userEvent.setup()
+    render(<TripRouteView trip={sampleTrip} meta={sampleRouteMeta} />)
+    await user.click(stopButton(/14時の予約展示/))
+
+    expect(sheet().textContent).toContain('3番目・要予約・')
+    expect(sheet().textContent).toContain('予約の状態は反映されません')
+  })
+
+  it('固定しただけでは、予約済みの表示にならない', async () => {
+    const user = userEvent.setup()
+    render(<TripRouteView trip={sampleTrip} meta={sampleRouteMeta} />)
+    await user.click(stopButton(/昼食店A/))
+    await user.click(within(sheet()).getByRole('button', { name: 'この予定を固定する' }))
+
+    expect(items()[1].textContent).toContain('固定予定')
+    expect(items()[1].textContent).not.toContain('要予約')
+  })
+})

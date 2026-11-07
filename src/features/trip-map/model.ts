@@ -9,7 +9,8 @@ export type StopKind = 'sight' | 'meal' | 'reserved' | 'station'
 export const stopKindLabels: Record<StopKind, string> = {
   sight: '観光',
   meal: '食事',
-  reserved: '予約',
+  // 予約が必要な予定という「種別」であり、予約済みという「状態」ではない（予約状況は照合していない）。
+  reserved: '要予約',
   station: '駅',
 }
 
