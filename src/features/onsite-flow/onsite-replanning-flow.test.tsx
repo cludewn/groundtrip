@@ -36,7 +36,10 @@ const submitReport = async (
 describe('現地報告から再計画', () => {
   it('旅行中に固定でない予定を報告し、on_site文脈で既存の部分修正APIへ渡す', async () => {
     const user = userEvent.setup()
-    const generate = vi.fn<GenerateRevisions>().mockResolvedValue({ status: 'no_candidates', message: '候補がありません' })
+    const generate = vi.fn<GenerateRevisions>().mockResolvedValue({
+      status: 'no_candidates',
+      message: '候補がありません',
+    })
     const original = structuredClone(sampleTrip)
     render(<OnSiteReplanningFlow trip={sampleTrip} generate={generate} />)
 
@@ -77,7 +80,10 @@ describe('現地報告から再計画', () => {
 
   it('模擬報告は明示し、適用サービスが渡されても旅程の変更は許さない', async () => {
     const user = userEvent.setup()
-    const generate = vi.fn<GenerateRevisions>().mockResolvedValue({ status: 'no_candidates', message: '候補がありません' })
+    const generate = vi.fn<GenerateRevisions>().mockResolvedValue({
+      status: 'no_candidates',
+      message: '候補がありません',
+    })
     const apply = vi.fn<ApplyRevision>()
     render(<OnSiteReplanningFlow trip={sampleTrip} generate={generate} apply={apply} />)
     await goToLunch(user)
