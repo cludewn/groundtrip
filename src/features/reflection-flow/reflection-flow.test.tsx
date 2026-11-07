@@ -4,10 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { sampleApprovedLearning, sampleRevision, sampleTrip } from '@/domain/samples'
-import {
-  initializeAnonymousSession,
-  startNewAnonymousSession,
-} from '@/lib/auth/client'
+import { initializeAnonymousSession, startNewAnonymousSession } from '@/lib/auth/client'
 
 import {
   createFirestoreLearningStore,
@@ -40,7 +37,10 @@ beforeEach(() => {
   vi.mocked(initializeAnonymousSession).mockResolvedValue({ uid: 'user-1', isAnonymous: true })
   vi.mocked(startNewAnonymousSession).mockResolvedValue({ uid: 'new-user', isAnonymous: true })
   vi.mocked(loadSavedTrips).mockResolvedValue({ trips: [sampleTrip], listInfo })
-  vi.mocked(loadReflectionHistory).mockResolvedValue({ trip: sampleTrip, revisions: [sampleRevision] })
+  vi.mocked(loadReflectionHistory).mockResolvedValue({
+    trip: sampleTrip,
+    revisions: [sampleRevision],
+  })
   vi.mocked(loadSavedLearnings).mockResolvedValue({
     learnings: [{ version: 1, learning: sampleApprovedLearning }],
     listInfo,
@@ -56,7 +56,9 @@ describe('ReflectionFlow', () => {
     const button = await screen.findByRole('button', { name: /振り返る/ })
     expect(screen.queryByTestId('learning-review')).toBeNull()
     await user.click(button)
-    expect((await screen.findByTestId('learning-review')).textContent).toContain('実旅程：trip-demo')
+    expect((await screen.findByTestId('learning-review')).textContent).toContain(
+      '実旅程：trip-demo',
+    )
     expect(loadReflectionHistory).toHaveBeenCalledWith(sampleTrip.id, expect.any(Object))
     expect(screen.getByText(sampleApprovedLearning.content)).toBeTruthy()
     expect(createFirestoreLearningStore).toHaveBeenCalled()
