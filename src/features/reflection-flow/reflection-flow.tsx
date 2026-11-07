@@ -38,6 +38,7 @@ export function ReflectionFlow({ initialTripId }: { initialTripId?: string }) {
   const [session, setSession] = useState<SessionPhase>({ kind: 'loading' })
   const [selectedTripId, setSelectedTripId] = useState<string | null>(null)
   const [history, setHistory] = useState<HistoryPhase | null>(null)
+  const [reloadAttempt, setReloadAttempt] = useState(0)
   const [saved, setSaved] = useState<LearningList | null>(null)
   const [savedError, setSavedError] = useState('')
   const sessionRequestRef = useRef(0)
@@ -93,7 +94,7 @@ export function ReflectionFlow({ initialTripId }: { initialTripId?: string }) {
       },
     )
     return () => controller.abort()
-  }, [selectedTripId, session.kind])
+  }, [selectedTripId, session.kind, reloadAttempt])
 
   const refreshSaved = useCallback(async () => {
     try {
@@ -206,11 +207,7 @@ export function ReflectionFlow({ initialTripId }: { initialTripId?: string }) {
             <button
               className="rounded border border-current/50 px-4 py-3"
               type="button"
-              onClick={() => {
-                const id = selectedTripId
-                setSelectedTripId(null)
-                queueMicrotask(() => setSelectedTripId(id))
-              }}
+              onClick={() => setReloadAttempt((value) => value + 1)}
             >
               読み込み直す
             </button>
