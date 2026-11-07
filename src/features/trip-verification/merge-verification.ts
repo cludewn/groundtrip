@@ -1,4 +1,5 @@
 import type { Trip } from '@/domain'
+import { isGoogleSource } from '@/features/trip-map/model'
 
 // 旅程の「内容」の比較と、照合の根拠の取り込み（純粋ロジック）。
 // 固定のフラグは、施設の存在・営業時間・移動の根拠に影響しない（固定は承認・予約とも独立した、画面上の状態）。
@@ -42,15 +43,25 @@ export const itineraryFingerprint = (trip: Trip): string => comparable(trip, fal
 export const isFixedOnlyChange = (before: Trip, after: Trip): boolean =>
   comparable(before, true) === comparable(after, true)
 
-// 現在の旅程に、照合結果の根拠（Place IDと証拠）だけを取り込む。固定や版は現在のものを残す。
+// 現在の旅程に、照合結果の根拠（Place IDと、Places・Routes由来の証拠）を取り込む。固定や版は現在のものを残す。
 // 照合中に利用者が切り替えた固定を、結果の到着で巻き戻さないための合成。予定はIDで対応させる。
+// - Places・Routes由来の根拠とPlace IDは、今回の照合結果で置き換える（前回の結果は残さない。今回、同定できなかった
+//   予定のPlace IDは、nullになる）。
+// - 公式情報・本人の報告・模擬データ由来の根拠は、照合の結果ではないので、現在のものを残す（サーバーはこれらを
+//   知らず、返さない）。応答に混ざった、Places・Routes以外の根拠は、取り込まない。
 export function combineEvidence(current: Trip, verified: Trip): Trip {
   const checked = new Map(verified.stops.map((stop) => [stop.id, stop]))
   return {
     ...current,
     stops: current.stops.map((stop) => {
       const found = checked.get(stop.id)
-      return found ? { ...stop, placeId: found.placeId, evidence: found.evidence } : stop
+      if (!found) return stop
+      const fresh = found.evidence.filter((item) => isGoogleSource(item.source.kind))
+      const freshIds = new Set(fresh.map((item) => item.id))
+      const kept = stop.evidence.filter(
+        (item) => !isGoogleSource(item.source.kind) && !freshIds.has(item.id),
+      )
+      return { ...stop, placeId: found.placeId, evidence: [...kept, ...fresh] }
     }),
   }
 }

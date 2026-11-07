@@ -15,7 +15,8 @@ export type VerificationPhase =
 
 const idle: VerificationPhase = { phase: 'idle' }
 
-// 旅程の照合APIの呼び出し。課金を伴うため、1回の操作で1回だけ呼び、実行中の再送信は受け付けない。
+// 旅程の照合APIの呼び出し。課金を伴うため、1回の操作で照合APIを1回だけ呼び、実行中の再送信は受け付けない。
+// （サーバーは、予定の数に応じて外部APIを複数回呼ぶ。この二重送信の防止は、サーバー側の利用制限の代わりにならない。）
 // 画面を離れたとき、または旅程の内容が変わったときは通信を中止し、その結果は反映しない。
 export function useTripVerification(verify: VerifyTrip = verifyTripFromBrowser) {
   const [state, setState] = useState<VerificationPhase>(idle)

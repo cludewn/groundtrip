@@ -129,7 +129,11 @@ describe('HomePlanner: 根拠の確認（照合）', () => {
     expect(text).toContain('確認できない 1件')
     expect(text).toContain('2026/11/08 10:01時点')
     expect(text).toContain('予定の数ではありません')
-    expect(text).toContain('確認した範囲')
+    // 照合した項目と、照合していない項目（この模擬の結果には営業時間が無い）を区別する。
+    expect(text).toContain('施設の存在（名称と地域）：2件')
+    expect(text).toContain('通常の営業時間：照合していません（未確認）')
+    expect(text).toContain('徒歩での移動：2件')
+    expect(text).toContain('確認していないこと：臨時休業・混雑・公共交通')
     expect(text).toContain('保証するものではありません')
     expect(text).not.toContain('正しい')
     expect(statusText()).toBe('状態：照合結果あり（根拠 4件）')

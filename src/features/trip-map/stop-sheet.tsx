@@ -13,6 +13,7 @@ import type { Stop } from '@/domain'
 import { GoogleMapsSourceBox } from '@/features/legal/google-maps-attribution'
 
 import { EvidenceDetail, UnverifiedBadge } from './evidence-badge'
+import type { SegmentEvidenceItem } from './evidence-scope'
 import { LockIcon } from './icons'
 import { endTime, isGoogleSource, stopKindLabels, type RouteStopMeta, type StopKind } from './model'
 
@@ -23,6 +24,9 @@ interface StopSheetProps {
   meta: RouteStopMeta
   closing: boolean
   onExited: () => void
+  // 前の地点からこの予定への移動についての根拠（路線図の区間ラベルと同じ判定：segmentEvidence）。
+  // 逆向きの根拠や、区間を特定できない根拠は含まれない。
+  segment: readonly SegmentEvidenceItem[]
   // 種別が取得できていなければundefined（「予定」と中立に表示する。観光とは決めつけない）。
   kind?: StopKind
   // 部分修正を始める。未提供なら、修正の操作は表示しない（未実装の操作を見せない）。
@@ -39,6 +43,7 @@ export function StopSheet({
   notice,
   index,
   meta,
+  segment,
   kind,
   closing,
   onExited,
@@ -266,9 +271,11 @@ export function StopSheet({
                 ? `${meta.segmentFromPrevious.mode === 'walk' ? '徒歩' : '車'}${meta.segmentFromPrevious.minutes}分`
                 : index === 0
                   ? '—'
-                  : stop.evidence.some((item) => item.subject === 'travel_time')
-                    ? '所要時間の数値は取得していません（下の根拠を参照）'
-                    : '移動時間は未確認'}
+                  : segment.length === 0
+                    ? '移動時間は未確認'
+                    : segment.some((item) => item.owner === 'destination')
+                      ? '所要時間の数値は取得していません（下の根拠を参照）'
+                      : '所要時間の数値は取得していません（前の予定の詳細の根拠を参照）'}
             </dd>
           </dl>
 

@@ -57,6 +57,12 @@ vi.mock('@/features/revision-review/revision-route-view', () => ({
         >
           昼食の固定を切り替える
         </button>
+        <button
+          type="button"
+          onClick={() => change({ ...shown, version: shown.version + 1, date: '2026-11-09' })}
+        >
+          日付を変更する
+        </button>
       </div>
     )
   },
@@ -159,7 +165,7 @@ describe('VerifiableTrip: 旅程の内容が変わったとき', () => {
     expect(panel().queryByRole('alert')).toBeNull()
   })
 
-  it('照合済みの旅程の内容が変わると、根拠を取り下げて「変更後は未確認」に戻る', async () => {
+  it('照合済みの旅程の内容が変わると、変更の影響を受けた予定の根拠だけを取り下げ、「変更後の一部は未確認」にする', async () => {
     const verify = vi.fn<VerifyTrip>().mockImplementation(async (trip) => ({
       ok: true,
       trip: verifiedFrom(trip),
@@ -170,16 +176,40 @@ describe('VerifiableTrip: 旅程の内容が変わったとき', () => {
     await panel().findByText(/照合結果あり/)
     expect(list().getAllByText(/根拠1件/)).toHaveLength(3)
 
+    // 1番目の予定の名称を変える（影響を受けるのは、その予定の施設の根拠だけ）。
     await changeContent(user)
 
-    expect(statusText()).toContain('変更後は未確認')
+    expect(statusText()).toContain('変更後の一部は未確認')
+    expect(statusText()).toContain('残っている根拠 2件')
     expect(statusText()).not.toContain('照合結果あり')
-    expect(list().getAllByText(/根拠0件/)).toHaveLength(3)
+    expect(list().getByText(/変更後の名称／根拠0件/)).toBeTruthy()
+    expect(list().getAllByText(/根拠1件/)).toHaveLength(2)
+    // 取り下げた理由と、残した根拠があることを伝える。
+    expect(panel().getByText(/変更の影響を受けた予定の根拠は取り下げ/)).toBeTruthy()
     // 確認中ではなかったので、中止の通知は出さない。
     expect(panel().queryByRole('alert')).toBeNull()
   })
 
-  it('再確認した結果を取り下げても、前回の結果ではなく照合前の状態に戻る', async () => {
+  it('照合結果の根拠がすべて取り下げられたときは、「変更後は未確認」に戻る', async () => {
+    const verify = vi.fn<VerifyTrip>().mockImplementation(async (trip) => ({
+      ok: true,
+      trip: verifiedFrom(trip),
+    }))
+    const user = userEvent.setup()
+    render(<VerifiableTrip trip={generated} verify={verify} />)
+    await user.click(verifyButton())
+    await panel().findByText(/照合結果あり/)
+
+    // 旅程の日付が変わると、どの予定の根拠も、照合した時の旅程のものではなくなる。
+    await user.click(screen.getByRole('button', { name: '日付を変更する' }))
+
+    expect(statusText()).toContain('変更後は未確認')
+    expect(statusText()).not.toContain('照合結果あり')
+    expect(list().getAllByText(/根拠0件/)).toHaveLength(3)
+    expect(panel().getByText(/前回の照合結果は取り下げました/)).toBeTruthy()
+  })
+
+  it('再確認した結果の根拠を取り下げても、前回の結果ではなく、最新の照合結果に対する判断になる', async () => {
     const verify = vi
       .fn<VerifyTrip>()
       .mockImplementationOnce(async (trip) => ({ ok: true, trip: verifiedFrom(trip, 'first') }))
@@ -194,8 +224,10 @@ describe('VerifiableTrip: 旅程の内容が変わったとき', () => {
 
     await changeContent(user)
 
-    // 1回目の根拠が復活しない。
-    expect(list().getAllByText(/根拠0件/)).toHaveLength(3)
+    // 1番目の予定の根拠は取り下げる。2回目の結果（残った分）は、1回目の結果に置き換わらない。
+    expect(list().getByText(/変更後の名称／根拠0件/)).toBeTruthy()
+    expect(list().getAllByText(/根拠1件/)).toHaveLength(2)
+    expect(screen.getByRole('list', { name: '予定' }).textContent).not.toContain('first')
   })
 
   it('結果の内容が送った旅程と違っていれば取り込まず、理由を出す', async () => {

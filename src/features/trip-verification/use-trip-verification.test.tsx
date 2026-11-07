@@ -8,6 +8,7 @@ import { sampleTrip } from '@/domain/samples'
 import type { VerificationResult } from './api-client'
 import { useTripVerification, type VerifyTrip } from './use-trip-verification'
 import { VerificationPanel } from './verification-panel'
+import type { VerificationSummary } from './verification-summary'
 
 afterEach(() => {
   cleanup()
@@ -156,11 +157,15 @@ describe('VerificationPanel のボタン', () => {
 })
 
 describe('VerificationPanel の通知', () => {
-  const summary = {
-    counts: { consistent: 2, conflicting: 1, unverifiable: 1 },
-    total: 4,
-    latestCheckedAt: '2026-11-08T10:01:00+09:00',
-    usesGoogle: true,
+  const summary: VerificationSummary = {
+    google: {
+      counts: { consistent: 2, conflicting: 1, unverifiable: 1 },
+      total: 4,
+      latestCheckedAt: '2026-11-08T10:01:00+09:00',
+      earliestCheckedAt: '2026-11-08T10:00:00+09:00',
+      bySubject: { place_identity: 2, opening_hours: 0, travel_time: 2 },
+    },
+    otherTotal: 0,
   }
 
   it('結果の通知（status）は状態の1文だけ。内訳・範囲の説明は通知の外に置く', () => {
@@ -178,7 +183,8 @@ describe('VerificationPanel の通知', () => {
     const panel = screen.getByRole('region', { name: '根拠の確認' }).textContent ?? ''
     expect(panel).toContain('根拠 4件の内訳')
     expect(panel).toContain('予定の数ではありません')
-    expect(panel).toContain('確認した範囲')
+    expect(panel).toContain('営業時間：照合していません（未確認）')
+    expect(panel).toContain('確認していないこと')
   })
 
   it('中止の通知は role="alert" で、結果の通知の外に出す。確認中は出さない', () => {

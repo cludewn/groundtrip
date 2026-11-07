@@ -129,7 +129,7 @@ describe('combineEvidence', () => {
     expect(combined.stops.find((stop) => stop.id === 'stop-lunch')?.isFixed).toBe(true)
     for (const stop of combined.stops) {
       const verified = result.stops.find((item) => item.id === stop.id)!
-      expect(stop.evidence).toBe(verified.evidence)
+      expect(stop.evidence).toEqual(verified.evidence)
       expect(stop.placeId).toBe(verified.placeId)
     }
   })
@@ -144,7 +144,74 @@ describe('combineEvidence', () => {
     )!
     expect(combined.stops.find((stop) => stop.id === missing.id)).toBe(missing)
     const found = combined.stops.find((stop) => stop.id === partial.stops[0].id)!
-    expect(found.evidence).toBe(partial.stops[0].evidence)
+    expect(found.evidence).toEqual(partial.stops[0].evidence)
+  })
+})
+
+describe('combineEvidence: 照合由来と、それ以外の根拠', () => {
+  const report: Evidence = {
+    ...evidence('e-report'),
+    source: { kind: 'user_report', label: '本人の現地報告' },
+  }
+  const simulation: Evidence = {
+    ...evidence('e-simulation'),
+    source: { kind: 'simulation', label: '模擬データ' },
+  }
+
+  it('本人の報告・模擬データ・公式情報の根拠は、照合の結果で置き換えず、残す', () => {
+    const current: Trip = {
+      ...sent,
+      stops: sent.stops.map((stop, i) =>
+        i === 1 ? { ...stop, evidence: [report, simulation] } : stop,
+      ),
+    }
+
+    const combined = combineEvidence(current, result)
+
+    expect(combined.stops[1].evidence.map((item) => item.id)).toEqual([
+      'e-report',
+      'e-simulation',
+      'e-stop-lunch',
+    ])
+  })
+
+  it('照合由来（Places・Routes）の古い根拠は、今回の結果で置き換える。同定できなかった予定のPlace IDはnullになる', () => {
+    const stale: Evidence = { ...evidence('e-old'), status: 'consistent' }
+    const current: Trip = {
+      ...sent,
+      stops: sent.stops.map((stop, i) =>
+        i === 1 ? { ...stop, placeId: 'place-old', evidence: [stale, report] } : stop,
+      ),
+    }
+    const unidentified: Trip = {
+      ...result,
+      stops: result.stops.map((stop, i) =>
+        i === 1
+          ? { ...stop, placeId: null, evidence: [{ ...evidence('e-new'), status: 'unverifiable' }] }
+          : stop,
+      ),
+    }
+
+    const combined = combineEvidence(current, unidentified)
+
+    expect(combined.stops[1].placeId).toBeNull()
+    expect(combined.stops[1].evidence.map((item) => `${item.id}:${item.status}`)).toEqual([
+      'e-report:consistent',
+      'e-new:unverifiable',
+    ])
+  })
+
+  it('応答に混ざった、Places・Routes以外の根拠は取り込まない（照合の結果として本人の報告などを作らせない）', () => {
+    const injected: Trip = {
+      ...result,
+      stops: result.stops.map((stop, i) =>
+        i === 1 ? { ...stop, evidence: [...stop.evidence, report] } : stop,
+      ),
+    }
+
+    const combined = combineEvidence(sent, injected)
+
+    expect(combined.stops[1].evidence.map((item) => item.id)).toEqual(['e-stop-lunch'])
   })
 })
 

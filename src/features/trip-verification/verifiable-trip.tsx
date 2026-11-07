@@ -9,10 +9,13 @@ import { isFixedOnlyChange, mergeVerification } from './merge-verification'
 import { useTripVerification, type VerifyTrip } from './use-trip-verification'
 import { VerificationPanel, type PanelStatus } from './verification-panel'
 import { summarizeVerification } from './verification-summary'
-import { withdrawVerification, type VerificationRecord } from './withdraw-verification'
+import { withdrawStaleVerification } from './withdraw-verification'
 
-// 直近の照合の記録。withdrawn は、旅程の内容が変わって、照合結果を取り下げたこと。
-type VerifiedRecord = VerificationRecord & { withdrawn: boolean }
+// 直近の照合の記録。withdrawn は、旅程の内容が変わって、照合結果の一部（または全部）を取り下げたこと。
+// 取り下げずに戻す「照合前の状態」は持たない（再照合の結果を、古い結果で上書きしないため）。
+interface VerifiedRecord {
+  withdrawn: boolean
+}
 
 // 画面に出している旅程の状態。
 // - source：親から渡された旅程（新しい生成に切り替わったかの判定に使う）。
@@ -37,9 +40,10 @@ const fresh = (source: Trip): View => ({
 })
 
 // 生成された旅程の路線図と、根拠の確認（照合）の操作。
-// 照合は利用者が「根拠を確認する」を押したときだけ、1回行う。失敗しても旅程は変わらず、再試行できる。
+// 照合は利用者が「根拠を確認する」を押したときだけ、照合APIを1回呼んで行う。失敗しても旅程は変わらず、再試行できる。
 // 固定の切り替えは、根拠（存在・営業・移動）に影響しないので、照合結果を取り下げず、確認中の通信も止めない。
-// 旅程の内容が変わったとき（部分修正の適用など）は、前回の照合結果を取り下げて「変更後は未確認」に戻し、
+// 旅程の内容が変わったとき（部分修正の適用など）は、変更の影響を受けた根拠だけを取り下げて未確認に戻し
+// （影響を受けない予定の根拠と、本人の報告などは残す。withdraw-verification.ts）、
 // 確認中だった場合は通信を中止して、その理由を通知する。
 export function VerifiableTrip({ trip: source, verify }: { trip: Trip; verify?: VerifyTrip }) {
   const [stored, setStored] = useState<View>(() => fresh(source))
@@ -56,9 +60,6 @@ export function VerifiableTrip({ trip: source, verify }: { trip: Trip; verify?: 
 
   const verifyNow = async () => {
     const sent = view.current
-    // 取り下げの戻し先は「照合前」の状態。照合結果が有効なまま再確認するときは、前回の根拠を外した旅程にする。
-    const basis =
-      view.verified && !view.verified.withdrawn ? withdrawVerification(sent, view.verified) : sent
     // 押したら、前回の中止の通知は消す。
     update((previous) => ({ ...previous, interrupted: false }))
     const result = await run(sent)
@@ -72,7 +73,7 @@ export function VerifiableTrip({ trip: source, verify }: { trip: Trip; verify?: 
         source,
         prop: merged,
         current: merged,
-        verified: { basis, result, withdrawn: false },
+        verified: { withdrawn: false },
         interrupted: false,
       }
     })
@@ -85,24 +86,27 @@ export function VerifiableTrip({ trip: source, verify }: { trip: Trip; verify?: 
       update((previous) => ({ ...previous, current: changed }))
       return changed
     }
-    // 内容が変わった：前回の照合の根拠を取り下げ、確認中なら通信を中止して、理由を通知する。
-    const adopted = view.verified ? withdrawVerification(changed, view.verified) : changed
+    // 内容が変わった：変更の影響を受けた根拠を取り下げ、確認中なら通信を中止して、理由を通知する。
+    // 取り下げの判断は、直前の旅程（画面に出していたもの）と、変更後の旅程の比較だけで行う。
+    const { trip: adopted, withdrawn } = withdrawStaleVerification(view.current, changed)
     const aborted = cancel()
     update((previous) => ({
       ...previous,
       current: adopted,
-      verified: previous.verified && { ...previous.verified, withdrawn: true },
+      verified: previous.verified && { withdrawn: previous.verified.withdrawn || withdrawn },
       interrupted: aborted || previous.interrupted,
     }))
     return adopted
   }
 
-  const status: PanelStatus =
-    view.verified && !view.verified.withdrawn
-      ? { kind: 'verified', summary: summarizeVerification(view.current) }
-      : view.verified
-        ? { kind: 'withdrawn' }
-        : { kind: 'unverified' }
+  const summary = summarizeVerification(view.current)
+  const status: PanelStatus = !view.verified
+    ? { kind: 'unverified', googleTotal: summary.google.total }
+    : !view.verified.withdrawn
+      ? { kind: 'verified', summary }
+      : summary.google.total > 0
+        ? { kind: 'partial', summary }
+        : { kind: 'withdrawn' }
 
   return (
     <div className="space-y-4">

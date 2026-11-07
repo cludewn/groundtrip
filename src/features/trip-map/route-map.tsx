@@ -1,6 +1,7 @@
 import type { Stop, Trip } from '@/domain'
 
 import { EvidenceBadge, UnverifiedBadge } from './evidence-badge'
+import { segmentEvidence, type SegmentEvidenceItem } from './evidence-scope'
 import { LockIcon } from './icons'
 import { evidenceStatusLabels } from '@/domain'
 
@@ -85,20 +86,20 @@ function Evidence({ stop }: { stop: Stop }) {
   )
 }
 
-// 移動区間のラベル。構造化された区間（分数）があればそれを出し、なければ次の予定の移動の根拠の「状態」だけを出す。
+// 移動区間のラベル。構造化された区間（分数）があればそれを出し、なければ区間についての根拠の「状態」だけを出す。
+// 区間についての根拠は、segmentEvidence（前の予定 → 次の予定の方向が合うRoutes由来の根拠だけ）が決める。
+// 詳細シートの「前の地点から」も、同じ判定に従う。区間を特定できない根拠は、使わない（未確認として扱う）。
 // 所要時間・距離などRoutesが返す値は、取得していないので推測も表示もしない（詳細シートの表記と同じ）。
 // 「整合」は、確認できた情報と一致したという意味で、移動が実際に間に合う保証ではない。
 // 現在の照合APIは徒歩だけを確認する（docs/TRIP_VERIFICATION.md）。車などを照合するようになったら、手段を根拠から取り直す。
 function SegmentLabel({
   segment,
-  destination,
+  evidence,
 }: {
   segment?: RouteSegmentLabel
-  destination: Stop
+  evidence: readonly SegmentEvidenceItem[]
 }) {
-  const travelEvidence = worstEvidence(
-    destination.evidence.filter((item) => item.subject === 'travel_time'),
-  )
+  const travelEvidence = worstEvidence(evidence.map((item) => item.evidence))
   let text = '次の地点まで：移動時間は未確認'
   if (segment?.status === 'known') {
     text = `次の地点まで：${segment.mode === 'walk' ? '徒歩' : '車'}${segment.minutes}分`
@@ -312,7 +313,7 @@ export function RouteMap({
               {showSegment && (
                 <SegmentLabel
                   segment={nextMeta?.segmentFromPrevious}
-                  destination={trip.stops[index + 1]}
+                  evidence={segmentEvidence(trip.stops, index + 1)}
                 />
               )}
               {branch && (

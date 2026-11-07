@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useState } from 'react'
 
 import type { Trip } from '@/domain'
 
+import { segmentEvidence } from './evidence-scope'
 import { ROUTE_LIST_ID, RouteMap, stopButtonId } from './route-map'
 import { routeStopKind, setStopFixed, type RouteMeta } from './model'
 import { StopSheet } from './stop-sheet'
@@ -152,6 +153,7 @@ export function TripRouteView({
           onExited={() => setClosingId(null)}
           index={selectedIndex}
           meta={meta?.[selected.id] ?? {}}
+          segment={segmentEvidence(trip.stops, selectedIndex)}
           kind={routeStopKind(selected, meta?.[selected.id])}
           onStartRevision={onStartRevision}
           onToggleFixed={toggleFixed}
