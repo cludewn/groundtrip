@@ -3,11 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { sampleApprovedLearning, sampleRevision, sampleTrip } from '@/domain/samples'
 import { getAuthHeaders } from '@/lib/auth/client'
 
-import {
-  createFirestoreLearningStore,
-  loadReflectionHistory,
-  loadSavedTrips,
-} from './api-client'
+import { createFirestoreLearningStore, loadReflectionHistory, loadSavedTrips } from './api-client'
 
 vi.mock('@/lib/auth/client', () => ({
   getAuthHeaders: vi.fn(),
@@ -21,38 +17,42 @@ const json = (body: unknown, status = 200) =>
   })
 
 beforeEach(() => {
-  vi.mocked(getAuthHeaders).mockResolvedValue(
-    new Headers({ Authorization: 'Bearer test-token' }),
-  )
+  vi.mocked(getAuthHeaders).mockResolvedValue(new Headers({ Authorization: '***' }))
 })
 
 describe('振り返りの保存済みデータ取得', () => {
   it('認証済みの旅程だけを取得し、認証トークンは送るが再利用できるキャッシュには載せない', async () => {
-    const fetchFn = vi.fn().mockResolvedValue(json({ trips: [sampleTrip], listInfo: { ...listInfo, returned: 1 } }))
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValue(json({ trips: [sampleTrip], listInfo: { ...listInfo, returned: 1 } }))
     const result = await loadSavedTrips({ fetchFn })
     expect(result.trips).toEqual([sampleTrip])
     const [, init] = fetchFn.mock.calls[0]
-    expect(init.headers.get('Authorization')).toBe('Bearer test-token')
+    expect(init.headers.get('Authorization')).toBe('***')
     expect(init.cache).toBe('no-store')
   })
 
   it('旅程と変更履歴の両方が揃って初めて振り返りに渡す', async () => {
-    const fetchFn = vi.fn().mockImplementation(async (path: string) =>
-      path.endsWith('/revisions')
-        ? json({ revisions: [sampleRevision], listInfo: { ...listInfo, returned: 1 } })
-        : json({ trip: sampleTrip }),
-    )
+    const fetchFn = vi
+      .fn()
+      .mockImplementation(async (path: string) =>
+        path.endsWith('/revisions')
+          ? json({ revisions: [sampleRevision], listInfo: { ...listInfo, returned: 1 } })
+          : json({ trip: sampleTrip }),
+      )
     const history = await loadReflectionHistory(sampleTrip.id, { fetchFn })
     expect(history.trip).toEqual(sampleTrip)
     expect(history.revisions).toEqual([sampleRevision])
   })
 
   it('履歴が欠けている場合は学び作成に使わない', async () => {
-    const fetchFn = vi.fn().mockImplementation(async (path: string) =>
-      path.endsWith('/revisions')
-        ? json({ revisions: [], listInfo: { ...listInfo, truncated: true } })
-        : json({ trip: sampleTrip }),
-    )
+    const fetchFn = vi
+      .fn()
+      .mockImplementation(async (path: string) =>
+        path.endsWith('/revisions')
+          ? json({ revisions: [], listInfo: { ...listInfo, truncated: true } })
+          : json({ trip: sampleTrip }),
+      )
     await expect(loadReflectionHistory(sampleTrip.id, { fetchFn })).rejects.toThrow(
       'すべて確認できませんでした',
     )
@@ -80,7 +80,7 @@ describe('承認済み学びのFirestore保存', () => {
     const [url, init] = fetchFn.mock.calls[1]
     expect(url).toBe('/api/learnings/learning-rest/approve')
     expect(init.method).toBe('POST')
-    expect(init.headers.get('Authorization')).toBe('Bearer test-token')
+    expect(init.headers.get('Authorization')).toBe('***')
     expect(JSON.parse(init.body)).toEqual({
       expectedVersion: 0,
       sourceTripId: sampleApprovedLearning.sourceTripId,
@@ -135,26 +135,34 @@ describe('承認済み学びのFirestore保存', () => {
     expect(onSaved).not.toHaveBeenCalled()
     expect(await store.save([sampleApprovedLearning, second])).toEqual({ ok: true })
     expect(onSaved).toHaveBeenCalledTimes(1)
-    expect(fetchFn.mock.calls.filter(([url]) => url.endsWith('/learning-rest/approve'))).toHaveLength(1)
+    expect(
+      fetchFn.mock.calls.filter(([url]) => url.endsWith('/learning-rest/approve')),
+    ).toHaveLength(1)
   })
 
   it('保存済みの一覧が不完全なら、新しい書き込みを行わない', async () => {
-    const fetchFn = vi.fn().mockResolvedValue(
-      json({ learnings: [], listInfo: { ...listInfo, skippedInvalid: 1 } }),
-    )
-    const result = await createFirestoreLearningStore(undefined, fetchFn).save([sampleApprovedLearning])
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValue(json({ learnings: [], listInfo: { ...listInfo, skippedInvalid: 1 } }))
+    const result = await createFirestoreLearningStore(undefined, fetchFn).save([
+      sampleApprovedLearning,
+    ])
     expect(result.ok).toBe(false)
     expect(fetchFn).toHaveBeenCalledTimes(1)
   })
 
   it('409の競合や503の保存不可を成功と扱わない', async () => {
     for (const status of [409, 503]) {
-      const fetchFn = vi.fn().mockImplementation(async (path: string) =>
-        path === '/api/learnings'
-          ? json({ learnings: [], listInfo })
-          : json({ error: { code: 'version_conflict', message: '版が一致しません' } }, status),
-      )
-      const result = await createFirestoreLearningStore(undefined, fetchFn).save([sampleApprovedLearning])
+      const fetchFn = vi
+        .fn()
+        .mockImplementation(async (path: string) =>
+          path === '/api/learnings'
+            ? json({ learnings: [], listInfo })
+            : json({ error: { code: 'version_conflict', message: '版が一致しません' } }, status),
+        )
+      const result = await createFirestoreLearningStore(undefined, fetchFn).save([
+        sampleApprovedLearning,
+      ])
       expect(result.ok).toBe(false)
     }
   })
