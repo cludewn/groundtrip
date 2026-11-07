@@ -4,7 +4,11 @@ import Link from 'next/link'
 import { useRef, useState } from 'react'
 
 import type { Trip } from '@/domain'
-import { initializeAnonymousSession, startNewAnonymousSession, getAuthHeaders } from '@/lib/auth/client'
+import {
+  getAuthHeaders,
+  initializeAnonymousSession,
+  startNewAnonymousSession,
+} from '@/lib/auth/client'
 import { CreateTripBodySchema, TripResponseSchema } from '@/server/persistence/contracts'
 
 type SaveState =
@@ -44,7 +48,8 @@ export function TripSavePanel({ trip }: { trip: Trip }) {
     if (!checked.success) {
       setState({
         phase: 'error',
-        message: trip.learningApplications.length > 0
+        message:
+          trip.learningApplications.length > 0
           ? '学びの適用履歴がある旅程の保存は、サーバーの適用確認に未接続です。'
           : 'この旅程は保存用の条件を満たしていません。',
       })
@@ -86,7 +91,8 @@ export function TripSavePanel({ trip }: { trip: Trip }) {
     } catch (error) {
       setState({
         phase: 'error',
-        message: error instanceof Error
+        message:
+          error instanceof Error
           ? error.message
           : '保存結果を確認できませんでした。保存済み一覧で確認してください。',
       })
@@ -96,7 +102,10 @@ export function TripSavePanel({ trip }: { trip: Trip }) {
   }
 
   return (
-    <section aria-label="旅程を保存して振り返る" className="space-y-3 rounded-xl border border-gt-rule p-4">
+    <section
+      aria-label="旅程を保存して振り返る"
+      className="space-y-3 rounded-xl border border-gt-rule p-4"
+    >
       <h2 className="text-lg font-semibold">この旅程を保存する</h2>
       <p className="text-sm">
         AIの提案を確認したうえで、本人が選ぶ操作です。
@@ -116,7 +125,12 @@ export function TripSavePanel({ trip }: { trip: Trip }) {
         <>
           <button
             type="button"
-            disabled={busy.current || state.phase === 'checking' || state.phase === 'saving' || state.phase === 'starting'}
+            disabled={
+              busy.current ||
+              state.phase === 'checking' ||
+              state.phase === 'saving' ||
+              state.phase === 'starting'
+            }
             onClick={() => void save()}
             className="min-h-11 rounded-lg border-2 border-gt-ink px-4 py-2 font-semibold disabled:opacity-50"
           >
@@ -126,7 +140,9 @@ export function TripSavePanel({ trip }: { trip: Trip }) {
           </button>
           {state.phase === 'needs_session' && (
             <div role="alert" className="space-y-2 text-sm">
-              <p>保存するにはFirebaseの利用者識別が必要です。新しい匿名利用を始めると、以前のUIDのデータにアクセスできなくなる場合があります。</p>
+              <p>
+                保存するにはFirebaseの利用者識別が必要です。新しい匿名利用を始めると、以前のUIDのデータにアクセスできなくなる場合があります。
+              </p>
               <button
                 type="button"
                 onClick={() => void startSession()}

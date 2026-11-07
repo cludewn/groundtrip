@@ -64,7 +64,13 @@ const EXPECTED_HTTP_STATUS = {
 
 export async function requestTripGeneration(
   request: GenerateTripRequest,
-  { fetchFn = fetch, signal, endpoint = GENERATE_TRIP_ENDPOINT, payload, headers }: GenerationOptions = {},
+  {
+    fetchFn = fetch,
+    signal,
+    endpoint = GENERATE_TRIP_ENDPOINT,
+    payload,
+    headers,
+  }: GenerationOptions = {},
 ): Promise<GenerationResult> {
   let response: Response
   let text: string

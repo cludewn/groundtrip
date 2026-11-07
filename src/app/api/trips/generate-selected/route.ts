@@ -2,7 +2,7 @@ import { z } from 'zod'
 
 import { GenerateTripRequestSchema } from '@/domain'
 import { IdSchema } from '@/domain/primitives'
-import { authErrorResponse, requireActor } from '@/lib/auth/server'
+import { requireActor } from '@/lib/auth/server'
 import { FirestoreLearningStore } from '@/server/persistence/learnings'
 import { createLazyVertexGeminiClient } from '@/server/gemini/client'
 import { LearningSelectionError, resolveSelectedLearnings } from '@/server/learning-reuse/selection'
@@ -20,7 +20,11 @@ export const runtime = 'nodejs'
 // 本人の保存済みLearningのIDだけ受け取り、サーバーで承認と地域を再確認する。
 const InputSchema = z.strictObject({
   request: GenerateTripRequestSchema,
-  selectedLearningIds: z.array(IdSchema).min(1).max(40).refine((ids) => new Set(ids).size === ids.length),
+  selectedLearningIds: z
+    .array(IdSchema)
+    .min(1)
+    .max(40)
+    .refine((ids) => new Set(ids).size === ids.length),
 })
 
 const error = (status: number, code: string, message: string) =>
