@@ -59,7 +59,12 @@ const PARTIAL_LIST_MESSAGE =
 async function authorizedJson<T>(
   path: string,
   schema: z.ZodType<T>,
-  options: { method?: 'GET' | 'POST'; body?: unknown; signal?: AbortSignal; fetchFn?: typeof fetch } = {},
+  options: {
+    method?: 'GET' | 'POST'
+    body?: unknown
+    signal?: AbortSignal
+    fetchFn?: typeof fetch
+  } = {},
 ): Promise<T> {
   const { method = 'GET', body, signal, fetchFn = fetch } = options
   // 認証が失敗しても新しい匿名ユーザーを勝手に作らない。
@@ -161,7 +166,10 @@ export function createFirestoreLearningStore(
         return { ok: false, message: '承認された学びがありません。' }
       }
       const ids = new Set(approved.map((learning) => learning.id))
-      if (ids.size !== approved.length || approved.some((item) => !ApprovedLearningSchema.safeParse(item).success)) {
+      if (
+        ids.size !== approved.length ||
+        approved.some((item) => !ApprovedLearningSchema.safeParse(item).success)
+      ) {
         return { ok: false, message: '学びの形式またはIDを確認できませんでした。' }
       }
       let completed = 0
