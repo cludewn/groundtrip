@@ -150,10 +150,10 @@ export const UNCHECKED_WORDING = {
 
 export const REASON_PREFIX = '理由：'
 
-// 制約判定（営業時間と前後の移動を、決定論的に検証した結果）。
+// 制約判定（決定論的に検証した結果）。何を検証したかは契約に含まれないため、
+// 文脈（ConstraintContext）で渡された範囲だけを書き、分からない項目は断定しない。
 export const CONSTRAINT_WORDING = {
   satisfied: {
-    label: '次の固定予定に間に合う見込み',
     tone: 'ok',
     canApprove: true,
   },
@@ -164,9 +164,8 @@ export const CONSTRAINT_WORDING = {
     canApprove: false,
   },
   unknown: {
-    label: '間に合うか確認できません',
     detail:
-      '営業時間または移動時間を確認できなかったため、判断できません。承認できる案としては扱いません。',
+      '確認が必要な条件を確認できなかったため、判断できません。承認できる案としては扱いません。',
     tone: 'unknown',
     canApprove: false,
   },
@@ -178,9 +177,31 @@ export const CONSTRAINT_WORDING = {
   },
 } as const
 
-// satisfiedの補足は、何を検証した結果かを示す（手段はcontextから）。
-export const MODES_PLACEHOLDER = '{modes}'
-export const CONSTRAINT_SATISFIED_TEMPLATE = `営業時間と、前後の移動（${MODES_PLACEHOLDER}）を検証した結果です。臨時休業・渋滞・遅延は考慮していません。`
+// satisfiedの見出し。次の予定が固定で、次の移動区間も検証したときだけ「固定予定」と言う。
+export const CONSTRAINT_SATISFIED_LABELS = {
+  nextFixed: '次の固定予定に間に合う見込み',
+  nextStop: '次の予定に間に合う見込み',
+  withOpeningHours: '営業時間などの確認した条件を満たす見込み',
+  generic: '確認した条件を満たす見込み',
+} as const
+
+// unknownの見出し。次の移動区間があるときだけ「間に合うか」と言う。
+export const CONSTRAINT_UNKNOWN_LABELS = {
+  withNextSegment: '間に合うか確認できません',
+  withMovement: '移動の条件を確認できません',
+  generic: '条件を確認できません',
+} as const
+
+// satisfiedの補足は、文脈で渡された「実際に検証した項目」だけを書く。
+export const CONSTRAINT_CHECKED_ITEMS = {
+  openingHours: '営業時間',
+  previousSegment: '前の予定からの移動',
+  nextSegment: '次の予定への移動',
+} as const
+export const CONSTRAINT_CHECKED_SUFFIX = 'を検証した結果です。'
+export const CONSTRAINT_CHECKED_UNKNOWN_SCOPE = '確認した範囲での結果です。'
+export const CONSTRAINT_MODES_PREFIX = '移動の手段：'
+export const CONSTRAINT_NOT_CONSIDERED = '臨時休業・渋滞・遅延は考慮していません。'
 export const MODES_UNSPECIFIED = '手段は未指定'
 
 export const MODE_LABELS: Record<TravelMode, string> = {
