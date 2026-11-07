@@ -56,7 +56,7 @@ describe('ReflectionFlow', () => {
     const button = await screen.findByRole('button', { name: /振り返る/ })
     expect(screen.queryByTestId('learning-review')).toBeNull()
     await user.click(button)
-    expect(await screen.findByTestId('learning-review')).toHaveTextContent('実旅程：trip-demo')
+    expect((await screen.findByTestId('learning-review')).textContent).toContain('実旅程：trip-demo')
     expect(loadReflectionHistory).toHaveBeenCalledWith(sampleTrip.id, expect.any(Object))
     expect(screen.getByText(sampleApprovedLearning.content)).toBeTruthy()
     expect(createFirestoreLearningStore).toHaveBeenCalled()
@@ -77,7 +77,7 @@ describe('ReflectionFlow', () => {
     const user = userEvent.setup()
     render(<ReflectionFlow />)
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('認証を復元できません')
+    expect((await screen.findByRole('alert')).textContent).toContain('認証を復元できません')
     expect(startNewAnonymousSession).not.toHaveBeenCalled()
     await user.click(screen.getByRole('button', { name: '新しい利用を始める' }))
     await screen.findByRole('button', { name: /振り返る/ })
@@ -88,7 +88,7 @@ describe('ReflectionFlow', () => {
     vi.mocked(loadReflectionHistory).mockRejectedValue(new Error('履歴が不完全です'))
     render(<ReflectionFlow initialTripId={sampleTrip.id} />)
     await waitFor(() => {
-      expect(screen.getByRole('alert')).toHaveTextContent('履歴が不完全です')
+      expect(screen.getByRole('alert').textContent).toContain('履歴が不完全です')
     })
     expect(screen.queryByTestId('learning-review')).toBeNull()
   })
@@ -97,7 +97,7 @@ describe('ReflectionFlow', () => {
     vi.mocked(loadSavedLearnings).mockRejectedValue(new Error('保存先の応答がありません'))
     render(<ReflectionFlow initialTripId={sampleTrip.id} />)
     await waitFor(() => {
-      expect(screen.getByRole('alert')).toHaveTextContent('保存先の応答がありません')
+      expect(screen.getByRole('alert').textContent).toContain('保存先の応答がありません')
     })
     expect(screen.queryByText(sampleApprovedLearning.content)).toBeNull()
   })
