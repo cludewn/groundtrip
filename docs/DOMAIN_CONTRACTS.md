@@ -69,11 +69,15 @@ Geminiの説明自体を検証済み根拠にしない。`user_report`も客観�
 | `known`   | 手段（`walk`／`drive`）、移動時間（分）、出典（`routes`／`simulation`）、照合時刻、説明（距離は任意） |
 | `unknown` | 手段（`walk`／`drive`／`transit`）、理由、説明。照合時刻は、実際に照会を試みた場合だけ                |
 
-- `unknown`の理由：`not_queried`（未照会）、`transit_unsupported`（公共交通は未対応）、`no_route`（経路なし）、
+- `unknown`の理由：`not_queried`（未照会）、`transit_unsupported`（公共交通は照会の対象外）、`no_route`（経路なし）、
   `api_error`（API失敗）。`no_route`と`api_error`は照合時刻が必須、`not_queried`と`transit_unsupported`は持てない。
 - 取得失敗・未対応を、移動時間0や判明済みに変換しない。実測していない所要時間を、AI（Gemini）で補完しない。
-- 公共交通は、日本のRoutes APIで未対応のため、`unknown`（`transit_unsupported`）として明示する。
+- GroundTripのMVPでは、公共交通を照会の対象外とする。公共交通は、`unknown`（`transit_unsupported`）として明示する。
+  手段が`transit`であることと、理由が`transit_unsupported`であることは、必ず対応する（どちらか一方だけの指定は無効）。
 - 判明済みの値は、`checkedAt`の時点のもの。承認の根拠にするときは、適用直前に、サーバー側で再検証する。
+- `checkedAt`は、照合した時刻を示すだけで、値の真正性や、現在も有効であることを保証しない。
+  出典`simulation`は模擬情報であり、実測・検証済みを意味しない。実際の値と取り違えない。
+- 検証の入口は`TravelSegmentSchema`に統一する。判明済み・未確認の個別スキーマは公開しない（個別の型は公開する）。
 - **変更前後の比較（部分修正の応答）**：`ReviseTripResponse`の`proposed`に、任意の`comparisons`を持つ（Revisionごとに高々1件）。
   変更前後それぞれの「前の予定→対象」「対象→次の予定」を、区間が存在しない（`none`：最初・最後の予定）か、
   存在する（`segment`：`TravelSegment`の`known`／`unknown`）かで返す。詳細は`docs/PARTIAL_REVISION.md`。
