@@ -74,7 +74,13 @@ export function checkOpeningHours(
       continue
     }
     let close = weekMinute(period.close)
-    if (close <= open) close += WEEK
+    // 開店と閉店が同じ曜日・時刻の区間は、丸1週間の営業とも、営業時間0とも解釈できない（不完全なデータ）。
+    if (close === open) {
+      incomplete = true
+      continue
+    }
+    // 閉店が開店より小さいときだけ、週をまたぐ営業（日曜0:00をまたぐ）として、1週間足す。
+    if (close < open) close += WEEK
     intervals.push([open, close])
   }
   if (intervals.length === 0) {

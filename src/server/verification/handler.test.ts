@@ -65,17 +65,17 @@ describe('POST /api/trips/verify', () => {
     expect(verify).not.toHaveBeenCalled()
   })
 
-  it('移動手段の指定（travelModes）は受け付けない。照合は、徒歩だけで確認する', async () => {
+  it('移動手段の指定（travelModes）などの未知の項目は、無視せず、400で拒否する', async () => {
     const { verify, deps } = setup()
     const response = await handleVerifyTripRequest(
       post(JSON.stringify({ trip: sampleTrip, travelModes: ['drive'] })),
       deps,
     )
 
-    expect(response.status).toBe(200)
-    // 呼び出しには、旅程だけが渡される（車の指定は、照合処理に渡らない）。
-    expect(verify).toHaveBeenCalledWith(expect.objectContaining({ id: sampleTrip.id }))
-    expect(verify.mock.calls[0]).toHaveLength(1)
+    expect(response.status).toBe(400)
+    expect(await response.json()).toMatchObject({ status: 'invalid_request' })
+    // 車の指定が反映されたと誤解させない。照合も、Mapsの呼び出しもしない。
+    expect(verify).not.toHaveBeenCalled()
   })
 
   it('外部サービスの失敗は502で返し、旅程は返さない', async () => {

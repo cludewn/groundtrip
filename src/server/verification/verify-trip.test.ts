@@ -60,9 +60,9 @@ const makeMaps = ({ places = {}, routes }: Setup = {}) => {
 }
 
 const allFound: Setup['places'] = {
-  朝の庭園: found('P1', '朝の庭園'),
-  昼食店A: found('P2', '昼食店A'),
-  '14時の予約展示': found('P3', '14時の予約展示'),
+  朝の庭園: found('P1', '朝の庭園（架空）'),
+  昼食店A: found('P2', '昼食店A（架空）'),
+  '14時の予約展示': found('P3', '14時の予約展示（架空）'),
 }
 
 const walk = (minutes: number): RouteResult => ({
@@ -172,7 +172,7 @@ describe('verifyTrip: すべて照合できた場合', () => {
   it('Places・Routes由来の値（施設名・営業時間の数値・所要時間）を、説明文に載せない', async () => {
     const found2 = {
       ...allFound,
-      昼食店A: found('P2', '昼食店A 本店', [
+      昼食店A: found('P2', '昼食店A（架空）', [
         { open: { day: 0, hour: 11, minute: 30 }, close: { day: 0, hour: 21, minute: 45 } },
       ]),
     }
@@ -181,7 +181,6 @@ describe('verifyTrip: すべて照合できた場合', () => {
       .flatMap((stop) => stop.evidence.map((item) => item.explanation + item.claim))
       .join('\n')
 
-    expect(text).not.toContain('本店')
     expect(text).not.toContain('11:30')
     expect(text).not.toContain('21:45')
     expect(text).not.toContain('17分')
@@ -285,7 +284,7 @@ describe('verifyTrip: 移動の余裕', () => {
 
   it('前後どちらかの施設を特定できていなければ、Routesを呼ばず、Routes由来の根拠を付けない', async () => {
     const maps = makeMaps({
-      places: { 朝の庭園: found('P1', '朝の庭園') },
+      places: { 朝の庭園: found('P1', '朝の庭園（架空）') },
       routes: route({ WALK: walk(5) }),
     })
     const result = await verifyTrip(sampleTrip, { maps, now: () => NOW })
@@ -319,7 +318,7 @@ describe('verifyTrip: 名称の不一致・候補なし・営業時間（施設�
   })
 
   it('候補が無ければ「確認できない」', async () => {
-    const trip = await verifiedTrip({ places: { 朝の庭園: found('P1', '朝の庭園') } })
+    const trip = await verifiedTrip({ places: { 朝の庭園: found('P1', '朝の庭園（架空）') } })
 
     expect(byId(trip, 1, '-place')).toMatchObject({ status: 'unverifiable' })
     expect(byId(trip, 1, '-place').explanation).toContain('見つけられなかった')
@@ -331,13 +330,13 @@ describe('verifyTrip: 名称の不一致・候補なし・営業時間（施設�
       candidates: [
         {
           placeId: 'A',
-          name: '昼食店A',
+          name: '昼食店A（架空）',
           address: KYOTO_ADDRESS,
           openingHours: { status: 'unavailable' },
         },
         {
           placeId: 'B',
-          name: '昼食店A',
+          name: '昼食店A（架空）',
           address: KYOTO_ADDRESS,
           openingHours: { status: 'unavailable' },
         },
@@ -354,7 +353,7 @@ describe('verifyTrip: 名称の不一致・候補なし・営業時間（施設�
       { open: { day: 1, hour: 8 }, close: { day: 1, hour: 20 } } as OpeningPeriod,
     ]
     const trip = await verifiedTrip({
-      places: { ...allFound, 昼食店A: found('P2', '昼食店A', closedSunday) },
+      places: { ...allFound, 昼食店A: found('P2', '昼食店A（架空）', closedSunday) },
       routes: route({ WALK: walk(10) }),
     })
 
@@ -365,7 +364,7 @@ describe('verifyTrip: 名称の不一致・候補なし・営業時間（施設�
 
   it('営業時間のデータが無い施設は、営業時間だけ「確認できない」', async () => {
     const trip = await verifiedTrip({
-      places: { ...allFound, 昼食店A: found('P2', '昼食店A', null) },
+      places: { ...allFound, 昼食店A: found('P2', '昼食店A（架空）', null) },
       routes: route({ WALK: walk(10) }),
     })
 
@@ -379,7 +378,7 @@ describe('verifyTrip: 名称の不一致・候補なし・営業時間（施設�
       { open: { day: 0, hour: 8 }, close: { day: 0, hour: 13 } } as OpeningPeriod,
     ]
     const trip = await verifiedTrip({
-      places: { ...allFound, 昼食店A: found('P2', '昼食店A', shortDay) }, // 12:00〜13:15 が 13:00 閉店にかかる
+      places: { ...allFound, 昼食店A: found('P2', '昼食店A（架空）', shortDay) }, // 12:00〜13:15 が 13:00 閉店にかかる
       routes: route({ WALK: walk(10) }),
     })
 
@@ -468,7 +467,7 @@ describe('verifyTrip: 施設同定の誤判定を防ぐ（名称・所在地）'
       candidates: [
         {
           placeId: 'PX',
-          name: '昼食店A',
+          name: '昼食店A（架空）',
           address: '日本、〒530-0001 大阪府大阪市北区梅田',
           openingHours: { status: 'available', periods: sundayAllDay },
         },
@@ -493,7 +492,7 @@ describe('verifyTrip: 施設同定の誤判定を防ぐ（名称・所在地）'
       candidates: [
         {
           placeId: 'PX',
-          name: '昼食店A',
+          name: '昼食店A（架空）',
           openingHours: { status: 'available', periods: sundayAllDay },
         },
       ],
@@ -504,6 +503,7 @@ describe('verifyTrip: 施設同定の誤判定を防ぐ（名称・所在地）'
     })
 
     expect(trip.stops[1].placeId).toBeNull()
+    expect(byId(trip, 1, '-place').explanation).toContain('所在地')
   })
 })
 
@@ -518,14 +518,14 @@ describe('verifyTrip: 営業時間のタイムゾーン', () => {
     }
   })
 
-  it('施設の所在地が日本国内と確認できないときは、営業時間を確認できない（現地時刻がずれる可能性）', async () => {
+  it('住所を日本の行政区画として読み取れない施設は、採用せず、営業時間も確認できない（現地時刻がずれる可能性）', async () => {
     const abroad: PlaceSearchResult = {
       status: 'found',
       candidates: [
         {
           placeId: 'PX',
-          name: '昼食店A',
-          address: 'United States, Kentucky, 京都市 Street',
+          name: '昼食店A（架空）',
+          address: 'Japan Street, Kentucky, United States 京都市',
           openingHours: { status: 'available', periods: sundayAllDay },
         },
       ],
@@ -535,8 +535,69 @@ describe('verifyTrip: 営業時間のタイムゾーン', () => {
       routes: route({ WALK: walk(10) }),
     })
 
-    expect(byId(trip, 1, '-place')).toMatchObject({ status: 'consistent' })
+    // 「Japan」や地域の語が含まれていても、日本の住所と読み取れなければ採用しない。
+    expect(trip.stops[1].placeId).toBeNull()
+    expect(byId(trip, 1, '-place')).toMatchObject({ status: 'unverifiable' })
     expect(byId(trip, 1, '-hours')).toMatchObject({ status: 'unverifiable' })
-    expect(byId(trip, 1, '-hours').explanation).toContain('日本国内')
+  })
+})
+
+describe('verifyTrip: 別の都道府県の同名の地名・記号の違いによる誤採用を防ぐ', () => {
+  const candidate = (name: string, address: string): PlaceSearchResult => ({
+    status: 'found',
+    candidates: [
+      {
+        placeId: 'PX',
+        name,
+        address,
+        openingHours: { status: 'available', periods: sundayAllDay },
+      },
+    ],
+  })
+
+  it('東京都目黒区東山の同名施設は、「京都・東山」の旅程では採用しない（行政区画で照合する）', async () => {
+    const trip = renamed(1, '資料館', { region: '京都・東山' })
+    const maps = makeMaps({
+      places: {
+        ...allFound,
+        資料館: candidate('資料館', '日本、〒153-0043 東京都目黒区東山1丁目'),
+      },
+      routes: route({ WALK: walk(10) }),
+    })
+    const result = await verifyTrip(trip, { maps, now: () => NOW })
+
+    expect(result.status).toBe('verified')
+    if (result.status !== 'verified') return
+    expect(result.trip.stops[1].placeId).toBeNull()
+    expect(byId(result.trip, 1, '-place')).toMatchObject({ status: 'unverifiable' })
+    expect(byId(result.trip, 1, '-hours')).toMatchObject({ status: 'unverifiable' })
+    expect(hasEvidence(result.trip, 1, '-travel')).toBe(false)
+    expect(maps.computeRoute).not.toHaveBeenCalled()
+  })
+
+  it('「資料館（別館）」と「資料館」は、同じ施設としない', async () => {
+    const maps = makeMaps({
+      places: { ...allFound, 資料館: candidate('資料館', KYOTO_ADDRESS) },
+      routes: route({ WALK: walk(10) }),
+    })
+    const trip = renamed(1, '資料館（別館）')
+    const result = await verifyTrip(trip, { maps, now: () => NOW })
+
+    expect(result.status).toBe('verified')
+    if (result.status !== 'verified') return
+    expect(result.trip.stops[1].placeId).toBeNull()
+  })
+
+  it('「A/B」と「AB」は、同じ施設としない', async () => {
+    const maps = makeMaps({
+      places: { ...allFound, AB: candidate('AB', KYOTO_ADDRESS) },
+      routes: route({ WALK: walk(10) }),
+    })
+    const trip = renamed(1, 'A/B')
+    const result = await verifyTrip(trip, { maps, now: () => NOW })
+
+    expect(result.status).toBe('verified')
+    if (result.status !== 'verified') return
+    expect(result.trip.stops[1].placeId).toBeNull()
   })
 })

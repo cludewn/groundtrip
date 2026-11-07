@@ -10,7 +10,8 @@ import type { VerifyTripResult } from './verify-trip'
 // 課金を伴うMaps呼び出しの入口なので、認証・利用制限が入るまでは機能フラグ（既定は無効）で停止する。
 // 無効の間はMapsを呼ばず、リクエスト本文も読まない。
 //
-// 移動の確認は、徒歩だけ（車を使えるとは限らないため）。このAPIは、移動手段の指定を受け付けない。
+// 移動の確認は、徒歩だけ（車を使えるとは限らないため）。このAPIは、移動手段の指定を受け付けない
+// （`travelModes`などの未知の項目は、400で拒否する）。
 // 内部の`verifyTrip`は、`travelModes`で車を明示的に許可できるが、公開APIには出していない
 // （必要になったときに、リクエストの検証から接続する）。
 
@@ -20,7 +21,8 @@ export const MAX_VERIFY_REQUEST_BYTES = 64 * 1024
 export const isTripVerificationEnabled = (env: Record<string, string | undefined>): boolean =>
   env.TRIP_VERIFICATION_ENABLED?.trim() === 'true'
 
-export const VerifyTripRequestSchema = z.object({ trip: TripSchema })
+// 未知の項目（移動手段の指定など）は、無視せず、拒否する（指定が反映されたと誤解させない）。
+export const VerifyTripRequestSchema = z.strictObject({ trip: TripSchema })
 export type VerifyTripRequest = z.infer<typeof VerifyTripRequestSchema>
 
 export type VerifyTripResponse =
