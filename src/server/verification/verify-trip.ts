@@ -10,8 +10,10 @@ import { availableMinutes, evaluateTravel, formatMinutes } from './travel'
 // - 施設の存在（place_identity）、対象日の営業時間（opening_hours）、前の予定からの移動（travel_time）は別の根拠。
 // - 呼び出しの失敗・候補なし・名称の不一致は、いずれも「確認できない」とし、推測で埋めない。
 // - 保存してよいのはPlace IDだけ。Placesの名称・営業時間・Routesの所要時間は、ここで使うだけで保存しない。
-//   また、Places・Routes由来の事実（名称・営業時間・所要時間の値）は、根拠の説明文に載せない
+//   また、Places由来の事実（名称・営業時間の値）は、根拠の説明文に載せない
 //   （Googleマップ以外の画面に出すときの帰属表示の条件を、満たす前に値を表示しないため）。
+//   移動だけは、計画上の余裕から導いた「余裕◯分／◯分不足」を載せる。Routesの所要時間そのものではなく
+//   判断の結果で、利用者が移動の無理を判断するために必要なため。出典（Routes API）は根拠に付ける。
 
 const SOURCE_LABEL_PLACES = 'Google Maps Platform（Places API）'
 const SOURCE_LABEL_ROUTES = 'Google Maps Platform（Routes API）'

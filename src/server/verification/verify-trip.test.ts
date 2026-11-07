@@ -15,9 +15,15 @@ import { verifyTrip } from './verify-trip'
 // 使える時間：庭園→昼食=60分、昼食→展示=45分。
 const NOW = new Date('2026-11-06T03:00:00.000Z')
 
-const sundayAllDay: OpeningPeriod[] = [{ open: { day: 0, hour: 8, minute: 0 }, close: { day: 0, hour: 20, minute: 0 } }]
+const sundayAllDay: OpeningPeriod[] = [
+  { open: { day: 0, hour: 8, minute: 0 }, close: { day: 0, hour: 20, minute: 0 } },
+]
 
-const found = (placeId: string, name: string, periods: OpeningPeriod[] | null = sundayAllDay): PlaceSearchResult => ({
+const found = (
+  placeId: string,
+  name: string,
+  periods: OpeningPeriod[] | null = sundayAllDay,
+): PlaceSearchResult => ({
   status: 'found',
   candidates: [
     {
@@ -55,7 +61,11 @@ const allFound: Setup['places'] = {
   '14時の予約展示': found('P3', '14時の予約展示'),
 }
 
-const walk = (minutes: number): RouteResult => ({ status: 'found', durationSeconds: minutes * 60, minutes })
+const walk = (minutes: number): RouteResult => ({
+  status: 'found',
+  durationSeconds: minutes * 60,
+  minutes,
+})
 const route = (modes: { WALK?: RouteResult; DRIVE?: RouteResult }) => (options: RouteOptions) =>
   modes[options.mode] ?? { status: 'no_route' as const }
 
@@ -129,7 +139,9 @@ describe('verifyTrip: すべて照合できた場合', () => {
     expect(trip.stops.every((stop) => stop.placeId === null)).toBe(true)
     expect(JSON.stringify(trip)).not.toContain('FORGED-PLACE-ID')
     // 入力にあった「情報源と整合」「矛盾あり」の根拠は、残らない。
-    expect(trip.stops.flatMap((stop) => stop.evidence).some((item) => item.source.kind === 'simulation')).toBe(false)
+    expect(
+      trip.stops.flatMap((stop) => stop.evidence).some((item) => item.source.kind === 'simulation'),
+    ).toBe(false)
   })
 
   it('検索語は「予定の名称 + 地域」で、営業時間を要求し、件数は3件まで', async () => {
@@ -151,9 +163,16 @@ describe('verifyTrip: すべて照合できた場合', () => {
   })
 
   it('Places・Routes由来の値（施設名・営業時間の数値・所要時間）を、説明文に載せない', async () => {
-    const found2 = { ...allFound, 昼食店A: found('P2', '昼食店A 本店', [{ open: { day: 0, hour: 11, minute: 30 }, close: { day: 0, hour: 21, minute: 45 } }]) }
+    const found2 = {
+      ...allFound,
+      昼食店A: found('P2', '昼食店A 本店', [
+        { open: { day: 0, hour: 11, minute: 30 }, close: { day: 0, hour: 21, minute: 45 } },
+      ]),
+    }
     const trip = await verifiedTrip({ places: found2, routes: route({ WALK: walk(17) }) })
-    const text = trip.stops.flatMap((stop) => stop.evidence.map((item) => item.explanation + item.claim)).join('\n')
+    const text = trip.stops
+      .flatMap((stop) => stop.evidence.map((item) => item.explanation + item.claim))
+      .join('\n')
 
     expect(text).not.toContain('本店')
     expect(text).not.toContain('11:30')
@@ -189,7 +208,10 @@ describe('verifyTrip: 移動の余裕', () => {
       routes: route({ WALK: walk(90), DRIVE: walk(60) }),
     })
 
-    expect(byId(trip, 2, '-travel')).toMatchObject({ subject: 'travel_time', status: 'conflicting' })
+    expect(byId(trip, 2, '-travel')).toMatchObject({
+      subject: 'travel_time',
+      status: 'conflicting',
+    })
     expect(byId(trip, 2, '-travel').explanation).toContain('車でも間に合いません')
     expect(byId(trip, 2, '-travel').explanation).toContain('15分不足')
   })
@@ -222,8 +244,8 @@ describe('verifyTrip: 移動の余裕', () => {
     const overlapping = TripSchema.parse({
       ...sampleTrip,
       learningApplications: [],
-      stops: sampleTrip.stops.map((stop, index) =>
-        index === 1 ? { ...stop, durationMinutes: 150 } : stop, // 12:00〜14:30 が 14:00 の展示と重なる
+      stops: sampleTrip.stops.map(
+        (stop, index) => (index === 1 ? { ...stop, durationMinutes: 150 } : stop), // 12:00〜14:30 が 14:00 の展示と重なる
       ),
     })
     const maps = makeMaps({ places: allFound, routes: route({ WALK: walk(5) }) })
@@ -236,7 +258,10 @@ describe('verifyTrip: 移動の余裕', () => {
   })
 
   it('前後どちらかの施設を特定できていなければ、移動は「確認できない」で、Routesを呼ばない', async () => {
-    const maps = makeMaps({ places: { 朝の庭園: found('P1', '朝の庭園') }, routes: route({ WALK: walk(5) }) })
+    const maps = makeMaps({
+      places: { 朝の庭園: found('P1', '朝の庭園') },
+      routes: route({ WALK: walk(5) }),
+    })
     const result = await verifyTrip(sampleTrip, { maps, now: () => NOW })
 
     expect(result.status).toBe('verified')
@@ -283,7 +308,9 @@ describe('verifyTrip: 名称の不一致・候補なし・営業時間（施設�
   })
 
   it('施設は特定できても、対象日が定休日なら、営業時間だけが conflicting（施設の存在は consistent のまま）', async () => {
-    const closedSunday: OpeningPeriod[] = [{ open: { day: 1, hour: 8 }, close: { day: 1, hour: 20 } } as OpeningPeriod]
+    const closedSunday: OpeningPeriod[] = [
+      { open: { day: 1, hour: 8 }, close: { day: 1, hour: 20 } } as OpeningPeriod,
+    ]
     const trip = await verifiedTrip({
       places: { ...allFound, 昼食店A: found('P2', '昼食店A', closedSunday) },
       routes: route({ WALK: walk(10) }),
@@ -306,7 +333,9 @@ describe('verifyTrip: 名称の不一致・候補なし・営業時間（施設�
   })
 
   it('滞在が営業時間外にかかる場合は conflicting', async () => {
-    const shortDay: OpeningPeriod[] = [{ open: { day: 0, hour: 8 }, close: { day: 0, hour: 13 } } as OpeningPeriod]
+    const shortDay: OpeningPeriod[] = [
+      { open: { day: 0, hour: 8 }, close: { day: 0, hour: 13 } } as OpeningPeriod,
+    ]
     const trip = await verifiedTrip({
       places: { ...allFound, 昼食店A: found('P2', '昼食店A', shortDay) }, // 12:00〜13:15 が 13:00 閉店にかかる
       routes: route({ WALK: walk(10) }),
