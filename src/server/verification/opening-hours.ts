@@ -1,0 +1,103 @@
+import type { OpeningPeriod } from '../maps'
+
+// 通常営業時間（Placesの`regularOpeningHours`）と、予定の滞在時間帯を照合する。
+// 判定できるのは「通常営業時間の範囲内か」だけ。臨時休業・特別営業・混雑・予約の可否は判定できない。
+// 曜日は、Placesの定義（0=日曜）。日付は、旅程のタイムゾーンで見た暦日として扱う。
+
+const DAY = 24 * 60
+const WEEK = 7 * DAY
+const WEEKDAY_NAMES = [
+  '日曜日',
+  '月曜日',
+  '火曜日',
+  '水曜日',
+  '木曜日',
+  '金曜日',
+  '土曜日',
+] as const
+
+export function weekdayIndex(isoDate: string): number {
+  const [year, month, day] = isoDate.split('-').map(Number)
+  return new Date(Date.UTC(year, month - 1, day)).getUTCDay()
+}
+
+export const weekdayName = (isoDate: string): string => WEEKDAY_NAMES[weekdayIndex(isoDate)]
+
+const toMinutes = (time: string): number => {
+  const [hours, minutes] = time.split(':').map(Number)
+  return hours * 60 + minutes
+}
+
+const formatMinutes = (total: number): string =>
+  `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`
+
+const weekMinute = (point: { day: number; hour: number; minute: number }): number =>
+  point.day * DAY + point.hour * 60 + point.minute
+
+export type OpeningHoursCheck =
+  | { status: 'consistent'; explanation: string }
+  | { status: 'conflicting'; explanation: string }
+  | { status: 'unverifiable'; explanation: string }
+
+const CAVEAT = '臨時休業・特別営業は確認できません。'
+
+export function checkOpeningHours(
+  periods: readonly OpeningPeriod[],
+  isoDate: string,
+  startTime: string,
+  durationMinutes: number,
+): OpeningHoursCheck {
+  // 営業の区間を、週の先頭（日曜0:00）からの分で表す。日付をまたぐ営業は、閉店が開店より小さくなるため1週間足す。
+  const intervals: [number, number][] = []
+  for (const period of periods) {
+    const open = weekMinute(period.open)
+    if (!period.close) {
+      // 24時間営業は、日曜0:00開店・閉店なしの1件で表される。それ以外の「閉店なし」は解釈できない。
+      if (open === 0)
+        return { status: 'consistent', explanation: `24時間営業として登録されています。${CAVEAT}` }
+      continue
+    }
+    let close = weekMinute(period.close)
+    if (close <= open) close += WEEK
+    intervals.push([open, close])
+  }
+  if (intervals.length === 0) {
+    return {
+      status: 'unverifiable',
+      explanation: '営業時間のデータを解釈できないため、確認できません。',
+    }
+  }
+
+  const dayStart = weekdayIndex(isoDate) * DAY
+  const start = dayStart + toMinutes(startTime)
+  const end = start + durationMinutes
+  const stayLabel = `${startTime}〜${formatMinutes(toMinutes(startTime) + durationMinutes)}`
+
+  // 週をまたぐ営業（土曜深夜→日曜早朝）も拾うため、1週間ずらした位置でも照合する。
+  const covered = intervals.some(
+    ([open, close]) =>
+      (open <= start && end <= close) || (open <= start + WEEK && end + WEEK <= close),
+  )
+  if (covered) {
+    return {
+      status: 'consistent',
+      explanation: `滞在時間帯（${stayLabel}）は、${weekdayName(isoDate)}の通常営業時間の範囲内です。${CAVEAT}`,
+    }
+  }
+
+  // その曜日に営業の区間が一切ないか（定休日の可能性）、あるが滞在時間帯と合わないか。
+  const touchesDay = intervals.some(
+    ([open, close]) =>
+      (open < dayStart + DAY && close > dayStart) ||
+      (open < dayStart + WEEK + DAY && close > dayStart + WEEK),
+  )
+  return touchesDay
+    ? {
+        status: 'conflicting',
+        explanation: `滞在時間帯（${stayLabel}）は、${weekdayName(isoDate)}の通常営業時間の範囲外です。`,
+      }
+    : {
+        status: 'conflicting',
+        explanation: `${weekdayName(isoDate)}の通常営業時間の記載がありません（定休日の可能性）。`,
+      }
+}
