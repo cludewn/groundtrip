@@ -74,6 +74,6 @@ describe('学びの選択UI', () => {
       items: [{ version: 1, learning: approvedRegional }],
     })
     render(<LearningReusePicker region="奈良市" load={load} />)
-    expect((await screen.findByRole('status')).textContent).toContain('使える')
+    expect(await screen.findByText(/今回の地域に使える、承認済みの学びはありません/)).toBeTruthy()
   })
 })
