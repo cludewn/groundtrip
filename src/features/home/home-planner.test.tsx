@@ -36,7 +36,7 @@ describe('HomePlanner: 入力から路線図まで', () => {
     expect(route.textContent).not.toContain('情報源と整合')
   })
 
-  it('生成された旅程で、選択した予定の詳細から部分修正へ進める', async () => {
+  it('生成された旅程では、候補生成APIが未接続の間は部分修正の導線を出さない', async () => {
     const generate = vi.fn<GenerateTrip>().mockResolvedValue({ ok: true, trip: generatedTrip })
     const user = userEvent.setup()
     render(<HomePlanner generate={generate} />)
@@ -49,9 +49,7 @@ describe('HomePlanner: 入力から路線図まで', () => {
     const dialog = screen.getByRole('dialog')
     expect(within(dialog).getByRole('button', { name: 'この予定を固定する' })).toBeTruthy()
     expect(dialog.textContent).toContain('照合していません')
-    await user.click(within(dialog).getByRole('button', { name: 'この予定だけ変更' }))
-    expect(screen.getByRole('heading', { name: 'この予定だけ変更' })).toBeTruthy()
-    expect(screen.getByLabelText('修正理由（必須）')).toBeTruthy()
+    expect(within(dialog).queryByRole('button', { name: 'この予定だけ変更' })).toBeNull()
   })
 
   it('再生成に失敗すると、以前の旅程は表示から消える。保持されていると案内しない（保持されるのは入力内容だけ）', async () => {

@@ -13,7 +13,7 @@ import {
   type RouteMeta,
   type RouteStopMeta,
   type StopKind,
-  type TravelSegment,
+  type RouteSegmentLabel,
 } from './model'
 
 interface RouteMapProps {
@@ -85,7 +85,7 @@ function Evidence({ stop }: { stop: Stop }) {
   )
 }
 
-function SegmentLabel({ segment }: { segment?: TravelSegment }) {
+function SegmentLabel({ segment }: { segment?: RouteSegmentLabel }) {
   let text = '次の地点まで：移動時間は未確認'
   if (segment?.status === 'known') {
     text = `次の地点まで：${segment.mode === 'walk' ? '徒歩' : '車'}${segment.minutes}分`

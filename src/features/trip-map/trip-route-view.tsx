@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useState } from 'react'
 
 import type { Trip } from '@/domain'
 
@@ -39,7 +39,7 @@ export function TripRouteView({
   const [trip, setTrip] = useState(tripProp)
   const [lastProp, setLastProp] = useState(tripProp)
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [notice, setNotice] = useState('')
+  const [notice, setNotice] = useState<{ stopId: string; message: string } | null>(null)
   const [closingId, setClosingId] = useState<string | null>(null)
   // シートを閉じたあとにフォーカスを戻す予定のID。
   const [restoreFocusId, setRestoreFocusId] = useState<string | null>(null)
@@ -54,7 +54,7 @@ export function TripRouteView({
     }
     if (tripProp !== trip) {
       setTrip(tripProp)
-      setNotice('')
+      setNotice(null)
     }
     if (selectedId !== null && !tripProp.stops.some((stop) => stop.id === selectedId)) {
       setSelectedId(null)
@@ -63,7 +63,7 @@ export function TripRouteView({
   }
 
   // 閉じたあとは、直前に選択していた予定のボタンへフォーカスを戻す（キーボード・読み上げの操作を途切れさせない）。
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (restoreFocusId === null || closingId !== null) return
     const destination =
       document.getElementById(stopButtonId(restoreFocusId)) ??
@@ -74,7 +74,7 @@ export function TripRouteView({
 
   // 詳細が開いていたのに、親のTripの更新で閉じられたときは、フォーカスがbodyへ落ちる。
   // その場合だけ、路線図の一覧へフォーカスを移す。利用者が、すでに別の場所へ移していれば、奪わない。
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!rescueFocus) return
     const active = document.activeElement
     if (!active || active === document.body) {
@@ -103,9 +103,10 @@ export function TripRouteView({
     setTrip(next)
     onTripChange?.(next)
     const name = next.stops.find((stop) => stop.id === stopId)?.name ?? ''
-    setNotice(
-      `「${name}」を${fixed ? '固定しました' : '固定解除しました'}。画面上の変更で、まだ保存されていません。`,
-    )
+    setNotice({
+      stopId,
+      message: `「${name}」を${fixed ? '固定しました' : '固定解除しました'}。画面上の変更で、まだ保存されていません。`,
+    })
   }
 
   const closeSheet = () => {
@@ -138,9 +139,7 @@ export function TripRouteView({
           if (selectedId === null && closingId === null) setSelectedId(id)
         }}
       />
-      <p role="status" aria-live="polite" className="mt-3 text-sm text-gt-muted">
-        {notice}
-      </p>
+      <p className="mt-3 text-sm text-gt-muted empty:hidden">{!selected && notice?.message}</p>
       <p className="mt-2 text-sm text-gt-muted">
         路線図は旅の順番を表すもので、実際の地図ではありません。
       </p>
@@ -148,6 +147,7 @@ export function TripRouteView({
         <StopSheet
           key={selected.id}
           stop={selected}
+          notice={notice?.stopId === selected.id ? notice.message : ''}
           closing={selectedId === null}
           onExited={() => setClosingId(null)}
           index={selectedIndex}

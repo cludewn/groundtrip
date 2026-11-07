@@ -17,6 +17,7 @@ import { endTime, stopKindLabels, type RouteStopMeta, type StopKind } from './mo
 
 interface StopSheetProps {
   stop: Stop
+  notice: string
   index: number
   meta: RouteStopMeta
   closing: boolean
@@ -34,6 +35,7 @@ const DISMISS_DISTANCE = 96
 // 背景を操作不可にし、閉じるアニメーションが終わるまでモーダルを維持する。
 export function StopSheet({
   stop,
+  notice,
   index,
   meta,
   kind,
@@ -282,25 +284,30 @@ export function StopSheet({
             この表示はGroundTrip上の予定を操作するためのものです。予約の状態は反映されません。
           </p>
 
-          <div className="sticky bottom-0 mt-3 flex flex-wrap gap-2 border-t border-gt-rule bg-gt-paper py-3 pb-[max(12px,env(safe-area-inset-bottom))]">
-            <button
-              type="button"
-              aria-pressed={stop.isFixed}
-              onClick={() => onToggleFixed(stop.id, !stop.isFixed)}
-              className="min-h-12 rounded-xl border border-gt-muted px-3 text-sm font-semibold aria-pressed:bg-gt-ink aria-pressed:text-white"
-            >
-              {stop.isFixed ? '固定を解除する' : 'この予定を固定する'}
-            </button>
-            {onStartRevision && (
+          <div className="sticky bottom-0 mt-3 space-y-2 border-t border-gt-rule bg-gt-paper py-3 pb-[max(12px,env(safe-area-inset-bottom))]">
+            <p role="status" aria-atomic="true" className="text-sm text-gt-muted empty:sr-only">
+              {notice}
+            </p>
+            <div className="flex flex-wrap gap-2">
               <button
                 type="button"
-                disabled={stop.isFixed}
-                onClick={() => onStartRevision(stop.id)}
-                className="min-h-12 flex-1 rounded-xl bg-gt-ink px-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-45"
+                aria-pressed={stop.isFixed}
+                onClick={() => onToggleFixed(stop.id, !stop.isFixed)}
+                className="min-h-12 rounded-xl border border-gt-muted px-3 text-sm font-semibold aria-pressed:bg-gt-ink aria-pressed:text-white"
               >
-                {stop.isFixed ? '固定中は変更できません' : 'この予定だけ変更'}
+                {stop.isFixed ? '固定を解除する' : 'この予定を固定する'}
               </button>
-            )}
+              {onStartRevision && (
+                <button
+                  type="button"
+                  disabled={stop.isFixed}
+                  onClick={() => onStartRevision(stop.id)}
+                  className="min-h-12 flex-1 rounded-xl bg-gt-ink px-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-45"
+                >
+                  {stop.isFixed ? '固定中は変更できません' : 'この予定だけ変更'}
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </section>

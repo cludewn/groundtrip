@@ -7,9 +7,10 @@ import {
   checkedAtFormat,
 } from '@/features/trip-map/evidence-badge'
 import { LockIcon } from '@/features/trip-map/icons'
-import { endTime, toMinutes } from '@/features/trip-map/model'
+import { endTime } from '@/features/trip-map/model'
 
 import type { TravelComparison, TravelSlot } from './api-client'
+import { checkStopEvidence, routesSegment } from './proposal-checks'
 
 const constraints = {
   satisfied: { tone: 'consistent', label: '予定に収まる' },
@@ -30,6 +31,8 @@ const travelUnknown = {
   transit_unsupported: '公共交通は照会対象外',
 }
 
+const travelModes = { walk: '徒歩', drive: '車', transit: '公共交通' }
+
 function knownSegment(slot?: TravelSlot) {
   return slot?.presence === 'segment' && slot.segment.status === 'known' ? slot.segment : undefined
 }
@@ -41,7 +44,9 @@ function travelDifference(before?: TravelSlot, after?: TravelSlot) {
     !original ||
     !candidate ||
     original.mode !== candidate.mode ||
-    original.source.kind !== candidate.source.kind
+    original.source.kind !== candidate.source.kind ||
+    original.source.label !== candidate.source.label ||
+    Date.parse(original.checkedAt) !== Date.parse(candidate.checkedAt)
   )
     return null
   const difference = candidate.durationMinutes - original.durationMinutes
@@ -49,28 +54,98 @@ function travelDifference(before?: TravelSlot, after?: TravelSlot) {
   return difference < 0 ? `${-difference}分短い` : `${difference}分長い`
 }
 
-function TravelValue({ slot, baseline }: { slot?: TravelSlot; baseline?: TravelSlot }) {
-  if (!slot) return <>移動時間は未取得</>
-  if (slot.presence === 'none') return <>該当区間なし</>
-  const { segment } = slot
-  const difference = baseline ? travelDifference(baseline, slot) : null
-  const checkedAt = segment.checkedAt && checkedAtFormat.format(new Date(segment.checkedAt))
+function TravelValue({
+  slot,
+  baseline,
+  compare = false,
+  inline = false,
+}: {
+  slot?: TravelSlot
+  baseline?: TravelSlot
+  compare?: boolean
+  inline?: boolean
+}) {
+  if (slot?.presence === 'none') return <>該当区間なし</>
+  const segment = slot?.segment
+  const simulated = segment?.status === 'known' && segment.source.kind === 'simulation'
+  const checkedAt = segment?.checkedAt && checkedAtFormat.format(new Date(segment.checkedAt))
   return (
     <>
-      {segment.status === 'known' ? (
+      {!segment ? (
+        '移動時間は未取得'
+      ) : segment.status === 'known' ? (
         <>
-          {segment.mode === 'walk' ? '徒歩' : '車'}
-          {segment.durationMinutes}分
-          {difference && <span className="block text-sm font-semibold">{difference}</span>}
-          <span className="block text-xs text-gt-muted">
-            {segment.source.kind === 'simulation' ? '模擬データ' : segment.source.label}
-          </span>
+          {travelModes[segment.mode]}
+          {segment.durationMinutes}分{simulated && '（模擬）'}
         </>
       ) : (
-        <>確認できない（{travelUnknown[segment.reason]}）</>
+        <>
+          {travelModes[segment.mode]}・未確認（{travelUnknown[segment.reason]}）
+        </>
       )}
-      {checkedAt && <span className="block text-xs text-gt-muted">照合 {checkedAt}</span>}
+      {compare && (
+        <span className="block text-sm font-semibold">
+          {travelDifference(baseline, slot) ?? '時間差：未確認'}
+        </span>
+      )}
+      {!inline && segment?.status === 'known' && (
+        <span className="block text-xs text-gt-muted">{segment.source.label}</span>
+      )}
+      {checkedAt && (
+        <span className={inline ? undefined : 'block text-xs text-gt-muted'}>
+          {inline && '（'}
+          {simulated ? '模擬日時' : '照合'} {checkedAt}
+          {inline && '）'}
+        </span>
+      )}
     </>
+  )
+}
+
+function VerificationScope({
+  stop,
+  previous,
+  next,
+  comparison,
+}: {
+  stop: Stop
+  previous?: Stop
+  next?: Stop
+  comparison?: TravelComparison
+}) {
+  const items = [
+    { label: '施設の特定', evidence: checkStopEvidence(stop, 'place_identity') },
+    { label: '営業時間', evidence: checkStopEvidence(stop, 'opening_hours') },
+  ]
+  return (
+    <div className="space-y-1 text-sm leading-relaxed text-gt-muted">
+      <p className="font-semibold">この候補の確認範囲</p>
+      <ul className="space-y-0.5 wrap-anywhere">
+        {items.map(({ label, evidence }) => (
+          <li key={label}>
+            {label}：
+            {evidence.status === 'consistent'
+              ? `情報源と整合（照合 ${checkedAtFormat.format(new Date(evidence.checkedAt))}）`
+              : evidence.status === 'conflicting'
+                ? '情報源と矛盾あり'
+                : '未確認'}
+          </li>
+        ))}
+        {previous && (
+          <li>
+            前の予定から：
+            <TravelValue slot={comparison?.after.fromPrevious} inline />
+          </li>
+        )}
+        {next && (
+          <li>
+            次の予定まで：
+            <TravelValue slot={comparison?.after.toNext} inline />
+          </li>
+        )}
+      </ul>
+      <p>臨時休業・渋滞・遅延は確認の対象外です。</p>
+    </div>
   )
 }
 
@@ -103,13 +178,10 @@ export function CandidateComparison({
   const previous = trip.stops[index - 1]
   const next = trip.stops[index + 1]
   const fixedStops = trip.stops.filter((stop) => stop.isFixed)
-  const onward = knownSegment(comparison?.after.toNext)
   const arrivesInTime =
     revision.constraintCheck.status === 'satisfied' &&
     next &&
-    onward &&
-    toMinutes(after.plannedStartTime) + after.durationMinutes + onward.durationMinutes <=
-      toMinutes(next.plannedStartTime)
+    routesSegment(comparison?.after.toNext)
   const rows = [
     { label: '場所', before: before.name, after: after.name },
     {
@@ -124,6 +196,7 @@ export function CandidateComparison({
         <TravelValue
           slot={comparison?.after.fromPrevious}
           baseline={comparison?.before.fromPrevious}
+          compare
         />
       ) : (
         '該当区間なし'
@@ -133,7 +206,7 @@ export function CandidateComparison({
       label: '次の予定まで',
       before: next ? <TravelValue slot={comparison?.before.toNext} /> : '該当区間なし',
       after: next ? (
-        <TravelValue slot={comparison?.after.toNext} baseline={comparison?.before.toNext} />
+        <TravelValue slot={comparison?.after.toNext} baseline={comparison?.before.toNext} compare />
       ) : (
         '該当区間なし'
       ),
@@ -146,6 +219,7 @@ export function CandidateComparison({
           <h4 className="font-bold">予定への影響</h4>
           <ConstraintBadge status={revision.constraintCheck.status} />
         </div>
+        <VerificationScope stop={after} previous={previous} next={next} comparison={comparison} />
         {arrivesInTime && (
           <p className="text-base font-semibold">
             {next.plannedStartTime}の予定に間に合う見込みです。
@@ -208,11 +282,6 @@ export function CandidateComparison({
             根拠・情報源を見る
           </summary>
           <div className="space-y-3 pb-2">
-            {revision.constraintCheck.status === 'satisfied' && (
-              <p className="text-sm leading-relaxed wrap-anywhere">
-                {revision.constraintCheck.explanation}
-              </p>
-            )}
             <StopEvidence stop={before} label="今の予定" />
             <StopEvidence stop={after} label={label} />
           </div>

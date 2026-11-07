@@ -269,14 +269,23 @@ describe('旅程の路線図: 固定の操作', () => {
     const user = userEvent.setup()
     renderView()
     await user.click(stopButton(/昼食店A/))
+    const status = within(sheet()).getByRole('status')
+    expect(status.textContent).toBe('')
     await user.click(within(sheet()).getByRole('button', { name: 'この予定を固定する' }))
 
     expect(stopButton(/昼食店A.*固定予定/)).toBeTruthy()
     expect(
       within(sheet()).getByRole('button', { name: '固定を解除する' }).getAttribute('aria-pressed'),
     ).toBe('true')
-    expect(screen.getByRole('status').textContent).toContain('固定しました')
-    expect(screen.getByRole('status').textContent).toContain('まだ保存されていません')
+    expect(within(sheet()).getByRole('status')).toBe(status)
+    expect(status.textContent).toContain('固定しました')
+    expect(status.textContent).toContain('まだ保存されていません')
+    await user.click(within(sheet()).getByRole('button', { name: '固定を解除する' }))
+    expect(within(sheet()).getByRole('status')).toBe(status)
+    expect(status.textContent).toContain('固定解除しました')
+    await user.keyboard('{Escape}')
+    await waitFor(() => expect(document.activeElement).toBe(stopButton(/昼食店A/)))
+    expect(screen.getByText(/固定解除しました/)).toBeTruthy()
   })
 
   it('固定予定を解除できる。他の予定は変わらない', async () => {

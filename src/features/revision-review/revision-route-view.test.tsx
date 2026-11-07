@@ -6,7 +6,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { sampleRevision } from '@/domain/samples'
 import { sampleRouteMeta as meta, sampleRouteTrip as trip } from '@/features/trip-map/sample'
 
-import type { ApplyRevision, GenerateRevisions, RevisionProposal } from './api-client'
+import {
+  requestRevisions,
+  type ApplyRevision,
+  type GenerateRevisions,
+  type RevisionProposal,
+} from './api-client'
 import { RevisionRouteView } from './revision-route-view'
 
 afterEach(() => {
@@ -17,8 +22,12 @@ afterEach(() => {
 const target = trip.stops[1]
 const after = {
   ...sampleRevision.diff.after,
-  evidence: sampleRevision.diff.after.evidence.map((evidence) => ({
-    ...evidence,
+  placeId: 'test-place',
+  evidence: (['place_identity', 'opening_hours'] as const).map((subject) => ({
+    ...sampleRevision.diff.after.evidence[0],
+    id: `test-${subject}`,
+    subject,
+    source: { kind: 'places' as const, label: 'Google Places' },
     status: 'consistent' as const,
     explanation: '説明文にだけ含まれる例示値：徒歩999分',
   })),
@@ -83,6 +92,7 @@ const request = async (user: ReturnType<typeof userEvent.setup>) => {
 }
 const route = () => within(screen.getByRole('list', { name: '旅程の路線図' }))
 const approve = () => screen.getByRole<HTMLButtonElement>('button', { name: '承認して適用を依頼' })
+const approvalDisabled = () => approve().getAttribute('aria-disabled') === 'true'
 
 describe('部分修正の候補比較', () => {
   it('選択したStopだけを徒歩で生成し、分岐、固定予定、構造化比較を切り替える', async () => {
@@ -109,6 +119,10 @@ describe('部分修正の候補比較', () => {
       expect.any(AbortSignal),
     )
     const table = within(await screen.findByRole('table'))
+    const scope = () => within(screen.getByRole('region', { name: '予定への影響' }))
+    expect(scope().getByText(/営業時間：情報源と整合（照合/)).toBeTruthy()
+    expect(scope().getByText(/前の予定から：徒歩8分/)).toBeTruthy()
+    expect(scope().getByText(/臨時休業・渋滞・遅延は確認の対象外/)).toBeTruthy()
     expect(table.getByText('徒歩8分')).toBeTruthy()
     expect(table.getByText('2分短い')).toBeTruthy()
     expect(table.getByText('4分短い')).toBeTruthy()
@@ -129,16 +143,21 @@ describe('部分修正の候補比較', () => {
       '情報源と整合',
     )
     expect(route().getByText('営業時間：確認できない')).toBeTruthy()
-    expect(approve().disabled).toBe(false)
+    expect(approvalDisabled()).toBe(false)
 
     await user.click(screen.getByRole('button', { name: /候補 B/ }))
     expect(route().getByText('別の食堂')).toBeTruthy()
     expect(route().queryByText(after.name)).toBeNull()
     expect(within(screen.getByRole('table')).getAllByText('移動時間は未取得')).toHaveLength(4)
+    expect(within(screen.getByRole('table')).getAllByText('時間差：未確認')).toHaveLength(2)
+    expect(scope().getByText('営業時間：未確認')).toBeTruthy()
     expect(screen.queryByText(/間に合う見込みです/)).toBeNull()
     expect(screen.getByText(/確認できていないため、この候補は選べません/)).toBeTruthy()
     expect(screen.getByRole('region', { name: '根拠と照合日時' }).textContent).toContain('未照合')
-    expect(approve().disabled).toBe(true)
+    expect(approvalDisabled()).toBe(true)
+    approve().focus()
+    expect(approve().getAttribute('aria-describedby')).toBe('approval-note')
+    await user.keyboard('{Enter}')
     await user.click(approve())
     expect(apply).not.toHaveBeenCalled()
     expect(trip).toEqual(original)
@@ -147,6 +166,28 @@ describe('部分修正の候補比較', () => {
     expect(route().queryByText('別の食堂')).toBeNull()
     expect(document.activeElement?.id).toBe('stop-button-stop-lunch')
     expect(trip).toEqual(original)
+  })
+
+  it('移動手段や照合時刻が異なる区間は、所要時間を表示しても時間差を算出しない', async () => {
+    const user = userEvent.setup()
+    const modified = structuredClone(proposal)
+    const comparison = modified.comparisons?.[0]
+    const inbound = comparison?.after.fromPrevious
+    const outbound = comparison?.after.toNext
+    if (inbound?.presence === 'segment' && inbound.segment.status === 'known') {
+      inbound.segment.mode = 'drive'
+    }
+    if (outbound?.presence === 'segment' && outbound.segment.status === 'known') {
+      outbound.segment.checkedAt = '2026-11-08T11:47:00+09:00'
+    }
+    render(<RevisionRouteView trip={trip} generate={async () => modified} />)
+    await open(user)
+    await user.click(screen.getByRole('checkbox', { name: /車を利用できる/ }))
+    await request(user)
+    const table = within(await screen.findByRole('table'))
+    expect(table.getByText('車8分')).toBeTruthy()
+    expect(table.getByText('徒歩6分')).toBeTruthy()
+    expect(table.getAllByText('時間差：未確認')).toHaveLength(2)
   })
 
   it('固定予定の修正を防ぎ、明示したときだけ車を送信する', async () => {
@@ -167,7 +208,7 @@ describe('部分修正の候補比較', () => {
     await request(user)
     expect(generate.mock.calls[0][0].travelModes).toEqual(['walk', 'drive'])
     expect(await screen.findByText('承認・適用サービスは未接続です。')).toBeTruthy()
-    expect(approve().disabled).toBe(true)
+    expect(approvalDisabled()).toBe(true)
   })
 
   it.each([
@@ -196,7 +237,7 @@ describe('部分修正の候補比較', () => {
     const pending = Promise.withResolvers<Response>()
     const fetchFn = vi.fn<typeof fetch>().mockReturnValue(pending.promise)
     vi.stubGlobal('fetch', fetchFn)
-    const { container } = render(<RevisionRouteView trip={trip} />)
+    const { container } = render(<RevisionRouteView trip={trip} generate={requestRevisions} />)
     const liveRegion = container.querySelector('[role="status"][aria-atomic="true"]')
     expect(liveRegion?.textContent).toBe('')
     await open(user)
@@ -229,7 +270,7 @@ describe('部分修正の候補比較', () => {
     const user = userEvent.setup()
     const pending = Promise.withResolvers<Response>()
     vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockReturnValue(pending.promise))
-    render(<RevisionRouteView trip={trip} />)
+    render(<RevisionRouteView trip={trip} generate={requestRevisions} />)
     await open(user)
     await user.type(screen.getByLabelText('修正理由（必須）'), '店が休み')
     const submit = screen.getByRole<HTMLButtonElement>('button', { name: '変更候補を探す' })
@@ -252,7 +293,7 @@ describe('部分修正の候補比較', () => {
       .mockReturnValueOnce(pending.promise)
       .mockResolvedValueOnce(Response.json(proposal))
     vi.stubGlobal('fetch', fetchFn)
-    render(<RevisionRouteView trip={trip} />)
+    render(<RevisionRouteView trip={trip} generate={requestRevisions} />)
     await open(user)
     await user.type(screen.getByLabelText('修正理由（必須）'), '店が休み')
     const submit = screen.getByRole<HTMLButtonElement>('button', { name: '変更候補を探す' })
@@ -320,6 +361,53 @@ describe('部分修正の候補比較', () => {
     expect(route().getByText(target.name)).toBeTruthy()
   })
 
+  it('候補生成中の親Trip差し替えで中断し、古い候補が届いても最新の旅程を保つ', async () => {
+    const user = userEvent.setup()
+    const pending = Promise.withResolvers<RevisionProposal>()
+    const generate = vi.fn<GenerateRevisions>().mockReturnValue(pending.promise)
+    const view = render(<RevisionRouteView trip={trip} generate={generate} />)
+    await open(user)
+    const status = within(screen.getByRole('region', { name: 'この予定だけ変更' })).getByRole(
+      'status',
+    )
+    expect(status.textContent).toBe('')
+    await request(user)
+    expect(status.textContent).toContain('候補を探し')
+    const latest = {
+      ...trip,
+      version: 1,
+      stops: trip.stops.with(1, { ...target, name: '新しい予定' }),
+    }
+    view.rerender(<RevisionRouteView trip={latest} generate={generate} />)
+    expect(generate.mock.calls[0][1].aborted).toBe(true)
+    expect(screen.getByRole('alert').textContent).toContain('旅程が更新された')
+    await act(async () => pending.resolve(proposal))
+    expect(screen.queryByRole('table')).toBeNull()
+    expect(route().getByText('新しい予定')).toBeTruthy()
+  })
+
+  it('成立を申告した模擬候補は到着見込みを出さず、承認を送信できない', async () => {
+    const user = userEvent.setup()
+    const apply = vi.fn<ApplyRevision>()
+    const simulated = structuredClone(proposal)
+    const slot = simulated.comparisons?.[0].after.toNext
+    if (slot?.presence === 'segment' && slot.segment.status === 'known') {
+      slot.segment.source = { kind: 'simulation', label: '試験用の架空データ' }
+    }
+    render(<RevisionRouteView trip={trip} generate={async () => simulated} apply={apply} />)
+    await open(user)
+    await request(user)
+    await screen.findByRole('table')
+    expect(
+      within(screen.getByRole('region', { name: '予定への影響' })).getByText(/徒歩6分（模擬）/),
+    ).toBeTruthy()
+    expect(screen.queryByText(/間に合う見込みです/)).toBeNull()
+    approve().focus()
+    await user.keyboard('{Enter}')
+    expect(approvalDisabled()).toBe(true)
+    expect(apply).not.toHaveBeenCalled()
+  })
+
   it('比較中に旅程の版や固定状態が変われば候補を破棄する', async () => {
     const user = userEvent.setup()
     const generate = vi.fn<GenerateRevisions>().mockResolvedValue(proposal)
@@ -368,6 +456,7 @@ describe('本人承認とサーバー適用', () => {
     expect(trip).toEqual(original)
 
     const saved = structuredClone({ ...trip, version: 1, stops: trip.stops.with(1, after) })
+    saved.stops[1].evidence[0].checkedAt = '2026-11-08T11:47:00+09:00'
     await act(async () => pending.resolve({ status: 'applied', trip: saved }))
     expect(route().getByRole('button', { name: /昼食店B/ })).toBeTruthy()
     expect(route().queryByText(target.name)).toBeNull()
@@ -439,7 +528,7 @@ describe('本人承認とサーバー適用', () => {
     expect(route().getByRole('button', { name: /14時の予約展示.*固定予定/ })).toBeTruthy()
   })
 
-  it.each(['fixed', 'outside', 'revision', 'version'] as const)(
+  it.each(['fixed', 'outside', 'revision', 'version', 'evidence'] as const)(
     '適用コールバックが %s を書き換えたTripを成功応答に使っても拒否する',
     async (change) => {
       const user = userEvent.setup()
@@ -452,6 +541,7 @@ describe('本人承認とサーバー適用', () => {
         if (change === 'outside') input.stops[0].name = '対象外の予定の改変'
         if (change === 'revision') revision.diff.after.name = '承認していない候補'
         if (change === 'version') input.version = 0
+        if (change === 'evidence') revision.diff.after.evidence[0].status = 'conflicting'
         input.stops[1] = revision.diff.after
         return { status: 'applied', trip: { ...input, version: input.version + 1 } }
       }
@@ -461,6 +551,7 @@ describe('本人承認とサーバー適用', () => {
           generate={async () => ({
             status: 'proposed',
             revisions: [{ ...first, baseTripVersion: source.version }],
+            comparisons: routes(8),
           })}
           apply={apply}
         />,
@@ -475,7 +566,7 @@ describe('本人承認とサーバー適用', () => {
       expect(source).toEqual(original)
       expect(route().getByText(target.name)).toBeTruthy()
       expect(screen.queryByText(/旅程に反映されました/)).toBeNull()
-      expect(approve().disabled).toBe(true)
+      expect(approvalDisabled()).toBe(true)
     },
   )
 
@@ -501,6 +592,8 @@ describe('本人承認とサーバー適用', () => {
     const update = screen.getByRole('alert')
     expect(document.activeElement).toBe(update)
     expect(update.textContent).toContain('最新の旅程')
+    expect(update.textContent).toContain('適用結果を確認できませんでした')
+    expect(update.textContent).not.toContain('取り消しました')
     expect(route().getByRole('button', { name: /親が更新した昼食.*固定予定/ })).toBeTruthy()
     expect(screen.queryByRole('table')).toBeNull()
     await user.tab()
@@ -524,6 +617,7 @@ describe('本人承認とサーバー適用', () => {
     ['unavailable', '適用するサービスは現在利用できません'],
     ['network', '適用結果を確認できませんでした'],
     ['invalid-success', '適用結果を確認できませんでした'],
+    ['uncertain', '適用結果を確認できませんでした'],
   ] as const)('適用時の %s では変更も成功表示もしない', async (status, message) => {
     const user = userEvent.setup()
     const apply = vi.fn<ApplyRevision>()
@@ -550,7 +644,23 @@ describe('本人承認とサーバー適用', () => {
     expect((await screen.findByRole('alert')).textContent).toContain(message)
     expect(route().getByText(target.name)).toBeTruthy()
     expect(screen.queryByText(/旅程に反映されました/)).toBeNull()
-    expect(approve().disabled).toBe(['conflict', 'network', 'invalid-success'].includes(status))
+    expect(approvalDisabled()).toBe(
+      ['conflict', 'network', 'invalid-success', 'uncertain'].includes(status),
+    )
+  })
+
+  it('適用の結果が不明なときは旅程へ戻ってもキャンセル完了と案内しない', async () => {
+    const user = userEvent.setup()
+    const apply = vi.fn<ApplyRevision>().mockResolvedValue({ status: 'uncertain' })
+    render(<RevisionRouteView trip={trip} generate={async () => proposal} apply={apply} />)
+    await open(user)
+    await request(user)
+    await screen.findByRole('table')
+    await user.click(approve())
+    await user.click(await screen.findByRole('button', { name: '旅程を確認' }))
+    expect(screen.getByRole('alert').textContent).toContain('適用結果を確認できませんでした')
+    expect(screen.queryByText('部分修正をキャンセルしました。')).toBeNull()
+    expect(route().getByText(target.name)).toBeTruthy()
   })
 
   it.each(['not_checked', 'violated'] as const)('%s の候補は承認できない', async (status) => {
@@ -568,6 +678,6 @@ describe('本人承認とサーバー適用', () => {
     await open(user)
     await request(user)
     await screen.findByRole('table')
-    expect(approve().disabled).toBe(true)
+    expect(approvalDisabled()).toBe(true)
   })
 })

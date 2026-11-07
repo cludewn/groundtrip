@@ -1,51 +1,31 @@
 import { z } from 'zod'
 
 import {
+  KnownTravelModeSchema,
   ProposalFailureSchema,
   ReviseTripRequestSchema,
   ReviseTripResponseSchema,
   StopSchema,
+  TravelSegmentSchema,
   TripSchema,
+  type KnownTravelSegment,
   type ReviseTripRequest,
   type ReviseTripResponse,
   type Revision,
   type Stop,
   type Trip,
 } from '@/domain'
-import { IdSchema, TextSchema, TimestampSchema } from '@/domain/primitives'
+import { IdSchema } from '@/domain/primitives'
 
-export type RevisionRequest = ReviseTripRequest & { travelModes?: ('walk' | 'drive')[] }
+import { checkCandidate, retainsApprovedEvidence } from './proposal-checks'
 
-// PR #28の比較データを、この画面の境界で受け取る。共通契約の統合後はそちらを使用する。
-const segmentEnds = { fromStopId: IdSchema, toStopId: IdSchema, explanation: TextSchema }
-const segmentSchema = z.discriminatedUnion('status', [
-  z.strictObject({
-    ...segmentEnds,
-    status: z.literal('known'),
-    mode: z.enum(['walk', 'drive']),
-    durationMinutes: z.int().nonnegative(),
-    distanceMeters: z.int().nonnegative().optional(),
-    source: z.strictObject({ kind: z.enum(['routes', 'simulation']), label: TextSchema }),
-    checkedAt: TimestampSchema,
-  }),
-  z
-    .strictObject({
-      ...segmentEnds,
-      status: z.literal('unknown'),
-      mode: z.enum(['walk', 'drive', 'transit']),
-      reason: z.enum(['not_queried', 'transit_unsupported', 'no_route', 'api_error']),
-      checkedAt: TimestampSchema.optional(),
-    })
-    .refine(
-      ({ reason, checkedAt }) =>
-        (reason === 'no_route' || reason === 'api_error') === (checkedAt !== undefined),
-      { path: ['checkedAt'], message: '照会を試みた区間にだけ照合時刻が必要です' },
-    ),
-])
+export type RevisionRequest = ReviseTripRequest & { travelModes?: KnownTravelSegment['mode'][] }
 
+const travelModesSchema = z.array(KnownTravelModeSchema).min(1).max(2).optional()
+// 比較の外枠のみ。区間の検証は共通契約を使う。
 const slotSchema = z.discriminatedUnion('presence', [
   z.strictObject({ presence: z.literal('none'), reason: z.enum(['first_stop', 'last_stop']) }),
-  z.strictObject({ presence: z.literal('segment'), segment: segmentSchema }),
+  z.strictObject({ presence: z.literal('segment'), segment: TravelSegmentSchema }),
 ])
 const comparisonSideSchema = z.strictObject({ fromPrevious: slotSchema, toNext: slotSchema })
 const comparisonSchema = z.strictObject({
@@ -55,8 +35,8 @@ const comparisonSchema = z.strictObject({
 })
 const proposalEnvelopeSchema = z.strictObject({
   status: z.literal('proposed'),
-  revisions: z.unknown(),
-  comparisons: z.array(comparisonSchema).optional(),
+  revisions: z.array(z.unknown()).max(3),
+  comparisons: z.array(comparisonSchema).max(3).optional(),
 })
 
 export type TravelComparison = z.infer<typeof comparisonSchema>
@@ -78,19 +58,21 @@ export type GenerateRevisions = (
   signal: AbortSignal,
 ) => Promise<RevisionResult>
 
-// 本人の承認操作を受け取る。サーバーで適用を確認した場合にだけ applied を返す。
+// 本人の承認操作を受け取る。applied と失敗はサーバーで結果が確定した場合にだけ返す。
 export type ApplyRevision = (decision: {
   request: RevisionRequest
   revision: Revision
 }) => Promise<
   | { status: 'applied'; trip: Trip }
-  | { status: 'conflict' | 'unavailable' | 'failed'; message?: string }
+  | { status: 'conflict' | 'unavailable' | 'failed' | 'uncertain'; message?: string }
 >
 
 export const requestRevisions: GenerateRevisions = async (request, signal) => {
   const { travelModes, ...base } = request
   const input = ReviseTripRequestSchema.safeParse(base)
-  if (!input.success) return { status: 'invalid_request' }
+  const modes = travelModesSchema.safeParse(travelModes)
+  if (!input.success || !modes.success) return { status: 'invalid_request' }
+  const checkedRequest = { ...input.data, travelModes: modes.data }
 
   let response: Response
   let bodyText: string
@@ -98,7 +80,7 @@ export const requestRevisions: GenerateRevisions = async (request, signal) => {
     response = await fetch('/api/trips/revise', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...input.data, travelModes }),
+      body: JSON.stringify(checkedRequest),
       signal,
     })
     if ([404, 405, 503].includes(response.status)) return { status: 'unavailable' }
@@ -116,7 +98,7 @@ export const requestRevisions: GenerateRevisions = async (request, signal) => {
     return { status: 'unexpected' }
   }
   if (response.status === 200) {
-    return readRevisionProposal(body, request) ?? { status: 'unexpected' }
+    return readRevisionProposal(body, checkedRequest) ?? { status: 'unexpected' }
   }
 
   const failure = ProposalFailureSchema.safeParse(body)
@@ -167,33 +149,60 @@ export function readRevisionProposal(
   const { trip, targetStopId } = request
   const index = trip.stops.findIndex((stop) => stop.id === targetStopId)
   const target = trip.stops[index]
-  if (!target || !revisions.every((revision) => matchesRevisionTarget(revision, trip, target)))
+  const modes = travelModesSchema.safeParse(request.travelModes)
+  if (
+    !target ||
+    !modes.success ||
+    !revisions.every((revision) => matchesRevisionTarget(revision, trip, target))
+  )
     return null
-  if (!comparisons) return checked.data
+
+  const requestedModes = modes.data ?? ['walk']
+  const matchesMode = (slot: TravelSlot) => {
+    if (slot.presence === 'none') return true
+    const { mode } = slot.segment
+    // 未対応の公共交通は、区間に数値を持たない旨の表示にだけ使える。
+    return mode === 'transit' || requestedModes.includes(mode)
+  }
 
   const previous = trip.stops[index - 1]
   const next = trip.stops[index + 1]
   const ids = new Set(revisions.map((revision) => revision.id))
   const comparisonsMatch =
-    new Set(comparisons.map((comparison) => comparison.revisionId)).size === comparisons.length &&
-    comparisons.every(
-      ({ revisionId, before, after }) =>
-        ids.has(revisionId) &&
-        [before, after].every(({ fromPrevious, toNext }) => {
-          const fromMatches = previous
-            ? fromPrevious.presence === 'segment' &&
-              fromPrevious.segment.fromStopId === previous.id &&
-              fromPrevious.segment.toStopId === targetStopId
-            : fromPrevious.presence === 'none' && fromPrevious.reason === 'first_stop'
-          const toMatches = next
-            ? toNext.presence === 'segment' &&
-              toNext.segment.fromStopId === targetStopId &&
-              toNext.segment.toStopId === next.id
-            : toNext.presence === 'none' && toNext.reason === 'last_stop'
-          return fromMatches && toMatches
-        }),
-    )
-  return comparisonsMatch ? { ...checked.data, comparisons } : null
+    !comparisons ||
+    (new Set(comparisons.map((comparison) => comparison.revisionId)).size === comparisons.length &&
+      comparisons.every(
+        ({ revisionId, before, after }) =>
+          ids.has(revisionId) &&
+          [before, after].every(({ fromPrevious, toNext }) => {
+            const fromMatches = previous
+              ? fromPrevious.presence === 'segment' &&
+                fromPrevious.segment.fromStopId === previous.id &&
+                fromPrevious.segment.toStopId === targetStopId
+              : fromPrevious.presence === 'none' && fromPrevious.reason === 'first_stop'
+            const toMatches = next
+              ? toNext.presence === 'segment' &&
+                toNext.segment.fromStopId === targetStopId &&
+                toNext.segment.toStopId === next.id
+              : toNext.presence === 'none' && toNext.reason === 'last_stop'
+            return fromMatches && toMatches && matchesMode(fromPrevious) && matchesMode(toNext)
+          }),
+      ))
+  if (!comparisonsMatch) return null
+
+  // 応答の申告を引き上げず、裏付けのない satisfied だけを承認不可にする。
+  return {
+    ...checked.data,
+    ...(comparisons && { comparisons }),
+    revisions: revisions.map((revision) => {
+      if (revision.constraintCheck.status !== 'satisfied') return revision
+      const comparison = comparisons?.find(({ revisionId }) => revisionId === revision.id)
+      const check = checkCandidate(revision.diff.after, previous, next, comparison)
+      return check.status === 'satisfied'
+        ? revision
+        : { ...revision, constraintCheck: check, impactSummary: 'この予定だけが変更対象です。' }
+    }),
+  }
 }
 
 export function confirmedTrip(base: Trip, revision: Revision, result: Trip): Trip | null {
@@ -214,7 +223,8 @@ export function confirmedTrip(base: Trip, revision: Revision, result: Trip): Tri
 
   // 再照合で根拠は更新され得る。承認した予定の内容と、対象外の旅程は一致する必要がある。
   const expected = { ...revision.diff.after, evidence: applied.evidence }
-  if (!sameStop(applied, expected)) return null
+  if (!sameStop(applied, expected) || !retainsApprovedEvidence(revision.diff.after, applied))
+    return null
   const withoutChange = {
     ...trip,
     version: base.version,

@@ -15,10 +15,8 @@ export const stopKindLabels: Record<StopKind, string> = {
   other: '予定',
 }
 
-// 前の地点からの移動区間。契約にはまだ移動区間のモデルが無い。
-// Routes連携（#7）で取得できるまで、または取得できないとき（公共交通など）は「未確認」にする。
-// 存在しない移動時間をAIに補完させない。
-export type TravelSegment =
+// 路線図の表示メタデータ。API応答の区間は共通のTravelSegmentSchemaで検証する。
+export type RouteSegmentLabel =
   | { status: 'known'; minutes: number; mode: 'walk' | 'drive' }
   | { status: 'unknown'; reason?: string }
 
@@ -26,7 +24,7 @@ export interface RouteStopMeta {
   kind?: StopKind
   // 価格の目安（表示用）。取得できていなければ指定しない。
   price?: string
-  segmentFromPrevious?: TravelSegment
+  segmentFromPrevious?: RouteSegmentLabel
 }
 
 // Stop IDごとの付加情報。
@@ -34,8 +32,6 @@ export type RouteMeta = Record<string, RouteStopMeta>
 
 export function routeStopKind(stop: Stop, meta?: RouteStopMeta): StopKind | undefined {
   if (meta?.kind) return meta.kind
-  // PR #25の任意フィールド。種別が無い既存のStopも表示できるようにする。
-  if (!('kind' in stop)) return undefined
   switch (stop.kind) {
     case 'sight':
     case 'meal':

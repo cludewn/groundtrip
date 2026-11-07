@@ -40,7 +40,7 @@ const applyMessages = {
 
 const inputClass = 'gt-field px-3 py-2'
 const primaryClass =
-  'min-h-12 rounded-xl bg-gt-ink px-3 py-2 text-sm font-semibold text-white motion-safe:transition-colors motion-safe:duration-200 hover:bg-gt-muted disabled:bg-gt-rule disabled:text-gt-muted'
+  'min-h-12 rounded-xl bg-gt-ink px-3 py-2 text-sm font-semibold text-white motion-safe:transition-colors motion-safe:duration-200 hover:bg-gt-muted disabled:bg-gt-rule disabled:text-gt-muted aria-disabled:bg-gt-rule aria-disabled:text-gt-muted aria-disabled:hover:bg-gt-rule disabled:hover:bg-gt-rule'
 const secondaryClass =
   'min-h-12 rounded-xl border border-gt-rule bg-gt-paper px-3 py-2 text-sm font-semibold motion-safe:transition-colors motion-safe:duration-200 hover:bg-gt-bg disabled:opacity-50'
 
@@ -61,6 +61,7 @@ interface RevisionReviewProps {
   apply?: ApplyRevision
   onCancel: () => void
   onApplied: (trip: Trip) => void
+  onApplyUnresolvedChange: (unresolved: boolean) => void
 }
 
 type Review = { request: RevisionRequest; proposal: RevisionProposal; selected: number }
@@ -76,6 +77,7 @@ export function RevisionReview({
   apply,
   onCancel,
   onApplied,
+  onApplyUnresolvedChange,
 }: RevisionReviewProps) {
   const [reason, setReason] = useState('')
   const [preferences, setPreferences] = useState('')
@@ -115,7 +117,7 @@ export function RevisionReview({
     destination?.focus()
   }, [generationFailure])
 
-  // 親のTrip更新で比較が閉じたコミット時点で、古い応答を無効にする。
+  // 親はTrip差し替え時にこのセッションを閉じる。コミット時点で古い応答を無効にする。
   useLayoutEffect(
     () => () => {
       activeGeneration.current?.abort()
@@ -157,9 +159,7 @@ export function RevisionReview({
     if (controller.signal.aborted || activeGeneration.current !== controller) return
     activeGeneration.current = null
     setIsGenerating(false)
-    if (!sameTrip(trip, request.trip)) {
-      setGenerationFailure({ status: 'conflict' })
-    } else if (result.status === 'proposed') {
+    if (result.status === 'proposed') {
       const proposal = readRevisionProposal(result, request)
       if (proposal) {
         setReview({ request, proposal, selected: 0 })
@@ -184,9 +184,11 @@ export function RevisionReview({
     ? candidate?.constraintCheck.status === 'violated'
       ? '旅程の条件に合わないため、この候補は選べません。'
       : '旅程に組み込めるか確認できていないため、この候補は選べません。'
-    : !apply
-      ? '承認・適用サービスは未接続です。'
-      : null
+    : requiresLatestTrip
+      ? '再操作する前に最新の旅程を確認してください。'
+      : !apply
+        ? '承認・適用サービスは未接続です。'
+        : null
   const approvalStatus = isApplying
     ? '承認操作済み・適用結果を確認中'
     : applyFailure?.status === 'uncertain'
@@ -196,7 +198,7 @@ export function RevisionReview({
         : '未承認・未適用'
 
   const approve = async () => {
-    if (!review || !candidate || !canApprove || !apply || activeApply.current) return
+    if (!review || !candidate || !canApprove || !apply || isApplying || activeApply.current) return
     // 表示時の候補と、本人が承認した時点のTripを検証用に確保する。
     // コールバックには別のコピーだけを渡し、検証用のデータを変更できないようにする。
     const decision = structuredClone({ request: { ...review.request, trip }, revision: candidate })
@@ -208,12 +210,11 @@ export function RevisionReview({
     activeApply.current = attempt
     setApplyFailure(null)
     setIsApplying(true)
+    onApplyUnresolvedChange(true)
     try {
       const result = await apply(structuredClone(decision))
       if (activeApply.current !== attempt) return
-      if (!sameTrip(trip, decision.request.trip)) {
-        setApplyFailure({ status: 'conflict' })
-      } else if (result.status === 'applied') {
+      if (result.status === 'applied') {
         const nextTrip = confirmedTrip(decision.request.trip, decision.revision, result.trip)
         if (nextTrip) {
           onApplied(nextTrip)
@@ -221,6 +222,7 @@ export function RevisionReview({
           setApplyFailure({ status: 'uncertain' })
         }
       } else {
+        if (result.status !== 'uncertain') onApplyUnresolvedChange(false)
         setApplyFailure({ ...result })
       }
     } catch {
@@ -265,6 +267,14 @@ export function RevisionReview({
           </p>
         )}
       </header>
+
+      <p role="status" aria-atomic="true" className="sr-only">
+        {review
+          ? `${label}を表示中。 ${approvalStatus}`
+          : isGenerating
+            ? '候補を探し、営業時間や移動にかかる時間を確認しています。'
+            : ''}
+      </p>
 
       {!review && (
         <form className="gt-enter space-y-4" onSubmit={generateCandidates} noValidate>
@@ -329,7 +339,7 @@ export function RevisionReview({
             </button>
           </div>
           {isGenerating && (
-            <p role="status" className="gt-enter flex items-center gap-2 text-sm">
+            <p aria-hidden="true" className="gt-enter flex items-center gap-2 text-sm">
               <ProgressMark />
               候補を探し、営業時間や移動にかかる時間を確認しています。
             </p>
@@ -371,7 +381,7 @@ export function RevisionReview({
             ))}
           </div>
           <div className="flex flex-wrap items-center justify-between gap-x-2">
-            <p role="status" className="flex flex-wrap items-center gap-1 text-sm">
+            <p aria-hidden="true" className="flex flex-wrap items-center gap-1 text-sm">
               {label}を表示中
               {isApplying && <ProgressMark />}
               <StatusBadge key={approvalStatus} tone="unverified">
@@ -419,7 +429,7 @@ export function RevisionReview({
               条件を見直す
             </button>
           </section>
-          <footer className="sticky bottom-0 z-10 space-y-2 border-t border-gt-rule bg-gt-bg py-2 pb-[max(8px,env(safe-area-inset-bottom))]">
+          <footer className="space-y-2 border-t border-gt-rule bg-gt-bg py-2 pb-[max(8px,env(safe-area-inset-bottom))]">
             {applyFailure && (
               <div role="alert" className="gt-notice gt-enter font-semibold" data-tone="error">
                 {applyMessages[applyFailure.status]} {applyFailure.message}
@@ -437,12 +447,12 @@ export function RevisionReview({
                 disabled={isApplying}
                 onClick={onCancel}
               >
-                キャンセル
+                {applyFailure?.status === 'uncertain' ? '旅程を確認' : 'キャンセル'}
               </button>
               <button
                 type="button"
                 className={`flex-1 ${primaryClass}`}
-                disabled={!canApprove || !apply || isApplying}
+                aria-disabled={!canApprove || !apply || isApplying}
                 aria-describedby={approvalNote ? 'approval-note' : undefined}
                 onClick={() => void approve()}
               >
