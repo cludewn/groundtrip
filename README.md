@@ -90,15 +90,15 @@ GroundTripは、旅程の**一部だけ**を便利に直す操作の中で、事
 
 実際に使っているものだけを挙げます。
 
-| 領域         | 使っているもの                                                                                                                         |
-| ------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
-| アプリ       | Next.js 15（App Router、Route Handlers）、React 19、TypeScript、Tailwind CSS 4                                                         |
-| 入出力の検証 | Zod（データ契約は `src/domain`）                                                                                                       |
-| AI           | Gemini（Vertex AI、`@google/genai`）。既定のモデルは `gemini-3.5-flash`。認証はADC                                                     |
-| 地図サービス | Google Maps Platform の Places API (New)（Text Search）、Routes API（徒歩・車）。認証はADC。`main` では、画面やAPIからは呼んでいません |
-| 認証・データ | Firebase Authentication（匿名認証）、Firebase Admin SDK。Firestoreは、`main` では全拒否のRulesのみで、保存の実装はPR #44（レビュー中） |
-| テスト       | Vitest、Testing Library、Firebase Emulator                                                                                             |
-| ホスティング | Firebase App Hosting を第一候補としています。デプロイの設定は、このリポジトリにまだありません                                          |
+| 領域         | 使っているもの                                                                                                                                                                                                                                |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| アプリ       | Next.js 15（App Router、Route Handlers）、React 19、TypeScript、Tailwind CSS 4                                                                                                                                                                |
+| 入出力の検証 | Zod（データ契約は `src/domain`）                                                                                                                                                                                                              |
+| AI           | Gemini（Vertex AI、`@google/genai`）。既定のモデルは `gemini-3.5-flash`。認証はADC                                                                                                                                                            |
+| 地図サービス | Google Maps Platform の Places API (New)（Text Search）、Routes API（徒歩・車）。認証はADC。`main` では、画面やAPIからは呼んでいません                                                                                                        |
+| 認証・データ | Firebase Authentication（匿名認証）、Firebase Admin SDK。Firestoreは、`main` では全拒否のRulesのみで、保存の実装はPR #44（レビュー中）                                                                                                        |
+| テスト       | Vitest、Testing Library、Firebase Emulator                                                                                                                                                                                                    |
+| ホスティング | Firebase App Hosting（Google Cloudの実行基盤）。`main` から自動でロールアウトします。公開URL：https://groundtrip--groundtrip.asia-east1.hosted.app/ （環境変数・機能フラグは、コンソールで管理。リポジトリに `apphosting.yaml` はありません） |
 
 公共交通の経路は、MVPでは照会しません（Routes APIの `TRANSIT` は、実測で空の応答でした。詳細は [`docs/API_CONNECTIVITY_FINDINGS.md`](docs/API_CONNECTIVITY_FINDINGS.md)）。
 
@@ -113,7 +113,7 @@ GroundTripは、旅程の**一部だけ**を便利に直す操作の中で、事
 | Routes API                       | 徒歩・車の移動時間（固定予定に間に合うかの根拠）     | アダプターは実装済み。呼び出すAPIは PR #27・#28（レビュー中）     |
 | Firebase Authentication          | 匿名認証による、利用者の識別とサーバー側の認可       | 基盤は実装済み。画面からは未接続                                  |
 | Firestore                        | 旅程・修正・承認済みの学びの保存（利用者ごとに分離） | PR #44（レビュー中）。`main` は全拒否のRulesのみ                  |
-| Firebase App Hosting（実行基盤） | 提出用のデプロイ                                     | このリポジトリには、デプロイ設定がまだない                        |
+| Firebase App Hosting（実行基盤） | 提出用のデプロイ。`main` から自動でロールアウト      | デプロイ済み（#5）。環境変数・機能フラグの本番設定は、Issue #29   |
 
 ### プロダクトの中のAI（Gemini）の使いどころ
 
