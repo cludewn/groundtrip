@@ -66,8 +66,8 @@ const route = (modes: { WALK?: RouteResult; DRIVE?: RouteResult }) => (options: 
   modes[options.mode] ?? { status: 'no_route' as const }
 
 const basePlaces: MapsSetup['places'] = {
-  朝の庭園: found('P1', '朝の庭園'),
-  '14時の予約展示': found('P3', '14時の予約展示'),
+  朝の庭園: found('P1', '朝の庭園（架空）'),
+  '14時の予約展示': found('P3', '14時の予約展示（架空）'),
   昼食店B: found('P4', '昼食店B'),
   昼食店C: found('P5', '昼食店C'),
 }
@@ -442,7 +442,7 @@ describe('checkRevisionConstraints（適用の直前の再検証）', () => {
 describe('変更前後の移動区間の比較（comparisons）', () => {
   const withOriginal: MapsSetup = {
     ...fitting,
-    places: { ...basePlaces, 昼食店A: found('P2', '昼食店A') },
+    places: { ...basePlaces, 昼食店A: found('P2', '昼食店A（架空）') },
   }
 
   it('各Revisionに、変更前後の「前→対象」「対象→次」を、構造化された移動区間（TravelSegment）で返す', async () => {
@@ -529,8 +529,8 @@ describe('変更前後の移動区間の比較（comparisons）', () => {
       })
     const places: MapsSetup['places'] = {
       ...basePlaces,
-      昼食店A: found('P2', '昼食店A'),
-      朝の庭園: found('P1', '朝の庭園'),
+      昼食店A: found('P2', '昼食店A（架空）'),
+      朝の庭園: found('P1', '朝の庭園（架空）'),
       朝の候補: found('P7', '朝の候補'),
       夕の候補: found('P8', '夕の候補'),
     }
@@ -574,7 +574,7 @@ describe('変更前後の移動区間の比較（comparisons）', () => {
 describe('Maps APIの呼び出し回数', () => {
   const withOriginal: MapsSetup = {
     ...fitting,
-    places: { ...basePlaces, 昼食店A: found('P2', '昼食店A') },
+    places: { ...basePlaces, 昼食店A: found('P2', '昼食店A（架空）') },
   }
 
   it('1候補：施設検索は4回（前・次・元・候補）、経路は4回（変更前2＋変更後2）', async () => {
