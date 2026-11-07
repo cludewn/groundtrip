@@ -160,6 +160,8 @@ export function createFirestoreLearningStore(
   onSaved?: () => void,
   fetchFn: typeof fetch = fetch,
 ): LearningStore {
+  // この画面で確認した版だけを更新する。別端末が更新した版へ勝手に追随しない。
+  const observed = new Map<string, VersionedLearning>()
   return {
     async save(approved, options): Promise<SaveResult> {
       if (approved.length === 0) {
@@ -190,8 +192,23 @@ export function createFirestoreLearningStore(
             throw new ReflectionApiError('別の旅程で使われている学びIDと重複しています。')
           }
           if (existing && sameLearning(existing.learning, learning)) {
+            observed.set(learning.id, existing)
             completed += 1
             continue
+          }
+          if (existing) {
+            const previous = observed.get(learning.id)
+            if (
+              !previous ||
+              previous.version !== existing.version ||
+              !sameLearning(previous.learning, existing.learning)
+            ) {
+              throw new ReflectionApiError(
+                '保存済みの学びが別の操作で変更されています。確認してから再度編集してください。',
+                409,
+                'version_conflict',
+              )
+            }
           }
           const body = ApproveLearningBodySchema.parse({
             expectedVersion: existing?.version ?? 0,
@@ -209,6 +226,7 @@ export function createFirestoreLearningStore(
             throw new ReflectionApiError(INVALID_RESPONSE_MESSAGE)
           }
           current.set(learning.id, result)
+          observed.set(learning.id, result)
           completed += 1
         }
         onSaved?.()
