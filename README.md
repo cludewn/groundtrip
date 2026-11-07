@@ -6,7 +6,6 @@ GroundTripは、観光とAIリテラシーを組み合わせた旅行アプリ�
 Geminiが旅程を**提案**し、地図サービスの情報による**照合**、時刻や固定予定の**制約チェック**を経て、最後は**本人が承認**します。
 この4つを混ぜません。
 
-
 > **実装状況の確認基準：2026-11-08 JST、main `9473297`（PR #43を含む）。**
 > 「mainにマージ済み」は「一般公開URLから操作できる」とは限りません。API・画面部品・画面導線・本番設定を分けて記載します。
 > 提出前には、最新main・CI・本番実機の確認結果に合わせて更新してください。
@@ -18,7 +17,6 @@ Geminiが旅程を**提案**し、地図サービスの情報による**照合**
 - 旅行の後に残るのは、感想だけです。次の旅行に活かす手がかりが、本人の判断を通さずにAIの中へ入ってしまうのも避けたい点です。
 
 GroundTripは、旅程の**一部だけ**を便利に直す操作の中で、事実・未確認・制約・選んだ理由を確認できるようにします。AIのミス探しを、利用者に強いません。
-
 
 ## 主な特徴と状態
 
@@ -74,18 +72,14 @@ GroundTripは、旅程の**一部だけ**を便利に直す操作の中で、事
 - **学びは本人が承認したものだけ**：編集した学びは、承認前に戻して再承認を求めます。これは、基盤モデルの再学習ではありません。
 - **模擬は模擬と示す**：デモ用の想定や架空のデータを、実測や実際の報告と混ぜません。
 
-
 ## 技術構成
-
-| 領域 | 使っているもの | 現在の実装境界 |
-| --- | --- | --- |
-| アプリ | Next.js 15 App Router・React 19・TypeScript strict・Tailwind CSS 4 | 生成画面とUI部品 |
-| 入出力検証 | Zod 4（`src/domain`） | 共有モデル・APIで検証 |
-| AI | Vertex AI Gemini（`@google/genai`、ADC） | 旅程生成／部分修正候補／学び候補API。利用フラグで既定無効 |
-| Maps | Places API (New) Text Search、Routes API（徒歩・一部車） | APIと照合ロジックはmainにあり、通常の生成画面には未接続 |
-| 認証・保存 | Firebase匿名認証・Firebase Admin SDK・Firestore | 本人別の保存APIはmainに実装済み（#44）。通常画面・本番環境とは未接続 |
-| テスト | Vitest・Testing Library・Firebase Auth/Firestore Emulator、GitHub Actions | 自動テストとCI。実Google APIを用いた全画面E2Eの代わりではない |
-| ホスティング | Firebase App Hosting | mainからロールアウト。公開URL：https://groundtrip--groundtrip.asia-east1.hosted.app/ |
+- **アプリ** — 使っているもの: Next.js 15 App Router・React 19・TypeScript strict・Tailwind CSS 4／現在の実装境界: 生成画面とUI部品
+- **入出力検証** — 使っているもの: Zod 4（`src/domain`）／現在の実装境界: 共有モデル・APIで検証
+- **AI** — 使っているもの: Vertex AI Gemini（`@google/genai`、ADC）／現在の実装境界: 旅程生成／部分修正候補／学び候補API。利用フラグで既定無効
+- **Maps** — 使っているもの: Places API (New) Text Search、Routes API（徒歩・一部車）／現在の実装境界: APIと照合ロジックはmainにあり、通常の生成画面には未接続
+- **認証・保存** — 使っているもの: Firebase匿名認証・Firebase Admin SDK・Firestore／現在の実装境界: 本人別の保存APIはmainに実装済み（#44）。通常画面・本番環境とは未接続
+- **テスト** — 使っているもの: Vitest・Testing Library・Firebase Auth/Firestore Emulator、GitHub Actions／現在の実装境界: 自動テストとCI。実Google APIを用いた全画面E2Eの代わりではない
+- **ホスティング** — 使っているもの: Firebase App Hosting／現在の実装境界: mainからロールアウト。公開URL：https://groundtrip--groundtrip.asia-east1.hosted.app/
 
 Firestore Rulesはクライアントからの直接読み書きを全拒否し、Admin SDKを利用する保存APIがサーバー側で認可します。保存APIは`PERSISTENCE_ENABLED=false`が既定です。
 
@@ -95,15 +89,12 @@ Firestore Rulesはクライアントからの直接読み書きを全拒否し�
 
 状態は上と同じ区分です（2026-11-07 時点）。
 
-
-| 技術 | 役割 | mainの実装状態と接続状況 |
-| --- | --- | --- |
-| Gemini（Vertex AI） | 旅程生成・変更候補・学び候補 | 3つともAPI実装済み。生成以外は通常画面の通し導線が未完成 |
-| Places API (New) | 施設の同定・営業時間の根拠 | 照合／部分修正APIはmainにあるが通常画面へ未接続 |
-| Routes API | 前後の徒歩移動・時間成立の根拠 | 照合／部分修正APIで利用。公共交通は対象外 |
-| Firebase Authentication | 匿名UIDとサーバー認可 | サーバーの認証処理・保存APIは実装済み。画面のBearer付与は未接続 |
-| Firestore | Trip・Revision・Learningを本人別に保存 | #44でサーバーAPI実装済み。実環境疎通と画面接続は未確認 |
-| Firebase App Hosting | Google Cloudで実行 | 初期アプリ公開済み。課金API等の安全な有効化は#29 |
+- **Gemini（Vertex AI）** — 役割: 旅程生成・変更候補・学び候補／mainの実装状態と接続状況: 3つともAPI実装済み。生成以外は通常画面の通し導線が未完成
+- **Places API (New)** — 役割: 施設の同定・営業時間の根拠／mainの実装状態と接続状況: 照合／部分修正APIはmainにあるが通常画面へ未接続
+- **Routes API** — 役割: 前後の徒歩移動・時間成立の根拠／mainの実装状態と接続状況: 照合／部分修正APIで利用。公共交通は対象外
+- **Firebase Authentication** — 役割: 匿名UIDとサーバー認可／mainの実装状態と接続状況: サーバーの認証処理・保存APIは実装済み。画面のBearer付与は未接続
+- **Firestore** — 役割: Trip・Revision・Learningを本人別に保存／mainの実装状態と接続状況: #44でサーバーAPI実装済み。実環境疎通と画面接続は未確認
+- **Firebase App Hosting** — 役割: Google Cloudで実行／mainの実装状態と接続状況: 初期アプリ公開済み。課金API等の安全な有効化は#29
 
 ### プロダクトの中のAI（Gemini）の使いどころ
 
@@ -114,27 +105,22 @@ Firestore Rulesはクライアントからの直接読み書きを全拒否し�
 
 Geminiを選んだ理由と、各APIを選んだ理由の文面は、`docs/` に記載がありません。提出文書に書く前に、チームで確認してください（`docs/API_CONNECTIVITY_FINDINGS.md` には、`responseSchema` で検証用のJSONを生成できたという実測があります）。
 
-
 ## 画面とAPI
 
 以下のルートは**mainのコードに存在**します。画面導線、本番での機能フラグ、IAMの設定は別に確認が必要です。
-
-| 種別 | パス | 現状 |
-| --- | --- | --- |
-| 画面 | `/` | 旅程の生成フォーム・路線図。部分修正の実API、照合、保存は未接続 |
-| 画面 | `/demo` | **架空の**旅程・候補・根拠による路線図と部分修正UI。実APIには接続しない |
-| 画面 | `/reflection` | **架空の**Tripによる学び候補の編集・承認・却下。Firestore保存は未接続 |
-| 画面 | `/terms` | 利用条件・プライバシーとGoogle Mapsの関連表示（#40） |
-| API | `POST /api/trips/generate` | 旅程生成（`TRIP_GENERATION_ENABLED`、既定無効） |
-| API | `POST /api/trips/verify` | Places・Routes照合（`TRIP_VERIFICATION_ENABLED`、既定無効） |
-| API | `POST /api/trips/revise` | 部分修正候補の提案のみ（`TRIP_REVISION_ENABLED`、既定無効） |
-| API | `POST /api/learnings/candidates` | 学びの候補生成（`LEARNING_CANDIDATES_ENABLED`、既定無効） |
-| API | `GET /api/auth/session` | Firebase IDトークンの確認 |
-| API | `/api/trips`・`/api/trips/[tripId]`・`/api/trips/[tripId]/revisions` | Trip・Revisionの本人別保存・取得。`PERSISTENCE_ENABLED`が必要（既定無効） |
-| API | `/api/learnings`・`/api/learnings/[learningId]/approve`・`/api/learnings/[learningId]` | Learningの取得・承認・撤回。`PERSISTENCE_ENABLED`が必要（既定無効） |
+- **画面** — パス: `/`／現状: 旅程の生成フォーム・路線図。部分修正の実API、照合、保存は未接続
+- **画面** — パス: `/demo`／現状: **架空の**旅程・候補・根拠による路線図と部分修正UI。実APIには接続しない
+- **画面** — パス: `/reflection`／現状: **架空の**Tripによる学び候補の編集・承認・却下。Firestore保存は未接続
+- **画面** — パス: `/terms`／現状: 利用条件・プライバシーとGoogle Mapsの関連表示（#40）
+- **API** — パス: `POST /api/trips/generate`／現状: 旅程生成（`TRIP_GENERATION_ENABLED`、既定無効）
+- **API** — パス: `POST /api/trips/verify`／現状: Places・Routes照合（`TRIP_VERIFICATION_ENABLED`、既定無効）
+- **API** — パス: `POST /api/trips/revise`／現状: 部分修正候補の提案のみ（`TRIP_REVISION_ENABLED`、既定無効）
+- **API** — パス: `POST /api/learnings/candidates`／現状: 学びの候補生成（`LEARNING_CANDIDATES_ENABLED`、既定無効）
+- **API** — パス: `GET /api/auth/session`／現状: Firebase IDトークンの確認
+- **API** — パス: `/api/trips`・`/api/trips/[tripId]`・`/api/trips/[tripId]/revisions`／現状: Trip・Revisionの本人別保存・取得。`PERSISTENCE_ENABLED`が必要（既定無効）
+- **API** — パス: `/api/learnings`・`/api/learnings/[learningId]/approve`・`/api/learnings/[learningId]`／現状: Learningの取得・承認・撤回。`PERSISTENCE_ENABLED`が必要（既定無効）
 
 保存APIの具体的なHTTPメソッド・権限・ステータスは[`docs/FIRESTORE_PERSISTENCE.md`](docs/FIRESTORE_PERSISTENCE.md)を参照してください。**Revisionの実適用APIはまだ存在しません。**
-
 
 ## 制限事項
 
@@ -147,7 +133,6 @@ Geminiを選んだ理由と、各APIを選んだ理由の文面は、`docs/` に
 - **Firestore保存APIも既定で停止**：`PERSISTENCE_ENABLED=false`。実FirebaseのIAM・ADC・Rulesの確認、本番疎通、画面からのBearer送信がまだ必要です。
 - **匿名認証**は身元確認ではなく、UIDを失うと保存したデータに戻れない場合があります。
 - **生成と承認は別**：生成したTrip・候補は未承認です。Geminiの回答は施設・営業・価格を保証しません。
-
 
 ## 外部サービスの扱い
 
