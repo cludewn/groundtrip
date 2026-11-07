@@ -347,7 +347,7 @@ describe('次の予定までの移動の根拠', () => {
 
   it.each([
     ['consistent', '移動時間の値は情報源と一致'],
-    ['conflicting', '間に合わない見込み（矛盾あり）'],
+    ['conflicting', '移動時間の値は情報源と食い違い'],
     ['unverifiable', '移動時間を確認できない'],
   ] as const)('実際の根拠が %s のとき「%s」。デモ用の表示は付かない', (evidenceStatus, text) => {
     render(<TripProgressView trip={tripWithLunchTravel([travelEvidence(evidenceStatus)])} />)
@@ -386,7 +386,7 @@ describe('次の予定までの移動の根拠', () => {
         ])}
       />,
     )
-    expect(within(nextCard()).getByText('間に合わない見込み（矛盾あり）')).toBeTruthy()
+    expect(within(nextCard()).getByText('移動時間の値は情報源と食い違い')).toBeTruthy()
     expect(within(nextCard()).getByText('デモ用の想定')).toBeTruthy()
     expect(within(nextCard()).queryByText('移動時間は未確認')).toBeNull()
     expect(textOfNext()).not.toContain('間に合う見込み')
