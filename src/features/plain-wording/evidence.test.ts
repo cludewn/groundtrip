@@ -26,11 +26,11 @@ const REAL_TABLE = [
   ['place_identity', 'consistent', '施設：確認できた', 'ok'],
   ['place_identity', 'conflicting', '施設：情報が食い違っています', 'conflict'],
   ['place_identity', 'unverifiable', '施設：確認できない', 'unknown'],
-  ['opening_hours', 'consistent', '営業時間：営業時間内の見込み', 'ok'],
-  ['opening_hours', 'conflicting', '営業時間：営業時間外の見込み', 'conflict'],
+  ['opening_hours', 'consistent', '営業時間：情報源と一致', 'ok'],
+  ['opening_hours', 'conflicting', '営業時間：情報源と食い違い', 'conflict'],
   ['opening_hours', 'unverifiable', '営業時間：確認できない', 'unknown'],
-  ['travel_time', 'consistent', '移動：間に合う見込み', 'ok'],
-  ['travel_time', 'conflicting', '移動：時間が合わない見込み', 'conflict'],
+  ['travel_time', 'consistent', '移動：情報源と一致', 'ok'],
+  ['travel_time', 'conflicting', '移動：情報源と食い違い', 'conflict'],
   ['travel_time', 'unverifiable', '移動：確認できない', 'unknown'],
   ['other', 'consistent', 'その他：情報源と一致', 'ok'],
   ['other', 'conflicting', 'その他：情報が食い違っています', 'conflict'],
@@ -99,18 +99,18 @@ describe('describeEvidence：実測の出典', () => {
     expect(official.detail).not.toContain('Google Maps')
   })
 
-  it('「間に合う見込み」は、移動の根拠が整合かつ模擬でないときだけ出る（全組み合わせ）', () => {
-    for (const subject of SUBJECTS) {
+  it('営業時間・移動の根拠は、見出しにも詳細にも制約の結論（間に合う・見込み・営業時間内）を書かない（全状態×全出典）', () => {
+    const forbidden = ['間に合う', '見込み', '営業時間内']
+    for (const subject of ['opening_hours', 'travel_time'] as const) {
       for (const status of STATUSES) {
         for (const kind of ['places', 'routes', 'official', 'user_report', 'simulation'] as const) {
           const result = describeEvidence(
             evidence({ subject, status, source: { kind, label: '出典' } }),
           )
-          const shouldShow =
-            subject === 'travel_time' && status === 'consistent' && kind !== 'simulation'
-          expect(result.label.includes(MATCH_PHRASE), `${subject}/${status}/${kind}`).toBe(
-            shouldShow,
-          )
+          for (const phrase of forbidden) {
+            expect(result.label, `${subject}/${status}/${kind}/label`).not.toContain(phrase)
+            expect(result.detail, `${subject}/${status}/${kind}/detail`).not.toContain(phrase)
+          }
         }
       }
     }

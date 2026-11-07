@@ -67,15 +67,17 @@ export const EVIDENCE_WORDING: Record<
       tone: 'unknown',
     },
   },
+  // 営業時間・移動時間は、値が情報源と一致したかの照合結果だけを書く。
+  // 予定に合うか（営業時間内か・間に合うか）は制約チェックの役割で、ここでは結論にしない。
   opening_hours: {
     consistent: {
-      headline: '営業時間内の見込み',
-      detail: `${SOURCE_PLACEHOLDER}の営業時間と照らすと、予定の時間帯は営業時間内です。臨時休業や混雑は考慮していません。`,
+      headline: '情報源と一致',
+      detail: `${SOURCE_PLACEHOLDER}の営業時間の情報と一致しました。予定に合うかは、ここでは判断していません。臨時休業や混雑は考慮していません。`,
       tone: 'ok',
     },
     conflicting: {
-      headline: '営業時間外の見込み',
-      detail: `${SOURCE_PLACEHOLDER}の営業時間と、予定の時間帯が合いません。時間を変えるか、公式情報で確認してください。`,
+      headline: '情報源と食い違い',
+      detail: `${SOURCE_PLACEHOLDER}の営業時間の情報と食い違っています。公式情報などで確認してから判断してください。`,
       tone: 'conflict',
     },
     unverifiable: {
@@ -86,18 +88,18 @@ export const EVIDENCE_WORDING: Record<
   },
   travel_time: {
     consistent: {
-      headline: '間に合う見込み',
-      detail: `${SOURCE_PLACEHOLDER}で確認しました。渋滞・遅延は考慮していません。`,
+      headline: '情報源と一致',
+      detail: `${SOURCE_PLACEHOLDER}で確認した移動時間と一致しました。予定に合うかは、ここでは判断していません。渋滞・遅延は考慮していません。`,
       tone: 'ok',
     },
     conflicting: {
-      headline: '時間が合わない見込み',
-      detail: `${SOURCE_PLACEHOLDER}で確認した移動時間と、予定の時間が合いません。`,
+      headline: '情報源と食い違い',
+      detail: `${SOURCE_PLACEHOLDER}で確認した移動時間と食い違っています。予定に収まるかは、ここでは判断していません。`,
       tone: 'conflict',
     },
     unverifiable: {
       headline: '確認できない',
-      detail: '移動にかかる時間を確認できませんでした。間に合うとは判断していません。',
+      detail: '移動にかかる時間を確認できませんでした。仮の値や推定値で補っていません。',
       tone: 'unknown',
     },
   },
