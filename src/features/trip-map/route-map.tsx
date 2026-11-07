@@ -25,6 +25,9 @@ interface RouteMapProps {
 // 予定のボタンのid。詳細シートを閉じたあとのフォーカスの復帰先に使う。
 export const stopButtonId = (stopId: string) => `stop-button-${stopId}`
 
+// 路線図の一覧のid。選択中の予定が（親のTripの更新で）無くなったとき、フォーカスの退避先に使う。
+export const ROUTE_LIST_ID = 'trip-route-list'
+
 const RAIL_WIDTH = 68
 const NODE_CENTER_Y = 34
 
@@ -197,7 +200,13 @@ function StopButton({
 export function RouteMap({ trip, meta = {}, selectedStopId = null, onSelectStop }: RouteMapProps) {
   const last = trip.stops.length - 1
   return (
-    <ol aria-label="旅程の路線図" className="m-0 list-none p-0">
+    // tabIndex=-1：キー操作の順序には入れず、フォーカスを退避できるようにする（outlineは出さない）。
+    <ol
+      id={ROUTE_LIST_ID}
+      tabIndex={-1}
+      aria-label="旅程の路線図"
+      className="m-0 list-none p-0 outline-none"
+    >
       {trip.stops.map((stop, index) => {
         const stopMeta = meta[stop.id] ?? {}
         const kind = stopMeta.kind ?? 'sight'

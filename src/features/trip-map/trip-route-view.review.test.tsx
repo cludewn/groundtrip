@@ -396,3 +396,90 @@ describe('固定と予定の種類の分離（#23・Cludewn案：固定は、ロ
     expect(items()[0].textContent).toContain('固定予定')
   })
 })
+
+describe('親のTripの更新で、選択中の予定が無くなったときのフォーカス（#20の再指摘）', () => {
+  const routeList = () => screen.getByRole('list', { name: '旅程の路線図' })
+
+  it('詳細を開いたまま、選択中の予定が無い新しいTripに更新されたら、フォーカスは一覧へ移る（bodyに落ちない）', async () => {
+    const user = userEvent.setup()
+    const { rerender } = render(<TripRouteView trip={sampleTrip} />)
+    await user.click(stopButton(/昼食店A/))
+    expect(document.activeElement).toBe(within(sheet()).getByRole('heading'))
+
+    rerender(<TripRouteView trip={otherTrip} />)
+
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(document.activeElement).toBe(routeList())
+    expect(document.activeElement).not.toBe(document.body)
+  })
+
+  it('詳細の中のボタン（固定の切り替え）にフォーカスがある状態で更新されても、一覧へ移る', async () => {
+    const user = userEvent.setup()
+    const { rerender } = render(<TripRouteView trip={sampleTrip} />)
+    await user.click(stopButton(/昼食店A/))
+    within(sheet()).getByRole('button', { name: 'この予定を固定する' }).focus()
+
+    rerender(<TripRouteView trip={otherTrip} />)
+
+    expect(document.activeElement).toBe(routeList())
+  })
+
+  it('一覧は、キー操作の順序（Tab）には入れず、フォーカスの退避先としてだけ使う', () => {
+    render(<TripRouteView trip={sampleTrip} />)
+
+    expect(routeList().getAttribute('tabindex')).toBe('-1')
+  })
+
+  it('利用者が、すでに別の場所（画面内の入力欄）へフォーカスを移していれば、奪わない', async () => {
+    const user = userEvent.setup()
+    function Page({ trip }: { trip: Trip }) {
+      return (
+        <>
+          <input aria-label="別の入力欄" />
+          <TripRouteView trip={trip} />
+        </>
+      )
+    }
+    const { rerender } = render(<Page trip={sampleTrip} />)
+    await user.click(stopButton(/昼食店A/))
+    const input = screen.getByLabelText('別の入力欄')
+    input.focus()
+
+    rerender(<Page trip={otherTrip} />)
+
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(document.activeElement).toBe(input)
+  })
+
+  it('選択中の予定が新しいTripにも残っていれば、詳細もフォーカスも、そのまま', async () => {
+    const user = userEvent.setup()
+    const { rerender } = render(<TripRouteView trip={sampleTrip} />)
+    await user.click(stopButton(/昼食店A/))
+    const heading = within(sheet()).getByRole('heading')
+
+    rerender(<TripRouteView trip={TripSchema.parse(structuredClone(sampleTrip))} />)
+
+    expect(sheet()).toBeTruthy()
+    expect(document.activeElement).toBe(heading)
+  })
+
+  it('詳細を開いていないときに、Tripが更新されても、フォーカスを動かさない', () => {
+    const { rerender } = render(<TripRouteView trip={sampleTrip} />)
+    expect(document.activeElement).toBe(document.body)
+
+    rerender(<TripRouteView trip={otherTrip} />)
+
+    expect(document.activeElement).toBe(document.body)
+  })
+
+  it('一覧へ退避したあとも、通常どおり、予定を選び直して詳細を開ける', async () => {
+    const user = userEvent.setup()
+    const { rerender } = render(<TripRouteView trip={sampleTrip} />)
+    await user.click(stopButton(/昼食店A/))
+    rerender(<TripRouteView trip={otherTrip} />)
+
+    await user.click(stopButton(/別の地点2/))
+
+    expect(within(sheet()).getByRole('heading').textContent).toBe('別の地点2')
+  })
+})

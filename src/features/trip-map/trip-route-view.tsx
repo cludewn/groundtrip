@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 
 import type { Trip } from '@/domain'
 
-import { RouteMap, stopButtonId } from './route-map'
+import { ROUTE_LIST_ID, RouteMap, stopButtonId } from './route-map'
 import { setStopFixed, type RouteMeta } from './model'
 import { StopSheet } from './stop-sheet'
 
@@ -40,6 +40,8 @@ export function TripRouteView({
   const [notice, setNotice] = useState('')
   // シートを閉じたあとにフォーカスを戻す予定のID。
   const [restoreFocusId, setRestoreFocusId] = useState<string | null>(null)
+  // 親のTripの更新で、選択中の予定が無くなり、詳細が閉じた。フォーカスが失われていたら、一覧へ退避する。
+  const [rescueFocus, setRescueFocus] = useState(false)
 
   if (tripProp !== lastProp) {
     // 親のtripが変わった：ローカルの変更を捨てて、親に合わせる（描画中の状態調整）。
@@ -48,6 +50,7 @@ export function TripRouteView({
     setNotice('')
     if (selectedId !== null && !tripProp.stops.some((stop) => stop.id === selectedId)) {
       setSelectedId(null)
+      setRescueFocus(true)
     }
   }
 
@@ -57,6 +60,17 @@ export function TripRouteView({
     document.getElementById(stopButtonId(restoreFocusId))?.focus()
     setRestoreFocusId(null)
   }, [restoreFocusId])
+
+  // 詳細が開いていたのに、親のTripの更新で閉じられたときは、フォーカスがbodyへ落ちる。
+  // その場合だけ、路線図の一覧へフォーカスを移す。利用者が、すでに別の場所へ移していれば、奪わない。
+  useEffect(() => {
+    if (!rescueFocus) return
+    const active = document.activeElement
+    if (!active || active === document.body) {
+      document.getElementById(ROUTE_LIST_ID)?.focus()
+    }
+    setRescueFocus(false)
+  }, [rescueFocus])
 
   const selectedIndex = trip.stops.findIndex((stop) => stop.id === selectedId)
   const selected = selectedIndex >= 0 ? trip.stops[selectedIndex] : null
