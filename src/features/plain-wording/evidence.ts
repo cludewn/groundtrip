@@ -39,8 +39,14 @@ export function describeEvidence(
     : EVIDENCE_WORDING[evidence.subject][evidence.status]
   const base = wording.detail.replace(SOURCE_PLACEHOLDER, SOURCE_PHRASES[evidence.source.kind])
   // 確認できない場合は、理由の補足を添える。
-  const detail =
-    evidence.status === 'unverifiable' ? `${base} ${REASON_PREFIX}${evidence.explanation}` : base
+  // 営業時間の矛盾は、通常営業時間の範囲外と閉業とで原因が違うため、照合由来（Places・公式）の説明も添える。
+  const showReason =
+    evidence.status === 'unverifiable' ||
+    (evidence.status === 'conflicting' &&
+      evidence.subject === 'opening_hours' &&
+      (evidence.source.kind === 'places' || evidence.source.kind === 'official') &&
+      evidence.explanation.trim() !== '')
+  const detail = showReason ? `${base} ${REASON_PREFIX}${evidence.explanation}` : base
   return {
     label: `${SUBJECT_LABELS[evidence.subject]}：${wording.headline}`,
     detail,

@@ -80,7 +80,8 @@ export const EVIDENCE_WORDING: Record<
     },
     conflicting: {
       headline: '矛盾あり',
-      detail: '予定の時間帯が、通常営業時間の情報源と合わない可能性があります。',
+      detail:
+        '情報源では、予定の時間帯に営業していない可能性があります（通常営業時間に合わない、閉業の記載があるなど）。',
       tone: 'conflict',
     },
     unverifiable: {

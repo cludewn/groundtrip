@@ -19,6 +19,7 @@ function evidence(overrides: Partial<Evidence> & Pick<Evidence, 'subject' | 'sta
   }
 }
 
+const REASON = '理由：'
 const MATCH_PHRASE = '間に合う見込み'
 
 // 実測の出典（places）の、subject×statusの全組み合わせ。
@@ -134,7 +135,7 @@ describe('describeEvidence：実測の出典', () => {
       status: 'conflicting',
       claim: '2026-11-08の10:00から60分、営業している',
       explanation: '滞在時間帯（10:00〜11:00）は、日曜日の通常営業時間の範囲外です。',
-      mustContain: ['予定の時間帯', '通常営業時間', '合わない可能性'],
+      mustContain: ['予定の時間帯', '通常営業時間', '営業していない可能性'],
     },
     {
       subject: 'travel_time',
@@ -167,6 +168,66 @@ describe('describeEvidence：実測の出典', () => {
         expect(result.detail).not.toContain('食い違')
       }
     }
+  })
+
+  // #27のhoursEvidenceが実際に出す、営業時間の矛盾の説明。閉業は通常営業時間が合っていても矛盾になる。
+  const CLOSED_EXPLANATION =
+    '情報源では、この施設は閉業している可能性があります。営業中とは確認できません。'
+
+  it('営業時間の矛盾：閉業が原因のときは閉業が伝わり、通常営業時間が合わないとは断定しない', () => {
+    for (const kind of ['places', 'official'] as const) {
+      const { detail } = describeEvidence(
+        evidence({
+          subject: 'opening_hours',
+          status: 'conflicting',
+          explanation: CLOSED_EXPLANATION,
+          source: { kind, label: '出典' },
+        }),
+      )
+      expect(detail, kind).toContain('閉業')
+      expect(detail, kind).toContain(CLOSED_EXPLANATION)
+      expect(detail, kind).not.toContain('通常営業時間の情報源と合わない')
+    }
+  })
+
+  it.each([
+    '滞在時間帯（10:00〜11:00）は、日曜日の通常営業時間の範囲外です。',
+    '日曜日の通常営業時間の記載がありません（定休日の可能性）。',
+  ])('営業時間の矛盾：営業時間外・定休日の理由が伝わる（%s）', (explanation) => {
+    const { detail } = describeEvidence(
+      evidence({ subject: 'opening_hours', status: 'conflicting', explanation }),
+    )
+    expect(detail).toContain(`理由：${explanation}`)
+    expect(detail).toContain('通常営業時間に合わない')
+  })
+
+  it('営業時間の矛盾：説明が空なら理由を添えず、本人の報告・模擬では説明を表示しない', () => {
+    const empty = describeEvidence(
+      evidence({ subject: 'opening_hours', status: 'conflicting', explanation: ' ' }),
+    )
+    expect(empty.detail).not.toContain(REASON)
+    for (const kind of ['user_report', 'simulation'] as const) {
+      const { detail } = describeEvidence(
+        evidence({
+          subject: 'opening_hours',
+          status: 'conflicting',
+          explanation: CLOSED_EXPLANATION,
+          source: { kind, label: '出典' },
+        }),
+      )
+      expect(detail, kind).not.toContain(CLOSED_EXPLANATION)
+    }
+  })
+
+  it('移動の矛盾は、説明文を詳細に足さない', () => {
+    const { detail } = describeEvidence(
+      evidence({
+        subject: 'travel_time',
+        status: 'conflicting',
+        explanation: '徒歩では間に合いません',
+      }),
+    )
+    expect(detail).not.toContain('徒歩')
   })
 
   it('営業時間・移動の見出しは、整合／矛盾あり（絶対的な正しさ・食い違いとは言わない）', () => {
