@@ -73,10 +73,7 @@ describe('VerifiedTripView: 根拠照合の画面接続', () => {
     expect(screen.getByRole('group', { name: '確認に使った情報源' }).textContent).toContain(
       'Google Maps',
     )
-    expect(screen.getByRole('link', { name: '利用規約・プライバシーを見る' })).toHaveAttribute(
-      'href',
-      '/terms',
-    )
+    expect(screen.getByRole('link', { name: '利用規約・プライバシーを見る' }).getAttribute('href')).toBe('/terms')
   })
 
   it('照合中は重複リクエストを防ぎ、未照合の旅程を表示し続ける', async () => {
