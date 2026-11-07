@@ -14,7 +14,7 @@ import { postJson, type MapsTransportDeps } from './transport'
 
 export const PLACES_SEARCH_TEXT_URL = 'https://places.googleapis.com/v1/places:searchText'
 
-// 請求は、複数のSKUのフィールドを指定した場合、最も高いSKUで決まる（公式の説明。レビューでの指摘）。
+// 請求は、複数のSKUのフィールドを指定した場合、最も高いSKUで決まる（公式のUsage and Billing）。
 // Text Searchでの区分（公式のデータフィールド一覧、2026-11-07 確認）：
 // id はEssentials（IDs Only）、displayName・businessStatus・formattedAddress・locationはPro。
 // したがって、このFieldMaskの既定（営業時間なし）は、Text Search Proで課金される。
