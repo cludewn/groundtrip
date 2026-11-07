@@ -25,7 +25,7 @@ const route = await maps.computeRoute({ originPlaceId, destinationPlaceId, mode:
 
 `reason`：`not_configured`／`invalid_request`／`unsupported_mode`／`auth_failed`／`timeout`／`network`／
 `api_error`／`invalid_response`。例外にはクエリ・トークン・応答本文を含めない（`apiStatus`はGoogleの状態名のみ）。
-**外部由来の例外（認証ライブラリの例外・JSON解析エラーなど）は、`cause`にも保持しない。** 認証の実装が通常の例外を投げた場合も、元の例外は伝播させず、`auth_failed`に変換する。`apiStatus`は、Googleの既知のエラー名（許可リスト）だけを保持する。 メッセージや応答の断片に、
+**外部由来の例外（認証ライブラリの例外・JSON解析エラーなど）は、`cause`にも保持しない。** 認証の実装が投げた例外は、`MapsCallError`を含め、型にかかわらず、元の例外を伝播させず、`auth_failed`に変換する（アダプター自身の期限切れだけが`timeout`）。`apiStatus`は、Googleの既知のエラー名（許可リスト）だけを保持する。 メッセージや応答の断片に、
 トークンや応答本文が含まれ得るため、安全な分類情報（`reason`・`status`・`apiStatus`）だけを公開する。
 
 **外部APIの値の検証**：範囲外・不正な値は、正常な結果にせず`invalid_response`とする。緯度は-90〜90、経度は-180〜180、
@@ -40,9 +40,9 @@ const route = await maps.computeRoute({ originPlaceId, destinationPlaceId, mode:
 ## 費用・規約
 
 - 呼び出しは1回だけで、自動再試行しない。**タイムアウト（15秒）は、認証（トークン取得）とMapsへの送受信の合計**に対する、
-  1つの期限。経過時間は単調時計で測り、送信の直前にも期限を確認する。期限が切れたら`timeout`とし、あとで認証が完了
-  しても（イベントループの遅れで、期限のタイマーより先に認証の成功が処理された場合も）、Mapsは呼ばない。
-  送受信に使える時間は、認証に使った時間を差し引いた残り。
+  1つの期限。経過時間は単調時計で測り、**認証の完了後・Mapsを呼び出す直前・本文の受信完了後**の3か所で、期限を確認する。
+  イベントループの遅れで、期限のタイマーが実行されなくても、期限を過ぎていれば`timeout`とし、送信しない・成功にしない
+  （認証が遅れて完了した場合も、Mapsは呼ばない）。送受信に使える時間は、認証と準備に使った時間を差し引いた残り。
 - **Places Text SearchのSKU**：`id`はEssentials（IDs Only）、`displayName`・`businessStatus`・`formattedAddress`・`location`は
   **Pro**、`regularOpeningHours`は**Enterprise**。複数のSKUのフィールドを指定したときは、最も高いSKUで課金される
   （公式のUsage and Billingで原文を確認）。営業時間を要求すると、リクエスト全体がEnterpriseになる。

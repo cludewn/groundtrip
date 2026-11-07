@@ -22,34 +22,42 @@ export async function postJson(
   const startedAt = performance.now()
   const remaining = () => timeoutMs - (performance.now() - startedAt)
 
+  const timedOut = () =>
+    new MapsCallError('timeout', 'Google Maps Platformの応答がタイムアウトしました')
+
   let authHeaders: Record<string, string>
   try {
     authHeaders = await withDeadline(auth.getHeaders(), timeoutMs)
   } catch (error) {
-    if (error instanceof MapsCallError) throw error
-    // 認証の実装が、通常の例外を投げた場合も、元の例外を伝播させず、安全な分類へ変換する。
+    // アダプター自身の期限切れだけを、timeoutとして扱う。
+    if (error === DEADLINE_EXCEEDED) throw timedOut()
+    // 認証の実装が投げた例外は、型にかかわらず（MapsCallErrorでも、通常のErrorでも）、元の例外を伝播させず、
+    // 安全なauth_failedへ変換する。メッセージや原因に、機密情報が含まれ得るため。
     throw new MapsCallError('auth_failed', 'Google Maps Platformの認証に失敗しました')
   }
-  if (remaining() <= 0) {
-    throw new MapsCallError('timeout', 'Google Maps Platformの認証がタイムアウトしました')
+  if (remaining() <= 0) throw timedOut()
+
+  // 送信の内容は、期限の確認の前に、すべて組み立てる（組み立てに時間がかかった場合も、確認に含める）。
+  const init: RequestInit = {
+    method: 'POST',
+    headers: {
+      ...authHeaders,
+      // 日本語のクエリをUTF-8で送ることを明示する。
+      'Content-Type': 'application/json; charset=utf-8',
+      // 請求は要求したフィールドで決まる。必要最小限だけを指定する。
+      'X-Goog-FieldMask': request.fieldMask,
+    },
+    body: JSON.stringify(request.body),
+    // 認証と準備に使った時間を除いた、残りの時間。
+    signal: AbortSignal.timeout(Math.max(1, Math.floor(remaining()))),
   }
+  // 実際にMapsを呼び出す直前にも、期限を確認する。期限を過ぎていれば、送らない（課金を発生させない）。
+  if (remaining() <= 0) throw timedOut()
 
   let response: Response
   let text: string
   try {
-    response = await fetchFn(request.url, {
-      method: 'POST',
-      headers: {
-        ...authHeaders,
-        // 日本語のクエリをUTF-8で送ることを明示する。
-        'Content-Type': 'application/json; charset=utf-8',
-        // 請求は要求したフィールドで決まる。必要最小限だけを指定する。
-        'X-Goog-FieldMask': request.fieldMask,
-      },
-      body: JSON.stringify(request.body),
-      // 認証に使った時間を除いた、残りの時間。
-      signal: AbortSignal.timeout(Math.max(1, Math.floor(remaining()))),
-    })
+    response = await fetchFn(request.url, init)
     text = await response.text()
   } catch (error) {
     // 外部由来の例外は、名前の判定だけに使い、保持も再送出もしない。
@@ -59,6 +67,10 @@ export async function postJson(
     }
     throw new MapsCallError('network', 'Google Maps Platformへ接続できませんでした')
   }
+
+  // 本文の受信が完了した時点でも、期限を確認する（イベントループの遅れで、期限のタイマーが実行されず、
+  // 期限を過ぎてから正常に終了した場合を、成功として扱わない）。
+  if (remaining() <= 0) throw timedOut()
 
   if (!response.ok) {
     throw new MapsCallError('api_error', 'Google Maps Platformがエラーを返しました', {
@@ -80,23 +92,20 @@ export async function postJson(
   }
 }
 
-// 認証など、時間のかかる準備に期限を設ける。期限が切れたら、timeoutとして失敗させる。
+// 認証など、時間のかかる準備に期限を設ける。期限が切れたら、DEADLINE_EXCEEDEDで失敗させる。
 // 元の処理は止められないが、結果は捨てる（期限後に完了しても、呼び出し側は先へ進まない）。
+const DEADLINE_EXCEEDED = Symbol('deadline-exceeded')
+
 function withDeadline<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined
   const deadline = new Promise<never>((_, reject) => {
-    timer = setTimeout(
-      () =>
-        reject(new MapsCallError('timeout', 'Google Maps Platformの認証がタイムアウトしました')),
-      timeoutMs,
-    )
+    timer = setTimeout(() => reject(DEADLINE_EXCEEDED), timeoutMs)
   })
   // 期限後に元の処理が失敗しても、未処理の拒否にしない。
   promise.catch(() => undefined)
   return Promise.race([promise, deadline]).finally(() => clearTimeout(timer))
 }
 
-// Googleのエラー本文（{"error":{"status":"PERMISSION_DENIED"}}）から、状態名だけを取り出す。
 // Googleのエラー状態名は、既知の正規コード（Google APIの共通のエラーコード）だけを保持する。
 // 文字種・長さだけで通すと、エラー本文に含まれる任意の文字列を保持してしまうため、許可リストにする。
 const KNOWN_API_STATUSES: ReadonlySet<string> = new Set([

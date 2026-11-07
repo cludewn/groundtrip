@@ -378,3 +378,166 @@ describe('認証の期限：単調時計での管理（再レビュー対応）'
     expect(fetchFn).not.toHaveBeenCalled()
   })
 })
+
+describe('認証がMapsCallErrorを投げる場合（再々レビュー対応）', () => {
+  const clientWithAuth = (getHeaders: () => Promise<Record<string, string>>) => {
+    const fetchFn = vi.fn<typeof fetch>(async () => jsonResponse({}))
+    return { client: createMapsClient({ auth: { getHeaders }, fetchFn }), fetchFn }
+  }
+  const everything = (error: MapsCallError) =>
+    [
+      error.message,
+      error.stack ?? '',
+      JSON.stringify(error, Object.getOwnPropertyNames(error)),
+    ].join('\n')
+
+  it('認証処理がMapsCallErrorを投げても、元の例外を再送出せず、安全なauth_failedに変換する', async () => {
+    const { client, fetchFn } = clientWithAuth(async () => {
+      throw new MapsCallError('not_configured', `credential detail ${SECRET}`, {
+        status: 401,
+        apiStatus: 'PERMISSION_DENIED',
+      })
+    })
+    const error = await failureOf(client.searchPlaces({ query: '清水寺' }))
+
+    expect(error.reason).toBe('auth_failed')
+    expect(error.status).toBeUndefined()
+    expect(error.apiStatus).toBeUndefined()
+    expect(error.cause).toBeUndefined()
+    expect(everything(error)).not.toContain(SECRET)
+    expect(fetchFn).not.toHaveBeenCalled()
+  })
+
+  it.each(['timeout', 'network', 'api_error', 'invalid_response', 'unsupported_mode'] as const)(
+    '認証処理が投げた MapsCallError(%s) も、timeoutなどとして扱わず、auth_failed にする',
+    async (reason) => {
+      const { client } = clientWithAuth(async () => {
+        throw new MapsCallError(reason, `detail ${SECRET}`)
+      })
+      const error = await failureOf(
+        client.computeRoute({ originPlaceId: 'A', destinationPlaceId: 'B', mode: 'WALK' }),
+      )
+
+      expect(error.reason).toBe('auth_failed')
+      expect(everything(error)).not.toContain(SECRET)
+    },
+  )
+
+  it('アダプター自身の期限切れだけが timeout になる（認証が終わらない場合）', async () => {
+    const client = createMapsClient({
+      auth: { getHeaders: () => new Promise<Record<string, string>>(() => undefined) },
+      fetchFn: vi.fn<typeof fetch>(),
+      timeoutMs: 25,
+    })
+
+    expect((await failureOf(client.searchPlaces({ query: '清水寺' }))).reason).toBe('timeout')
+  })
+})
+
+describe('送受信の期限（再々レビュー対応）', () => {
+  // 同期的に時間を消費して、イベントループを塞ぐ（期限のタイマーが実行できない状況を再現する）。
+  const blockFor = (ms: number) => {
+    const end = performance.now() + ms
+    while (performance.now() < end) {
+      // 待つ
+    }
+  }
+  const goodHeaders = { Authorization: 'Bearer ok', 'X-Goog-User-Project': 'p' }
+
+  it('送信の準備に時間がかかり、期限を過ぎたら、Mapsを呼び出さない', async () => {
+    const fetchFn = vi.fn<typeof fetch>(async () => jsonResponse({}))
+    // ヘッダーの取り出し（送信の準備）で、時間を消費する。
+    const slowHeaders = { ...goodHeaders }
+    Object.defineProperty(slowHeaders, 'Authorization', {
+      enumerable: true,
+      get() {
+        blockFor(60)
+        return 'Bearer ok'
+      },
+    })
+    const client = createMapsClient({
+      auth: { getHeaders: async () => slowHeaders },
+      fetchFn,
+      timeoutMs: 30,
+    })
+
+    const error = await failureOf(client.searchPlaces({ query: '清水寺' }))
+
+    expect(error.reason).toBe('timeout')
+    expect(fetchFn).not.toHaveBeenCalled()
+  })
+
+  it('本文の受信が完了した時点で期限を過ぎていたら（タイマーが遅れて、正常に終了しても）、成功にしない', async () => {
+    const fetchFn = vi.fn<typeof fetch>(async () => {
+      blockFor(60)
+      return jsonResponse({ places: [] })
+    })
+    const client = createMapsClient({
+      auth: { getHeaders: async () => goodHeaders },
+      fetchFn,
+      timeoutMs: 30,
+    })
+
+    const error = await failureOf(client.searchPlaces({ query: '清水寺' }))
+
+    expect(error.reason).toBe('timeout')
+    expect(fetchFn).toHaveBeenCalledTimes(1)
+  })
+
+  it('期限内に終われば、通常どおり成功する（確認が、正常な呼び出しを妨げない）', async () => {
+    const { client } = setup(() => jsonResponse({ places: [] }))
+
+    expect(await client.searchPlaces({ query: '清水寺' })).toEqual({ status: 'no_candidates' })
+  })
+
+  it('認証に使った時間は、HTTP側の期限から差し引かれる（合計で期限を超えない）', async () => {
+    const hang = vi.fn<typeof fetch>(
+      (_url, init) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(init.signal?.reason))
+        }),
+    )
+    const client = createMapsClient({
+      auth: {
+        getHeaders: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 80))
+          return goodHeaders
+        },
+      },
+      fetchFn: hang,
+      timeoutMs: 200,
+    })
+    const startedAt = performance.now()
+
+    const error = await failureOf(client.searchPlaces({ query: '清水寺' }))
+    const elapsed = performance.now() - startedAt
+
+    expect(error.reason).toBe('timeout')
+    // 認証80ms＋HTTP（残り約120ms）≒200ms。差し引かれていなければ、約280ms。
+    expect(elapsed).toBeLessThan(260)
+    expect(elapsed).toBeGreaterThanOrEqual(150)
+  })
+
+  it('HTTP側に渡す期限は、認証に使った時間だけ短くなる', async () => {
+    let seen: AbortSignal | undefined
+    const fetchFn = vi.fn<typeof fetch>(async (_url, init) => {
+      seen = init?.signal ?? undefined
+      return jsonResponse({})
+    })
+    const client = createMapsClient({
+      auth: {
+        getHeaders: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 100))
+          return goodHeaders
+        },
+      },
+      fetchFn,
+      timeoutMs: 400,
+    })
+    await client.searchPlaces({ query: '清水寺' })
+
+    // 残りは約300ms。400msの期限ではなく、約300msで中止される信号が渡される。
+    await new Promise((resolve) => setTimeout(resolve, 340))
+    expect(seen?.aborted).toBe(true)
+  })
+})
