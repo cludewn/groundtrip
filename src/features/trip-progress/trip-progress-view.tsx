@@ -141,8 +141,8 @@ export function TripProgressView({ trip, initialIndex = 0, onReplan }: TripProgr
         role="status"
         className={`mt-3 min-h-6 border-l-4 border-(color:--tp-edge) pl-3 text-sm font-bold ${wrapClass}`}
       >
-        {view.notice}
-        {view.tick % 2 === 1 ? ' ' : ''}
+        {/* 更新のたびに中の要素を作り直し、同じ文言でもテキスト内容の更新として通知させる。 */}
+        <span key={view.tick}>{view.notice}</span>
       </p>
 
       <Route stops={stops} currentIndex={currentIndex} />

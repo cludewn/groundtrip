@@ -102,7 +102,7 @@ describe('移動の根拠の文言', () => {
   })
 
   it.each([
-    ['consistent', '間に合う見込み（情報源と整合）'],
+    ['consistent', '移動時間の値は情報源と一致'],
     ['conflicting', '間に合わない見込み（矛盾あり）'],
     ['unverifiable', '移動時間を確認できない'],
   ] as const)('実際の根拠 %s は「%s」', (status, text) => {
@@ -147,7 +147,7 @@ describe('移動の根拠の文言', () => {
       ]),
     )
     expect(bases).toEqual([
-      { kind: 'consistent', text: '間に合う見込み（情報源と整合）', simulated: false },
+      { kind: 'consistent', text: '移動時間の値は情報源と一致', simulated: false },
       { kind: 'conflicting', text: 'デモ用の想定（食い違いあり）', simulated: true },
     ])
   })

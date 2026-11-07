@@ -99,6 +99,12 @@ describe('初期表示', () => {
     expect(status().textContent?.trim()).toBe('')
   })
 
+  it('予定が空の旅程では、「表示できる予定がありません」と案内する', () => {
+    render(<TripProgressView trip={{ ...sampleTrip, stops: [] }} />)
+    expect(screen.getByText('表示できる予定がありません。')).toBeTruthy()
+    expect(screen.queryByRole('button')).toBeNull()
+  })
+
   it('initialIndexで、途中の予定から始められる。範囲外は範囲内に収める', () => {
     const { unmount } = render(<TripProgressView trip={sampleTrip} initialIndex={2} />)
     expect(within(currentCard()).getByText('14時の予約展示（架空）')).toBeTruthy()
@@ -158,14 +164,18 @@ describe('進む・戻る', () => {
     expect(status().textContent).toContain('最初の予定です')
   })
 
-  it('境界を何度押しても越えない。同じ案内が続いても、読み上げ直されるよう文字列が変わる', async () => {
+  it('境界を何度押しても越えない。同じ案内が続いても、読み上げ直されるよう通知の中身の要素が作り直される', async () => {
     render(<TripProgressView trip={sampleTrip} initialIndex={2} />)
+    const region = status()
     await user().click(forwardButton())
-    const first = status().textContent
+    const first = region.firstElementChild
+    expect(first?.textContent).toContain('旅程の最後です')
     await user().click(forwardButton())
-    const second = status().textContent
-    expect(first?.trim()).toBe(second?.trim())
-    expect(first).not.toBe(second)
+    const second = region.firstElementChild
+    expect(second?.textContent).toBe(first?.textContent)
+    expect(second).not.toBe(first)
+    // 常設のライブリージョン自体は作り直さない。
+    expect(status()).toBe(region)
     for (let i = 0; i < 3; i += 1) await user().click(backButton())
     expect(within(currentCard()).getByText('朝の庭園（架空）')).toBeTruthy()
     for (let i = 0; i < 5; i += 1) await user().click(forwardButton())
@@ -336,7 +346,7 @@ describe('次の予定までの移動の根拠', () => {
   })
 
   it.each([
-    ['consistent', '間に合う見込み（情報源と整合）'],
+    ['consistent', '移動時間の値は情報源と一致'],
     ['conflicting', '間に合わない見込み（矛盾あり）'],
     ['unverifiable', '移動時間を確認できない'],
   ] as const)('実際の根拠が %s のとき「%s」。デモ用の表示は付かない', (evidenceStatus, text) => {
@@ -391,7 +401,7 @@ describe('次の予定までの移動の根拠', () => {
         ])}
       />,
     )
-    expect(within(nextCard()).getByText('間に合う見込み（情報源と整合）')).toBeTruthy()
+    expect(within(nextCard()).getByText('移動時間の値は情報源と一致')).toBeTruthy()
     expect(within(nextCard()).getByText('デモ用の想定（食い違いあり）')).toBeTruthy()
   })
 
@@ -409,6 +419,20 @@ describe('次の予定までの移動の根拠', () => {
     }
     render(<TripProgressView trip={overlapping} />)
     expect(textOfNext()).toContain('予定が重なっています')
+  })
+
+  it('予定が重なり、実際の移動根拠が整合のとき、「間に合う」と断定せず、重なりを示す', () => {
+    const withTravel = tripWithLunchTravel([travelEvidence('consistent')])
+    const overlapping: Trip = {
+      ...withTravel,
+      stops: withTravel.stops.map((stop) =>
+        stop.id === 'stop-morning' ? { ...stop, durationMinutes: 150 } : stop,
+      ),
+    }
+    render(<TripProgressView trip={overlapping} />)
+    expect(textOfNext()).toContain('予定が重なっています')
+    expect(textOfNext()).toContain('移動時間の値は情報源と一致')
+    expect(textOfNext()).not.toContain('間に合う')
   })
 })
 
