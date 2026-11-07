@@ -108,6 +108,40 @@ describe('requestTripVerification', () => {
     expect(same.ok).toBe(true)
   })
 
+  it('学びの反映（learningApplications）や希望条件（preferences）が書き換えられて返ったら、採用しない', async () => {
+    const tampered = [
+      {
+        ...sampleTrip,
+        learningApplications: sampleTrip.learningApplications.map((item) => ({
+          ...item,
+          explanation: '書き換えられた説明',
+        })),
+      },
+      { ...sampleTrip, learningApplications: [] },
+      { ...sampleTrip, preferences: [...sampleTrip.preferences, '勝手に足した希望'] },
+    ]
+    for (const trip of tampered) {
+      const fetchFn = vi.fn().mockResolvedValue(json({ status: 'verified', trip }))
+      const result = await requestTripVerification(sampleTrip, { fetchFn })
+      expect(result).toMatchObject({ ok: false, failure: { kind: 'unexpected' } })
+    }
+  })
+
+  it('キーの並び順が違うだけの同じ内容は、採用する', async () => {
+    const reverseKeys = (value: object): Record<string, unknown> =>
+      Object.fromEntries(Object.entries(value).reverse())
+    // 送る旅程のキーの並びを、契約の定義順と変えておく（応答は契約の並びで返る）。
+    const sent = {
+      ...reverseKeys(sampleTrip),
+      stops: sampleTrip.stops.map(reverseKeys),
+    } as unknown as typeof sampleTrip
+    const fetchFn = vi.fn().mockResolvedValue(json({ status: 'verified', trip: withEvidence() }))
+
+    const result = await requestTripVerification(sent, { fetchFn })
+
+    expect(result.ok).toBe(true)
+  })
+
   it('別の旅程（ID違い・版違い）が返ったら採用しない', async () => {
     for (const other of [
       { ...sampleTrip, id: 'trip-other' },

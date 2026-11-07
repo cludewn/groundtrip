@@ -9,7 +9,7 @@ import {
   type RouteOptions,
   type RouteResult,
 } from '../maps'
-import { verifyTrip } from './verify-trip'
+import { isJapanTimeZone, verifyTrip } from './verify-trip'
 
 // sampleTrip（2026-11-08・日曜）：朝の庭園(固定 10:00-11:00)→昼食店A(12:00-13:15)→14時の予約展示(固定 14:00-15:00)
 // 使える時間：庭園→昼食=60分、昼食→展示=45分。
@@ -45,12 +45,19 @@ type Setup = {
 
 // 検索語に含まれる地点名で、返す施設を決める偽のMapsクライアント。
 const makeMaps = ({ places = {}, routes }: Setup = {}) => {
-  const searchPlaces = vi.fn(async ({ query }: { query: string }): Promise<PlaceSearchResult> => {
-    const key = Object.keys(places).find((name) => query.includes(name))
-    const value = key ? places[key] : { status: 'no_candidates' as const }
-    if (value instanceof Error) throw value
-    return value
-  })
+  const searchPlaces = vi.fn(
+    async ({
+      query,
+    }: {
+      query: string
+      includeOpeningHours?: boolean
+    }): Promise<PlaceSearchResult> => {
+      const key = Object.keys(places).find((name) => query.includes(name))
+      const value = key ? places[key] : { status: 'no_candidates' as const }
+      if (value instanceof Error) throw value
+      return value
+    },
+  )
   const computeRoute = vi.fn(async (options: RouteOptions): Promise<RouteResult> => {
     const value = routes ? routes(options) : { status: 'no_route' as const }
     if (value instanceof Error) throw value
@@ -151,13 +158,14 @@ describe('verifyTrip: すべて照合できた場合', () => {
     ).toBe(false)
   })
 
-  it('検索語は「予定の名称 + 地域」で、営業時間を要求し、件数は3件まで', async () => {
+  it('検索語は「予定の名称 + 地域（括弧書きを除く）」で、営業時間を要求し、件数は3件まで', async () => {
     const maps = makeMaps(setup)
     await verifyTrip(sampleTrip, { maps, now: () => NOW })
 
     expect(maps.searchPlaces).toHaveBeenCalledTimes(3)
+    // 地域の括弧書き「（架空デモ）」は、検索語に含めない（sampleTripの地域は「京都市・東山（架空デモ）」）。
     expect(maps.searchPlaces).toHaveBeenCalledWith({
-      query: `朝の庭園（架空） ${sampleTrip.region}`,
+      query: '朝の庭園（架空） 京都市・東山',
       maxResultCount: 3,
       includeOpeningHours: true,
     })
@@ -265,7 +273,7 @@ describe('verifyTrip: 移動の余裕', () => {
     expect(byId(trip, 1, '-travel').explanation).toContain('失敗')
   })
 
-  it('予定の時刻がすでに重なっている区間は、Routesを呼ばず、Routes由来の根拠を付けない', async () => {
+  it('予定の時刻がすでに重なっている旅程は、MapsもRoutesも呼ばず、invalid_trip を返す', async () => {
     const overlapping = TripSchema.parse({
       ...sampleTrip,
       learningApplications: [],
@@ -276,10 +284,19 @@ describe('verifyTrip: 移動の余裕', () => {
     const maps = makeMaps({ places: allFound, routes: route({ WALK: walk(5) }) })
     const result = await verifyTrip(overlapping, { maps, now: () => NOW })
 
+    // 以前は、重なった区間だけ Routes を呼ばなかった。いまは、旅程全体を拒否する（防御の二重化）。
+    expect(result).toEqual({
+      status: 'invalid_trip',
+      message: '予定の時刻が重なっているか、時刻順に並んでいません。',
+    })
+    expect(maps.searchPlaces).not.toHaveBeenCalled()
+    expect(maps.computeRoute).not.toHaveBeenCalled()
+  })
+
+  it('時刻が重なっていない旅程は、invalid_trip にしない', async () => {
+    const result = await run({ places: allFound, routes: route({ WALK: walk(10) }) })
+
     expect(result.status).toBe('verified')
-    if (result.status !== 'verified') return
-    expect(hasEvidence(result.trip, 2, '-travel')).toBe(false)
-    expect(maps.computeRoute).toHaveBeenCalledTimes(1) // 庭園→昼食の1区間だけ
   })
 
   it('前後どちらかの施設を特定できていなければ、Routesを呼ばず、Routes由来の根拠を付けない', async () => {
@@ -650,5 +667,150 @@ describe('verifyTrip: 複合地域で、別の施設のPlace IDを根拠に伝�
     expect(result.status).toBe('verified')
     if (result.status !== 'verified') return
     expect(result.trip.stops[1].placeId).toBe('PX')
+  })
+})
+
+describe('verifyTrip: 乗車・乗換は、施設として照合しない', () => {
+  // 指定した位置の予定を、乗車・乗換にする。
+  const withTransport = (index: number): Trip =>
+    TripSchema.parse({
+      ...sampleTrip,
+      learningApplications: [],
+      stops: sampleTrip.stops.map((stop, i) =>
+        i === index ? { ...stop, kind: 'transport' as const } : stop,
+      ),
+    })
+
+  it('Placesを呼ばず、Place IDなし・根拠なしにする。他の予定は照合する', async () => {
+    const maps = makeMaps({ places: allFound, routes: route({ WALK: walk(10) }) })
+    const result = await verifyTrip(withTransport(1), { maps, now: () => NOW })
+
+    expect(result).toMatchObject({ status: 'verified', calls: { places: 2 } })
+    if (result.status !== 'verified') return
+    expect(maps.searchPlaces).toHaveBeenCalledTimes(2)
+    expect(
+      maps.searchPlaces.mock.calls.some(([options]) => options.query.includes('昼食店A')),
+    ).toBe(false)
+    expect(result.trip.stops[1].placeId).toBeNull()
+    expect(result.trip.stops[1].evidence).toEqual([])
+    // 他の予定は、通常どおり照合される。
+    expect(result.trip.stops.map((stop) => stop.placeId)).toEqual(['P1', null, 'P3'])
+    expect(byId(result.trip, 0, '-place').status).toBe('consistent')
+    expect(byId(result.trip, 2, '-place').status).toBe('consistent')
+    expect(byId(result.trip, 2, '-hours').status).toBe('consistent')
+  })
+
+  it('隣接する移動区間は、Place IDがないため Routes を呼ばず、根拠も付けない', async () => {
+    const maps = makeMaps({ places: allFound, routes: route({ WALK: walk(10) }) })
+    const result = await verifyTrip(withTransport(1), { maps, now: () => NOW })
+
+    expect(result.status).toBe('verified')
+    if (result.status !== 'verified') return
+    expect(hasEvidence(result.trip, 1, '-travel')).toBe(false)
+    expect(hasEvidence(result.trip, 2, '-travel')).toBe(false)
+    expect(maps.computeRoute).not.toHaveBeenCalled()
+  })
+
+  it('通常の予定（種別なし）は、従来どおりPlacesを呼ぶ（比較）', async () => {
+    const maps = makeMaps({ places: allFound, routes: route({ WALK: walk(10) }) })
+    await verifyTrip(sampleTrip, { maps, now: () => NOW })
+
+    expect(maps.searchPlaces).toHaveBeenCalledTimes(3)
+  })
+
+  it('Placesを呼んだ予定がすべて失敗したら external_service_error（乗車・乗換は数えない）', async () => {
+    const down = new MapsCallError('auth_failed', 'x')
+    const maps = makeMaps({ places: { 朝の庭園: down, '14時の予約展示': down } })
+    const result = await verifyTrip(withTransport(1), { maps, now: () => NOW })
+
+    expect(result.status).toBe('external_service_error')
+    expect(maps.computeRoute).not.toHaveBeenCalled()
+  })
+
+  it('Placesを呼んだ予定が0件（全予定が乗車・乗換）でも、external_service_error にせず verified', async () => {
+    const allTransport = TripSchema.parse({
+      ...sampleTrip,
+      learningApplications: [],
+      stops: sampleTrip.stops.map((stop) => ({ ...stop, kind: 'transport' as const })),
+    })
+    const maps = makeMaps()
+    const result = await verifyTrip(allTransport, { maps, now: () => NOW })
+
+    expect(result).toMatchObject({ status: 'verified', calls: { places: 0, routes: 0 } })
+    if (result.status !== 'verified') return
+    expect(result.trip.stops.every((stop) => stop.evidence.length === 0)).toBe(true)
+    expect(maps.searchPlaces).not.toHaveBeenCalled()
+  })
+})
+
+describe('verifyTrip: 営業時間の要求とタイムゾーン', () => {
+  const inZone = (timeZone: string): Trip =>
+    TripSchema.parse({ ...sampleTrip, learningApplications: [], timeZone })
+  const requested = (maps: ReturnType<typeof makeMaps>, value: boolean): boolean =>
+    maps.searchPlaces.mock.calls.every(([options]) => options.includeOpeningHours === value)
+
+  it('日本でない旅程では、営業時間（最上位の課金区分）を要求しない', async () => {
+    const maps = makeMaps({ places: allFound, routes: route({ WALK: walk(10) }) })
+    const result = await verifyTrip(inZone('Europe/London'), { maps, now: () => NOW })
+
+    expect(requested(maps, false)).toBe(true)
+    expect(result.status).toBe('verified')
+    if (result.status !== 'verified') return
+    // 要求していなくても、理由は「タイムゾーン」（データ未取得ではない）。
+    expect(byId(result.trip, 1, '-hours').explanation).toContain('タイムゾーン')
+  })
+
+  it('日本の旅程では、営業時間を要求する', async () => {
+    const maps = makeMaps({ places: allFound, routes: route({ WALK: walk(10) }) })
+    await verifyTrip(inZone('Asia/Tokyo'), { maps, now: () => NOW })
+
+    expect(requested(maps, true)).toBe(true)
+  })
+
+  it("別名のタイムゾーン（'Japan'）でも、営業時間を要求し、照合できる", async () => {
+    const maps = makeMaps({ places: allFound, routes: route({ WALK: walk(10) }) })
+    const result = await verifyTrip(inZone('Japan'), { maps, now: () => NOW })
+
+    expect(requested(maps, true)).toBe(true)
+    if (result.status !== 'verified') throw new Error('照合済みの旅程を期待しました')
+    expect(byId(result.trip, 1, '-hours').status).toBe('consistent')
+    expect(byId(result.trip, 1, '-hours').applicability).toContain('（Japan）')
+  })
+
+  it("'Europe/London' は従来どおり「確認できない」", async () => {
+    const trip = await verifiedTrip(
+      { places: allFound, routes: route({ WALK: walk(10) }) },
+      inZone('Europe/London'),
+    )
+
+    for (const index of [0, 1, 2]) {
+      expect(byId(trip, index, '-hours')).toMatchObject({ status: 'unverifiable' })
+    }
+  })
+
+  it('isJapanTimeZone: 別名はtrue、他の地域・解釈できない値はfalse', () => {
+    expect(isJapanTimeZone('Asia/Tokyo')).toBe(true)
+    expect(isJapanTimeZone('Japan')).toBe(true)
+    expect(isJapanTimeZone('Europe/London')).toBe(false)
+    expect(isJapanTimeZone('Not/AZone')).toBe(false)
+  })
+})
+
+describe('verifyTrip: 検索語の地域', () => {
+  it('地域の括弧書き（全角・半角）を検索語に含めない。括弧書きだけなら元の地域を使う', async () => {
+    const queryFor = async (region: string): Promise<string> => {
+      const maps = makeMaps({ places: allFound })
+      await verifyTrip(TripSchema.parse({ ...sampleTrip, learningApplications: [], region }), {
+        maps,
+        now: () => NOW,
+      })
+      return maps.searchPlaces.mock.calls[0][0].query
+    }
+
+    const fullWidth = await queryFor('京都・東山（架空デモ）')
+    expect(fullWidth).toBe('朝の庭園（架空） 京都・東山')
+    expect(fullWidth).not.toContain('架空デモ')
+    expect(await queryFor('京都・東山 (架空デモ) ')).toBe('朝の庭園（架空） 京都・東山')
+    expect(await queryFor('（架空デモ）')).toBe('朝の庭園（架空） （架空デモ）')
   })
 })

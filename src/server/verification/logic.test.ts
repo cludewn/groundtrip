@@ -149,7 +149,36 @@ describe('所在地と地域', () => {
   it('地域を語に分け、「周辺」などの語尾は外す', () => {
     expect(regionTokens('京都・東山')).toEqual(['京都', '東山'])
     expect(regionTokens('京都駅周辺')).toEqual(['京都駅'])
+    // 語尾が重なっていても、すべて外す。
+    expect(regionTokens('京都・東山エリア周辺')).toEqual(['京都', '東山'])
     expect(regionTokens('  ・ ')).toEqual([])
+  })
+
+  it('「市内」「都内」などの語尾も外し、ハイフン類・波線も区切りにする', () => {
+    // 語尾（市内など）を外した語は、行政区画の名称（京都市・東京都）と、語尾の「市」「都」を除いた形で一致する。
+    expect(regionTokens('京都市内')).toEqual(['京都'])
+    expect(regionTokens('東京都内')).toEqual(['東京'])
+    expect(regionTokens('大阪府内')).toEqual(['大阪'])
+    expect(regionTokens('神奈川県内')).toEqual(['神奈川'])
+    expect(regionTokens('東山区内')).toEqual(['東山'])
+    expect(regionTokens('京都-奈良')).toEqual(['京都', '奈良'])
+    expect(regionTokens('京都–奈良')).toEqual(['京都', '奈良'])
+    expect(regionTokens('京都—奈良')).toEqual(['京都', '奈良'])
+    expect(regionTokens('京都−奈良')).toEqual(['京都', '奈良'])
+    expect(regionTokens('京都〜奈良')).toEqual(['京都', '奈良'])
+    expect(regionTokens('京都~奈良')).toEqual(['京都', '奈良'])
+    // 全角のハイフン・波線は、NFKCで半角になる。
+    expect(regionTokens('京都－奈良')).toEqual(['京都', '奈良'])
+    expect(regionTokens('京都～奈良')).toEqual(['京都', '奈良'])
+    expect(regionTokens('京都・東山エリア周辺')).toEqual(['京都', '東山'])
+  })
+
+  it('語尾を広げても、行政区画でない駅名・温泉地は、従来どおり一致しない（意図した制限）', () => {
+    const hakone = '日本、〒250-0521 神奈川県足柄下郡箱根町仙石原'
+
+    expect(addressMatchesRegion(hakone, '箱根温泉')).toBe(false)
+    expect(addressMatchesRegion(KYOTO_ADDRESS, '京都駅周辺')).toBe(false)
+    expect(addressMatchesRegion(KYOTO_ADDRESS, '京都駅')).toBe(false)
   })
 
   it('地域のすべての要素が、同じ住所の行政区画の階層で確認できれば、一致', () => {
@@ -159,6 +188,11 @@ describe('所在地と地域', () => {
     expect(addressMatchesRegion(KYOTO_ADDRESS, '京都市東山エリア')).toBe(true)
     expect(addressMatchesRegion(KYOTO_ADDRESS, '京都市・東山（架空デモ）')).toBe(true)
     expect(addressMatchesRegion(KYOTO_ADDRESS, '京都')).toBe(true)
+    expect(addressMatchesRegion(KYOTO_ADDRESS, '京都・東山エリア周辺')).toBe(true)
+    expect(addressMatchesRegion(KYOTO_ADDRESS, '京都市内')).toBe(true)
+    expect(addressMatchesRegion(KYOTO_ADDRESS, '京都-奈良')).toBe(false) // 奈良の施設ではない
+    expect(addressMatchesRegion(KYOTO_ADDRESS, '京都-東山')).toBe(true)
+    expect(addressMatchesRegion('日本、〒100-0001 東京都千代田区千代田', '東京都内')).toBe(true)
   })
 
   it('地域の要素の一部しか確認できない住所は、一致としない（下京区の施設を「京都・東山」としない）', () => {

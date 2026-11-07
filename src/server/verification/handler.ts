@@ -112,6 +112,11 @@ export async function handleVerifyTripRequest(
     })
   }
 
+  // verifyTripも、時刻の重なりを拒否する（上の事前チェックとの二重化）。入力の不備なので400。
+  if (result.status === 'invalid_trip') {
+    return errorResponse(400, { status: 'invalid_request', message: result.message })
+  }
+
   // 内部の呼び出し回数などは返さない。返却前に契約で検証する。
   const body: VerifyTripResponse =
     result.status === 'verified'

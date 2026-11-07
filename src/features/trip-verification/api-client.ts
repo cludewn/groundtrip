@@ -47,27 +47,28 @@ const failure = (kind: VerificationFailureKind, message: string): VerificationRe
 const UNEXPECTED_MESSAGE = 'サーバーから想定外の応答が返されました。'
 const INTERRUPTED_MESSAGE = '通信が中断されました。接続を確認して、もう一度お試しください。'
 
+// キーの並び順に依存しない、安定した文字列にする（キーをソートして再帰的にJSON化）。
+const sortKeys = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(sortKeys)
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value)
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .map(([key, item]) => [key, sortKeys(item)]),
+    )
+  }
+  return value
+}
+
 // 照合の応答が、送った旅程の「根拠（placeIdと証拠）だけ」を変えたものか。
-// 予定の内容・時刻・固定・学びの反映が変わっていれば採用しない。
+// 根拠以外の項目が変わっていれば採用しない。項目を手で並べず、旅程全体を比べる（項目が増えても漏れない）。
 const contentOf = (trip: Trip): string =>
-  JSON.stringify([
-    trip.id,
-    trip.version,
-    trip.date,
-    trip.region,
-    trip.timeZone,
-    trip.preferences,
-    trip.stops.map((stop) => [
-      stop.id,
-      stop.name,
-      stop.plannedStartTime,
-      stop.durationMinutes,
-      stop.isFixed,
-      // 種別も、照合では変わらない。変更・削除・追加された応答は採用しない。
-      stop.kind ?? null,
-    ]),
-    trip.learningApplications,
-  ])
+  JSON.stringify(
+    sortKeys({
+      ...trip,
+      stops: trip.stops.map((stop) => ({ ...stop, placeId: null, evidence: [] })),
+    }),
+  )
 
 const sameAsSent = (sent: Trip, received: Trip): boolean => contentOf(sent) === contentOf(received)
 

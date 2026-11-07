@@ -49,7 +49,20 @@ export function compareNames(generated: string, found: string): NameMatchKind {
   return a.full === b.full ? 'exact' : 'none'
 }
 
-const REGION_SUFFIX = /(周辺|付近|近辺|エリア|地区|方面|一帯)$/
+const REGION_SUFFIX = /(周辺|付近|近辺|エリア|地区|方面|一帯|市内|県内|府内|都内|区内|町内|村内)$/
+
+// 語尾は、重なっていても（「東山エリア周辺」）、すべて外す。
+const stripRegionSuffixes = (token: string): string => {
+  let result = token
+  for (
+    let next = result.replace(REGION_SUFFIX, '');
+    next !== result;
+    next = result.replace(REGION_SUFFIX, '')
+  ) {
+    result = next
+  }
+  return result
+}
 
 // 地域を、要素（「京都・東山」なら「京都」「東山」）に分ける。
 export function regionTokens(region: string): string[] {
@@ -59,8 +72,8 @@ export function regionTokens(region: string): string[] {
       .toLowerCase()
       // 括弧書きの補足（「（架空デモ）」など）は、地域の語に含めない。
       .replace(/\([^)]*\)/g, '')
-      .split(/[・･,、，/／\s]+/)
-      .map((token) => token.replace(REGION_SUFFIX, ''))
+      .split(/[・･,、，/／\s\-–—−〜~]+/)
+      .map(stripRegionSuffixes)
       .filter((token) => token.length > 0)
   )
 }
