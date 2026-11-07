@@ -18,6 +18,16 @@ const approvedRevision = {
   approval: { status: 'approved' as const, decidedAt: '2026-11-08T12:10:00+09:00' },
 }
 
+// 承認済みで、実際の報告に基づく変更（学びの材料にできる）。
+const actualRevision = {
+  ...approvedRevision,
+  id: 'revision-actual',
+  context: {
+    phase: 'on_site' as const,
+    report: { kind: 'actual' as const, description: '昼食店Aが臨時休業だった' },
+  },
+}
+
 const baseInput = LearningReviewInputSchema.parse({
   trip: sampleTrip,
   revisions: [approvedRevision],
@@ -100,8 +110,12 @@ describe('generateLearningCandidates: 正常系', () => {
     expect(response.status === 'proposed' && response.learnings).toHaveLength(1)
   })
 
-  it('承認済みの変更だけでも（感想が空でも）、候補を作れる', async () => {
-    const input = LearningReviewInputSchema.parse({ ...baseInput, feedback: '' })
+  it('承認済みで、実際の報告に基づく変更だけでも（感想が空でも）、候補を作れる', async () => {
+    const input = LearningReviewInputSchema.parse({
+      ...baseInput,
+      revisions: [actualRevision],
+      feedback: '',
+    })
     const { response } = await run(clientReturning(draft(validCandidates)), input)
 
     expect(response.status).toBe('proposed')
@@ -112,6 +126,19 @@ describe('generateLearningCandidates: 材料が無い・AIが作れない', () =
   it('感想も承認済みの変更も無ければ、AIを呼ばずに情報不足とする', async () => {
     const client = clientReturning(draft(validCandidates))
     const input = LearningReviewInputSchema.parse({ ...baseInput, revisions: [], feedback: '' })
+    const { response } = await run(client, input)
+
+    expect(response.status).toBe('insufficient_information')
+    expect(client.generateJson).not.toHaveBeenCalled()
+  })
+
+  it('感想なし＋模擬報告のみ（承認済み）なら、AIを呼ばずに情報不足とする', async () => {
+    const client = clientReturning(draft(validCandidates))
+    const input = LearningReviewInputSchema.parse({
+      ...baseInput,
+      revisions: [approvedRevision],
+      feedback: '',
+    })
     const { response } = await run(client, input)
 
     expect(response.status).toBe('insufficient_information')
@@ -217,20 +244,34 @@ describe('入力の検証とプロンプト', () => {
     ).toBe(true)
   })
 
-  it('模擬報告に基づく変更は、simulated=true として渡し、未承認の変更は渡さない', () => {
+  it('感想＋模擬報告：模擬報告はプロンプトへ含めない（感想は渡す）', () => {
+    const { prompt } = buildCandidatesPrompt(baseInput)
+    const data = JSON.parse(prompt.slice(prompt.indexOf('{')))
+
+    expect(data.changes).toEqual([])
+    expect(data.feedback).toBe('昼食後は少し休みたかった。')
+    expect(prompt).not.toContain('臨時休業')
+    expect(prompt).not.toContain('昼食店B')
+  })
+
+  it('実報告と模擬報告の混在：実報告だけを材料にし、未承認の変更は渡さない', () => {
+    const simulatedOnly = { ...approvedRevision, id: 'revision-simulated', reason: '模擬の理由' }
     const input = LearningReviewInputSchema.parse({
       ...baseInput,
-      revisions: [approvedRevision, { ...sampleRevision, id: 'revision-pending' }],
+      revisions: [
+        simulatedOnly,
+        actualRevision,
+        { ...sampleRevision, id: 'revision-pending', reason: '未承認の理由' },
+      ],
     })
     const { prompt } = buildCandidatesPrompt(input)
     const data = JSON.parse(prompt.slice(prompt.indexOf('{')))
 
     expect(data.changes).toHaveLength(1)
-    expect(data.changes[0]).toMatchObject({
-      simulated: true,
-      phase: 'on_site',
-      from: '昼食店A（架空）',
-    })
+    expect(data.changes[0]).toMatchObject({ phase: 'on_site', from: '昼食店A（架空）' })
+    expect(prompt).not.toContain('模擬の理由')
+    expect(prompt).not.toContain('未承認の理由')
+    expect(prompt).not.toContain('simulated')
   })
 
   it('旅程のIDや根拠など、学びに不要な情報はAIに渡さない', () => {
