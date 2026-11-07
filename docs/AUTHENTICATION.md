@@ -267,13 +267,16 @@ CIに両Emulatorの専用ジョブを追加し、本番認証情報を渡さな�
 
 ## 公開前に必要なApp Check・利用制限
 
-**App Check・利用者別/全体の利用制限は未実装。有料APIを安全に公開できる状態ではない。**
+**App Checkと利用回数・同時実行の全体制限は未実装。Firestore保存APIと有料APIの一般公開は保留する。**
 今回有料APIは追加していない。認証API自体の大量アクセス・匿名アカウント大量作成のリスクも残る。
 
 既存の`POST /api/trips/generate`にも認証・App Check・利用制限はまだ接続していない。
 `.env.example`の`TRIP_GENERATION_ENABLED=false`を維持し、公開前に次を引き継ぐ。
 
-- #10：`requireActor`による検証済みUIDの境界を提供し、#6/#7/#9のAPIへの適用と認可を確認する。
+- #10：保存APIは `PERSISTENCE_ENABLED=false` が既定。UID別の保存枠・一覧上限・入力上限を適用する。
+  公開前に対象DB、ADC/IAM、全拒否Rules、負荷と停止手順を確認する。
+- #29：認証後のApp Checkまたは代替策、UID別・全体の回数と同時実行制限、GCPクォータ・予算通知・停止手順を整える。
+  保存枠は匿名UIDの量産や読み書きの繰り返しを防げないため、Firestore保存APIにも公開前保護を適用する。
 - #6（Gemini）/#7（Places/Routes）：認証・App Checkの検証後、UID別と全体の共有利用枠を
   原子的に予約してから有料呼び出しを行う。未認証・不正App Check・枠超過・枠確認失敗では呼び出さない。
 - #16：明示的な匿名利用開始、Bearer IDトークンとApp Checkトークンの送信を画面へ接続する。

@@ -9,11 +9,10 @@ import { FirestoreTripStore } from '@/server/persistence/trips'
 export const runtime = 'nodejs'
 
 export function GET(request: Request): Promise<Response> {
-  return withDataActor(request, async (actor) =>
-    dataResponse(TripListResponseSchema, {
-      trips: await new FirestoreTripStore().listTrips(actor),
-    }),
-  )
+  return withDataActor(request, async (actor) => {
+    const { items: trips, listInfo } = await new FirestoreTripStore().listTrips(actor)
+    return dataResponse(TripListResponseSchema, { trips, listInfo })
+  })
 }
 
 export function POST(request: Request): Promise<Response> {

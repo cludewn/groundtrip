@@ -5,6 +5,7 @@ import type { z } from 'zod'
 import { AuthError, authErrorResponse, requireActor, type Actor } from '@/lib/auth/server'
 
 import { readBodyWithLimit } from '../http'
+import { diagnosePersistenceFailure } from './diagnostics'
 import { parseInput, parseStored, PersistenceError } from './errors'
 
 const headers = { 'Cache-Control': 'private, no-store' }
@@ -15,11 +16,13 @@ export async function withDataActor(
   action: (actor: Actor) => Promise<Response>,
 ): Promise<Response> {
   try {
+    if (process.env.PERSISTENCE_ENABLED?.trim() !== 'true') {
+      throw new PersistenceError('persistence_disabled')
+    }
     return await action(await requireActor(request))
   } catch (error) {
     if (error instanceof AuthError) return authErrorResponse(error)
-    const failure =
-      error instanceof PersistenceError ? error : new PersistenceError('storage_unavailable')
+    const failure = diagnosePersistenceFailure(error)
     return Response.json(
       { error: { code: failure.code, message: failure.message } },
       { status: failure.status, headers },

@@ -1,14 +1,14 @@
 import 'server-only'
 
-import { ApprovedLearningSchema, type ApprovedLearning } from '@/domain'
+import type { ApprovedLearning } from '@/domain'
 import { AuthError, type Actor } from '@/lib/auth/server'
 import { getAdminFirestore } from '@/lib/firebase/admin'
 import { approveLearning, editLearning } from '@/lib/learnings/lifecycle'
 
-import { LearningStoreError, type LearningStore } from '../learnings/store'
+import type { LearningStore } from '../learnings/store'
 import {
   ApproveLearningBodySchema,
-  RecordIdSchema,
+  LearningIdSchema,
   VersionSchema,
   type ApproveLearningBody,
   type VersionedLearning,
@@ -20,9 +20,10 @@ import {
   toRevokedLearningDocument,
 } from './dto'
 import { parseInput, PersistenceError } from './errors'
-import { found, ownedCollection, readOwned, recordKey } from './paths'
+import { LEARNING_LIMIT, reserveDocumentSlot } from './limits'
+import { found, listOwned, ownedCollection, readOwned, recordKey } from './paths'
 
-export class FirestoreLearningStore implements LearningStore {
+export class FirestoreLearningStore implements Pick<LearningStore, 'listApproved' | 'remove'> {
   constructor(private readonly db = getAdminFirestore()) {}
 
   private learnings(actor: Actor) {
@@ -32,35 +33,30 @@ export class FirestoreLearningStore implements LearningStore {
   async approve(actor: Actor, id: string, input: ApproveLearningBody): Promise<VersionedLearning> {
     const { expectedVersion, ...draft } = parseInput(ApproveLearningBodySchema, input)
     const edited = editLearning(
-      { ...draft, id: parseInput(RecordIdSchema, id), approval: { status: 'pending' } },
+      { ...draft, id: parseInput(LearningIdSchema, id), approval: { status: 'pending' } },
       draft,
     )
     if (!edited.ok) throw new PersistenceError('invalid_request')
     // この専用操作を認証済み本人が送った時だけ、サーバーで承認を発行する。
     const learning = approveLearning(edited.learning, new Date().toISOString())
-    await this.saveApproved(actor.uid, learning, expectedVersion)
+    await this.#saveApproved(actor, learning, expectedVersion)
     return { version: expectedVersion + 1, learning }
   }
 
-  // 信頼済みサーバー処理専用。HTTP入力からApprovedLearningを直接渡さない。
-  async saveApproved(ownerUid: string, learning: ApprovedLearning, expectedVersion: number) {
-    const parsed = ApprovedLearningSchema.safeParse(learning)
-    if (!parsed.success) {
-      throw new LearningStoreError('not_approved', '承認済みの学びだけを保存できます')
-    }
-    const approved = parsed.data
-    const actor = { uid: ownerUid }
-    const ref = this.learnings(actor).doc(recordKey(approved.id))
+  // 承認の発行はapproveに限定する。
+  async #saveApproved(actor: Actor, approved: ApprovedLearning, version: number) {
+    const collection = this.learnings(actor)
+    const ref = collection.doc(recordKey(approved.id))
     const source = ownedCollection(this.db, actor, 'trips').doc(recordKey(approved.sourceTripId))
-    const version = parseInput(VersionSchema, expectedVersion)
     const document = toLearningDocument(actor, { version: version + 1, learning: approved })
 
     await this.db.runTransaction(async (transaction) => {
       const [snapshot, tripSnapshot] = await transaction.getAll(ref, source)
       const trip = found(readOwned(actor, tripSnapshot, fromTripDocument))
       const current = readOwned(actor, snapshot, fromLearningDocument)
+      if (current === null) throw new PersistenceError('learning_revoked')
       if (!current && version !== 0) throw new AuthError('not_found')
-      if (current === null || (current?.version ?? 0) !== version) {
+      if ((current?.version ?? 0) !== version) {
         throw new PersistenceError('version_conflict')
       }
       if (
@@ -71,6 +67,7 @@ export class FirestoreLearningStore implements LearningStore {
       ) {
         throw new PersistenceError('invalid_request')
       }
+      if (!current) await reserveDocumentSlot(transaction, collection, LEARNING_LIMIT)
       transaction.set(ref, document)
     })
   }
@@ -80,13 +77,16 @@ export class FirestoreLearningStore implements LearningStore {
     return found(readOwned(actor, snapshot, fromLearningDocument))
   }
 
-  async list(actor: Actor): Promise<VersionedLearning[]> {
-    const result = await this.learnings(actor).where('ownerUid', '==', actor.uid).get()
-    return result.docs.flatMap((doc) => readOwned(actor, doc, fromLearningDocument) ?? [])
+  async list(actor: Actor) {
+    return listOwned(actor, this.learnings(actor), LEARNING_LIMIT, fromLearningDocument)
   }
 
   async listApproved(ownerUid: string): Promise<ApprovedLearning[]> {
-    return (await this.list({ uid: ownerUid })).map(({ learning }) => learning)
+    const { items, listInfo } = await this.list({ uid: ownerUid })
+    if (listInfo.skippedInvalid || listInfo.truncated) {
+      throw new PersistenceError('invalid_stored_data')
+    }
+    return items.map(({ learning }) => learning)
   }
 
   async remove(ownerUid: string, id: string, expectedVersion: number): Promise<boolean> {

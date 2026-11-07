@@ -78,7 +78,7 @@ export class InMemoryLearningStore implements LearningStore {
 
 // 次回の旅程生成に渡す学び。サーバーが自分でストアから取り出し、クライアントの自己申告を信用しない。
 export async function getApplicableLearnings(
-  store: LearningStore,
+  store: Pick<LearningStore, 'listApproved'>,
   ownerUid: string,
   region: string,
 ): Promise<ApprovedLearning[]> {

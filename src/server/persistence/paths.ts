@@ -1,10 +1,11 @@
 import 'server-only'
 
-import type { DocumentSnapshot, Firestore } from 'firebase-admin/firestore'
+import type { CollectionReference, DocumentSnapshot, Firestore } from 'firebase-admin/firestore'
 
 import { AuthError, requireOwner, type Actor } from '@/lib/auth/server'
 
 import { RecordIdSchema } from './contracts'
+import { reportPersistenceFailure } from './diagnostics'
 import { parseInput, PersistenceError } from './errors'
 
 // 通常のIDはそのまま使い、区切り文字や予約名を含むIDは同じドメインIDのまま安全なキーに変換する。
@@ -40,4 +41,30 @@ export function readOwned<T>(
 export function found<T>(record: T | null | undefined): T {
   if (record == null) throw new AuthError('not_found')
   return record
+}
+
+export async function listOwned<T>(
+  actor: Actor,
+  collection: CollectionReference,
+  limit: number,
+  decode: (data: unknown, key: string) => T | null,
+) {
+  const { docs } = await collection.limit(limit + 1).get()
+  const items: T[] = []
+  let skippedInvalid = 0
+  for (const doc of docs.slice(0, limit)) {
+    try {
+      const item = readOwned(actor, doc, decode)
+      if (item != null) items.push(item)
+    } catch (error) {
+      if (error instanceof AuthError && error.code === 'not_found') continue
+      if (!(error instanceof PersistenceError) || error.code !== 'invalid_stored_data') throw error
+      skippedInvalid += 1
+    }
+  }
+  if (skippedInvalid > 0) reportPersistenceFailure('stored_document_invalid')
+  return {
+    items,
+    listInfo: { returned: items.length, skippedInvalid, truncated: docs.length > limit },
+  }
 }

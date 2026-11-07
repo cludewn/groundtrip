@@ -45,7 +45,14 @@ describe('Firestore DTO', () => {
       const document = toTripDocument(actor, { ...trip, stops: [enriched, ...trip.stops.slice(1)] })
       expect(document.ownerUid).toBe(actor.uid)
       expect(document.trip.stops[0]).toMatchObject({ planName: enriched.name, placeId })
-      expect(document.trip.stops[0]).not.toHaveProperty('name')
+      expect(Object.keys(document.trip.stops[0]).sort()).toEqual([
+        'durationMinutes',
+        'id',
+        'isFixed',
+        'placeId',
+        'planName',
+        'plannedStartTime',
+      ])
       expect(JSON.stringify(document)).not.toMatch(/evidence|Places表示名|営業時間|09:00/)
       const stored = fromTripDocument(document, trip.id)
       expect(stored).toMatchObject({ id: trip.id, version: 0 })

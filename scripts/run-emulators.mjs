@@ -37,6 +37,7 @@ const args = [
   'auth,firestore',
 ]
 if (mode === 'test') {
+  env.PERSISTENCE_ENABLED = 'true'
   args.push('pnpm exec vitest run --config vitest.integration.config.ts')
 }
 const child = spawn(process.execPath, args, { env, stdio: 'inherit' })

@@ -96,7 +96,7 @@ const UNCHECKED_REVISION = {
   constraintCheck: { status: 'not_checked', explanation: '制約は再確認が必要です。' },
 } as const
 
-// Stop.nameは本人入力・AI提案の予定名。PlacesのdisplayNameは照合処理内で別に扱う。
+// Stop.nameは本人入力・AI提案の予定名。PlaceCandidate.nameは照合処理内で別に扱う。
 // Place IDは再照会用の参照であり、evidenceやPlace IDから予定名の出所を推定しない。
 export function toStopDto(stop: Stop): z.infer<typeof PlanStopDtoSchema> {
   return PlanStopDtoSchema.parse({

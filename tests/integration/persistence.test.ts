@@ -21,10 +21,19 @@ import { getAdminAuth, getAdminFirestore } from '@/lib/firebase/admin'
 import { editLearning, rejectLearning } from '@/lib/learnings/lifecycle'
 import { getApplicableLearnings } from '@/server/learnings/store'
 import {
+  LearningListResponseSchema,
+  PendingRevisionSchema,
   RevisionResponseSchema,
+  TripListResponseSchema,
   TripResponseSchema,
   VersionedLearningSchema,
 } from '@/server/persistence/contracts'
+import {
+  toRevisionDocument,
+  toRevokedLearningDocument,
+  toTripDocument,
+} from '@/server/persistence/dto'
+import { LEARNING_LIMIT, REVISION_LIMIT, TRIP_LIMIT } from '@/server/persistence/limits'
 import { FirestoreLearningStore } from '@/server/persistence/learnings'
 
 const apps: FirebaseApp[] = []
@@ -53,6 +62,7 @@ let b: typeof a
 
 const tripInput = (id: string) => ({ ...sampleTrip, id, learningApplications: [] })
 const context = <T>(params: T) => ({ params: Promise.resolve(params) })
+const completeList = (returned: number) => ({ returned, skippedInvalid: 0, truncated: false })
 
 async function saveTrip(id: string, session = a) {
   const response = await createTrip(session.request('POST', tripInput(id)))
@@ -96,7 +106,10 @@ describe('Firestore Emulator＋認証済みRoute Handlers', () => {
     expect(TripResponseSchema.parse(await own.json()).trip).toEqual(trip)
     expect(trip.stops[0]).toMatchObject({ isFixed: true, evidence: [] })
     expect(await (await listTrips(a.request())).json()).toMatchObject({ trips: [trip] })
-    expect(await (await listTrips(b.request())).json()).toEqual({ trips: [] })
+    expect(await (await listTrips(b.request())).json()).toEqual({
+      trips: [],
+      listInfo: completeList(0),
+    })
     const wrongOwner = await getTrip(b.request(), params)
     const missing = await getTrip(a.request(), context({ tripId: 'missing-trip' }))
     expect(wrongOwner.status).toBe(404)
@@ -278,7 +291,10 @@ describe('Firestore Emulator＋認証済みRoute Handlers', () => {
     expect(stored.approval.status).toBe('pending')
     expect(stored.constraintCheck.status).toBe('not_checked')
     expect(await (await getRevision(a.request(), itemParams)).json()).toEqual({ revision: stored })
-    expect(await (await listRevisions(a.request(), params)).json()).toEqual({ revisions: [stored] })
+    expect(await (await listRevisions(a.request(), params)).json()).toEqual({
+      revisions: [stored],
+      listInfo: completeList(1),
+    })
     await expectCode(await getRevision(b.request(), itemParams), 404, 'not_found')
     await expectCode(await listRevisions(b.request(), params), 404, 'not_found')
     await expectCode(await saveRevision(a.request('POST', revision), params), 409, 'already_exists')
@@ -304,15 +320,15 @@ describe('Firestore Emulator＋認証済みRoute Handlers', () => {
       400,
       'invalid_request',
     )
-    // 実行時の入力防御も確認する。型の契約を迂回した直接呼び出しで候補を保存できない。
-    await expect(
-      Reflect.apply(store.saveApproved, store, [a.uid, sampleLearning, 0]),
-    ).rejects.toMatchObject({ code: 'not_approved' })
+    expect(store).not.toHaveProperty('saveApproved')
 
     const first = VersionedLearningSchema.parse(await (await approve(initial)).json())
     expect(first).toMatchObject({ version: 1, learning: { id, approval: { status: 'approved' } } })
     expect(await (await getLearning(a.request(), params)).json()).toEqual(first)
-    expect(await (await listLearnings(b.request())).json()).toEqual({ learnings: [] })
+    expect(await (await listLearnings(b.request())).json()).toEqual({
+      learnings: [],
+      listInfo: completeList(0),
+    })
     expect(await getApplicableLearnings(store, a.uid, trip.region)).toEqual([first.learning])
     expect(await getApplicableLearnings(store, a.uid, '対象外の地域')).toEqual([])
     await expectCode(await getLearning(b.request(), params), 404, 'not_found')
@@ -328,10 +344,15 @@ describe('Firestore Emulator＋認証済みRoute Handlers', () => {
     if (!edited.ok) throw new Error('テストの下書きが不正です')
     const rejected = rejectLearning(edited.learning, '2026-11-07T00:00:00Z')
     for (const draft of [edited.learning, rejected]) {
-      await expect(
-        Reflect.apply(store.saveApproved, store, [a.uid, draft, first.version]),
-      ).rejects.toMatchObject({ code: 'not_approved' })
-      expect(await (await listLearnings(a.request())).json()).toEqual({ learnings: [first] })
+      await expectCode(
+        await approve({ ...initial, approval: draft.approval }),
+        400,
+        'invalid_request',
+      )
+      expect(await (await listLearnings(a.request())).json()).toEqual({
+        learnings: [first],
+        listInfo: completeList(1),
+      })
     }
 
     const next = learningInput(trip.id, 1, '訪問前に営業日を確認したい')
@@ -350,7 +371,7 @@ describe('Firestore Emulator＋認証済みRoute Handlers', () => {
       (await revokeLearning(a.request('DELETE', undefined, '?expectedVersion=2'), params)).status,
     ).toBe(204)
     await expectCode(await getLearning(a.request(), params), 404, 'not_found')
-    await expectCode(await approve(initial), 409, 'version_conflict')
+    await expectCode(await approve(initial), 409, 'learning_revoked')
     expect(await store.listApproved(a.uid)).toEqual([])
     const raw = await getAdminFirestore().doc(`users/${a.uid}/learnings/${id}`).get()
     expect(raw.data()).toMatchObject({ state: 'revoked', id })
@@ -366,11 +387,13 @@ describe('Firestore Emulator＋認証済みRoute Handlers', () => {
     const original = await first.json()
 
     const db = getAdminFirestore()
+    const quota = db.doc(`users/${a.uid}/persistenceLimits/trips`)
+    const originalQuota = (await quota.get()).data()
     const runTransaction = db.runTransaction.bind(db)
     const failure = vi.spyOn(db, 'runTransaction').mockImplementation((operation) =>
       runTransaction(async (transaction) => {
         await operation(transaction)
-        throw new Error('injected failure before commit')
+        throw Object.assign(new Error('injected failure before commit'), { code: 7 })
       }),
     )
     try {
@@ -384,13 +407,24 @@ describe('Firestore Emulator＋認証済みRoute Handlers', () => {
         learningParams,
       )
       await expectCode(approve, 503, 'storage_unavailable')
-      expect(failure).toHaveBeenCalledTimes(2)
+      await expectCode(
+        await createTrip(a.request('POST', tripInput('rollback-new-trip'))),
+        503,
+        'storage_unavailable',
+      )
+      expect(failure).toHaveBeenCalledTimes(3)
     } finally {
       failure.mockRestore()
     }
 
     expect(await (await getTrip(a.request(), tripParams)).json()).toEqual({ trip })
     expect(await (await getLearning(a.request(), learningParams)).json()).toEqual(original)
+    expect((await quota.get()).data()).toEqual(originalQuota)
+    await expectCode(
+      await getTrip(a.request(), context({ tripId: 'rollback-new-trip' })),
+      404,
+      'not_found',
+    )
   })
 
   it('DB内の所有者不一致を404にし、本人データの破損は安全な500にする', async () => {
@@ -424,3 +458,155 @@ describe('Firestore Emulator＋認証済みRoute Handlers', () => {
     await expectCode(await listTrips(disabled.request()), 401, 'session_revoked')
   })
 })
+
+describe('Firestoreの保存枠と一覧', () => {
+  it('先行文書を含め、Trip・Revision・Learningの最後の枠を並行作成でも一度だけ使える', async () => {
+    const session = await createSession('persistence-limits')
+    const actor = { uid: session.uid }
+    const db = getAdminFirestore()
+    const user = db.collection('users').doc(session.uid)
+    const trips = user.collection('trips')
+    const legacy = db.batch()
+    for (let index = 0; index < TRIP_LIMIT - 1; index += 1) {
+      const id = `legacy-trip-${index}`
+      legacy.set(trips.doc(id), toTripDocument(actor, tripInput(id)))
+    }
+    await legacy.commit()
+
+    const tripResults = await Promise.all(
+      ['trip-a', 'trip-b'].map((id) => createTrip(session.request('POST', tripInput(id)))),
+    )
+    const trip = TripResponseSchema.parse(await checkOneSlot(tripResults)).trip
+    const listed = TripListResponseSchema.parse(await (await listTrips(session.request())).json())
+    expect(listed.trips).toHaveLength(TRIP_LIMIT)
+    expect(listed.listInfo).toEqual(completeList(TRIP_LIMIT))
+
+    const seed = db.batch()
+    const revisions = trips.doc(trip.id).collection('revisions')
+    const learnings = user.collection('learnings')
+    const candidate = {
+      ...sampleRevision,
+      tripId: trip.id,
+      diff: { ...sampleRevision.diff, before: trip.stops[1] },
+    }
+    for (let index = 0; index < REVISION_LIMIT - 1; index += 1) {
+      const id = `legacy-revision-${index}`
+      const revision = PendingRevisionSchema.parse({ ...candidate, id })
+      seed.set(revisions.doc(id), toRevisionDocument(actor, revision))
+    }
+    for (let index = 0; index < LEARNING_LIMIT - 1; index += 1) {
+      const id = `revoked-${index}`
+      seed.set(learnings.doc(id), toRevokedLearningDocument(actor, id))
+    }
+    await seed.commit()
+
+    const tripContext = context({ tripId: trip.id })
+    await checkOneSlot(
+      await Promise.all(
+        ['revision-a', 'revision-b'].map((id) =>
+          saveRevision(session.request('POST', { ...candidate, id }), tripContext),
+        ),
+      ),
+    )
+    expect(await (await listRevisions(session.request(), tripContext)).json()).toMatchObject({
+      listInfo: completeList(REVISION_LIMIT),
+    })
+
+    const approve = (id: string, version = 0) =>
+      approveLearning(
+        session.request('POST', learningInput(trip.id, version)),
+        context({ learningId: id }),
+      )
+    const approved = VersionedLearningSchema.parse(
+      await checkOneSlot(await Promise.all([approve('learning-a'), approve('learning-b')])),
+    )
+    expect((await approve(approved.learning.id, approved.version)).status).toBe(200)
+    expect(await (await listLearnings(session.request())).json()).toMatchObject({
+      listInfo: completeList(1),
+    })
+    expect(
+      (
+        await revokeLearning(
+          session.request('DELETE', undefined, '?expectedVersion=2'),
+          context({ learningId: approved.learning.id }),
+        )
+      ).status,
+    ).toBe(204)
+    await expectCode(await approve('replacement'), 409, 'storage_limit_reached')
+
+    // 制限導入前などの超過文書も、一度の一覧では上限まで返す。
+    await trips.doc('overflow-trip').set(toTripDocument(actor, tripInput('overflow-trip')))
+    const truncated = TripListResponseSchema.parse(
+      await (await listTrips(session.request())).json(),
+    )
+    expect(truncated.trips).toHaveLength(TRIP_LIMIT)
+    expect(truncated.listInfo).toEqual({ ...completeList(TRIP_LIMIT), truncated: true })
+  })
+
+  it('破損したTripとLearningを一覧から除外し、件数を明示する。個別取得では500になる', async () => {
+    const session = await createSession('persistence-corrupt-list')
+    const trip = await saveTrip('valid-trip', session)
+    const learning = await approveLearning(
+      session.request('POST', learningInput(trip.id)),
+      context({ learningId: 'valid-learning' }),
+    )
+    expect(learning.status).toBe(200)
+
+    const user = getAdminFirestore().collection('users').doc(session.uid)
+    await user
+      .collection('trips')
+      .doc('bad-trip')
+      .set({ trip: { data: 'private plan' } })
+    await user
+      .collection('learnings')
+      .doc('bad-learning')
+      .set({
+        ownerUid: session.uid,
+        state: 'approved',
+        learning: { content: 'private learning' },
+      })
+    const [tripList, learningList] = await Promise.all([
+      listTrips(session.request()),
+      listLearnings(session.request()),
+    ])
+    expect(tripList.status).toBe(200)
+    expect(learningList.status).toBe(200)
+    const trips = TripListResponseSchema.parse(await tripList.json())
+    const learnings = LearningListResponseSchema.parse(await learningList.json())
+    const listInfo = { returned: 1, skippedInvalid: 1, truncated: false }
+    expect(trips).toEqual({ trips: [trip], listInfo })
+    expect(learnings).toEqual({ learnings: [await learning.json()], listInfo })
+    await expectCode(
+      await getTrip(session.request(), context({ tripId: 'bad-trip' })),
+      500,
+      'invalid_stored_data',
+    )
+    await expectCode(
+      await getLearning(session.request(), context({ learningId: 'bad-learning' })),
+      500,
+      'invalid_stored_data',
+    )
+    await expect(new FirestoreLearningStore().listApproved(session.uid)).rejects.toMatchObject({
+      code: 'invalid_stored_data',
+    })
+  })
+
+  it.each(['a/b', '__proto__', '%2F', '旅程-𠮷'])(
+    '特殊なTrip ID %s をRoute Handlerから保存・取得できる',
+    async (id) => {
+      const trip = await saveTrip(id, b)
+      const response = await getTrip(b.request(), context({ tripId: id }))
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual({ trip })
+    },
+  )
+})
+
+async function checkOneSlot(responses: Response[]): Promise<unknown> {
+  const accepted = responses.filter(({ ok }) => ok)
+  const denied = responses.filter(({ ok }) => !ok)
+  expect(accepted).toHaveLength(1)
+  expect(denied).toHaveLength(1)
+  await expectCode(denied[0], 409, 'storage_limit_reached')
+  return accepted[0].json()
+}

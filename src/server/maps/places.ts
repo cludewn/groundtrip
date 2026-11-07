@@ -78,7 +78,7 @@ export interface PlaceCandidate {
   placeId: string
   // Places由来の一時データ。照合に使い、Stop.nameへ転記しない。
   // 取得できなければ空文字。名称の一致判定の対象にならず、「確認できない」にすること。
-  displayName: string
+  name: string
   address?: string
   location?: { latitude: number; longitude: number }
   businessStatus?: string
@@ -162,7 +162,7 @@ export async function searchPlaces(
       const periods = place.regularOpeningHours?.periods
       return {
         placeId: place.id,
-        displayName: place.displayName?.text ?? '',
+        name: place.displayName?.text ?? '',
         address: place.formattedAddress,
         location: place.location,
         businessStatus: place.businessStatus,

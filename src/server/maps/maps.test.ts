@@ -87,7 +87,7 @@ describe('Places: searchPlaces', () => {
       candidates: [
         {
           placeId: 'ChIJ-sample-1',
-          displayName: '清水寺',
+          name: '清水寺',
           address: '日本、京都府京都市東山区清水１丁目２９４',
           location: { latitude: 34.9949, longitude: 135.785 },
           businessStatus: 'OPERATIONAL',
@@ -169,7 +169,7 @@ describe('Places: searchPlaces', () => {
 
     expect(result.status === 'found' && result.candidates[0]).toMatchObject({
       placeId: 'ChIJ-noname',
-      displayName: '',
+      name: '',
     })
   })
 

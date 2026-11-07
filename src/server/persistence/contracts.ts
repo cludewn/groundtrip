@@ -1,24 +1,61 @@
 import { z } from 'zod'
 
-import { ApprovedLearningSchema, LearningSchema, RevisionSchema, TripSchema } from '@/domain'
+import {
+  ApprovedLearningSchema,
+  LearningSchema,
+  RevisionSchema,
+  StopSchema,
+  TripSchema,
+} from '@/domain'
 import { IdSchema, TextSchema } from '@/domain/primitives'
 import { MAX_LEARNING_CONTENT_LENGTH } from '@/lib/learnings/lifecycle'
 
 export const RecordIdSchema = IdSchema.max(256).refine((id) => id.isWellFormed())
 export const VersionSchema = z.int().nonnegative()
 
-// 既存の旅程生成結果を本人が保存する。学びの反映情報は、後続のサーバー生成フローが設定する。
-export const CreateTripBodySchema = TripSchema.refine(
-  (trip) => trip.version === 0 && trip.learningApplications.length === 0,
-)
+// URLのドットセグメントはエンコードしても正規化される。
+const PathIdSchema = RecordIdSchema.refine((id) => id !== '.' && id !== '..')
+const tripRouteNames = new Set(['generate', 'verify', 'revise'])
+const TripIdSchema = PathIdSchema.refine((id) => !tripRouteNames.has(id))
+export const LearningIdSchema = PathIdSchema.refine((id) => id !== 'candidates')
+
+const RegionSchema = TextSchema.max(120)
+const PreferencesSchema = z.array(TextSchema.max(200)).max(16)
+const WriteStopSchema = StopSchema.safeExtend({
+  id: RecordIdSchema,
+  name: TextSchema.max(200),
+  placeId: IdSchema.max(1024).nullable(),
+  evidence: StopSchema.shape.evidence.max(16),
+})
+
+// 書き込みの上限は既存文書の読み取りには適用しない。
+export const CreateTripBodySchema = TripSchema.safeExtend({
+  id: TripIdSchema,
+  version: z.literal(0),
+  region: RegionSchema,
+  preferences: PreferencesSchema,
+  stops: z.array(WriteStopSchema).min(3).max(4),
+  learningApplications: TripSchema.shape.learningApplications.max(0),
+})
 
 export const UpdateTripBodySchema = z.strictObject({
   expectedVersion: VersionSchema,
-  preferences: z.array(TextSchema),
+  preferences: PreferencesSchema,
 })
 
 export const PendingRevisionSchema = RevisionSchema.safeExtend({
   approval: z.strictObject({ status: z.literal('pending') }),
+})
+
+export const SaveRevisionBodySchema = PendingRevisionSchema.safeExtend({
+  id: PathIdSchema,
+  tripId: RecordIdSchema,
+  targetStopId: RecordIdSchema,
+  reason: TextSchema.max(1000),
+  context: PendingRevisionSchema.shape.context.refine(
+    (context) => context.phase === 'planning' || context.report.description.length <= 1000,
+  ),
+  diff: z.strictObject({ before: WriteStopSchema, after: WriteStopSchema }),
 })
 
 export const ApproveLearningBodySchema = z.strictObject({
@@ -26,7 +63,9 @@ export const ApproveLearningBodySchema = z.strictObject({
   sourceTripId: RecordIdSchema,
   category: LearningSchema.shape.category,
   content: TextSchema.max(MAX_LEARNING_CONTENT_LENGTH),
-  scope: LearningSchema.shape.scope,
+  scope: LearningSchema.shape.scope.refine(
+    (scope) => scope.kind === 'all_trips' || RegionSchema.safeParse(scope.region).success,
+  ),
 })
 
 export const VersionedLearningSchema = z.strictObject({
@@ -35,13 +74,24 @@ export const VersionedLearningSchema = z.strictObject({
 })
 
 export const TripResponseSchema = z.strictObject({ trip: TripSchema })
-export const TripListResponseSchema = z.strictObject({ trips: z.array(TripSchema) })
+const ListInfoSchema = z.strictObject({
+  returned: z.int().nonnegative(),
+  skippedInvalid: z.int().nonnegative(),
+  truncated: z.boolean(),
+})
+
+export const TripListResponseSchema = z.strictObject({
+  trips: z.array(TripSchema),
+  listInfo: ListInfoSchema,
+})
 export const RevisionResponseSchema = z.strictObject({ revision: PendingRevisionSchema })
 export const RevisionListResponseSchema = z.strictObject({
   revisions: z.array(PendingRevisionSchema),
+  listInfo: ListInfoSchema,
 })
 export const LearningListResponseSchema = z.strictObject({
   learnings: z.array(VersionedLearningSchema),
+  listInfo: ListInfoSchema,
 })
 
 export type ApproveLearningBody = z.infer<typeof ApproveLearningBodySchema>

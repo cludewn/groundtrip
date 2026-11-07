@@ -6,7 +6,13 @@ import type { Trip } from '@/domain'
 import type { Actor } from '@/lib/auth/server'
 import { getAdminFirestore } from '@/lib/firebase/admin'
 
-import { RecordIdSchema, UpdateTripBodySchema, type PendingRevision } from './contracts'
+import {
+  CreateTripBodySchema,
+  RecordIdSchema,
+  SaveRevisionBodySchema,
+  UpdateTripBodySchema,
+  type PendingRevision,
+} from './contracts'
 import {
   fromRevisionDocument,
   fromTripDocument,
@@ -15,7 +21,8 @@ import {
   toTripDocument,
 } from './dto'
 import { parseInput, PersistenceError } from './errors'
-import { found, ownedCollection, readOwned, recordKey } from './paths'
+import { reserveDocumentSlot, REVISION_LIMIT, TRIP_LIMIT } from './limits'
+import { found, listOwned, ownedCollection, readOwned, recordKey } from './paths'
 
 export class FirestoreTripStore {
   constructor(private readonly db = getAdminFirestore()) {}
@@ -29,15 +36,16 @@ export class FirestoreTripStore {
   }
 
   async createTrip(actor: Actor, input: Trip): Promise<Trip> {
-    const document = toTripDocument(actor, input)
-    const ref = this.trip(actor, document.trip.id)
+    const document = toTripDocument(actor, parseInput(CreateTripBodySchema, input))
+    const collection = this.trips(actor)
+    const ref = collection.doc(recordKey(document.trip.id))
     const trip = fromTripDocument(document, ref.id)
-    if (trip.version !== 0) throw new PersistenceError('invalid_request')
 
     await this.db.runTransaction(async (transaction) => {
       if (readOwned(actor, await transaction.get(ref), fromTripDocument)) {
         throw new PersistenceError('already_exists')
       }
+      await reserveDocumentSlot(transaction, collection, TRIP_LIMIT)
       transaction.create(ref, document)
     })
     return trip
@@ -47,9 +55,8 @@ export class FirestoreTripStore {
     return found(readOwned(actor, await this.trip(actor, id).get(), fromTripDocument))
   }
 
-  async listTrips(actor: Actor): Promise<Trip[]> {
-    const result = await this.trips(actor).where('ownerUid', '==', actor.uid).get()
-    return result.docs.map((doc) => found(readOwned(actor, doc, fromTripDocument)))
+  async listTrips(actor: Actor) {
+    return listOwned(actor, this.trips(actor), TRIP_LIMIT, fromTripDocument)
   }
 
   async updatePreferences(
@@ -81,10 +88,11 @@ export class FirestoreTripStore {
     tripId: string,
     input: PendingRevision,
   ): Promise<PendingRevision> {
-    const document = toRevisionDocument(actor, input)
+    const document = toRevisionDocument(actor, parseInput(SaveRevisionBodySchema, input))
     const normalizedTripId = parseInput(RecordIdSchema, tripId)
     const tripRef = this.trip(actor, normalizedTripId)
-    const ref = tripRef.collection('revisions').doc(recordKey(document.revision.id))
+    const collection = tripRef.collection('revisions')
+    const ref = collection.doc(recordKey(document.revision.id))
     if (document.revision.tripId !== normalizedTripId) throw new PersistenceError('invalid_request')
     const revision = fromRevisionDocument(document, normalizedTripId, ref.id)
 
@@ -103,6 +111,7 @@ export class FirestoreTripStore {
       if (readOwned(actor, existing, (data, key) => fromRevisionDocument(data, trip.id, key))) {
         throw new PersistenceError('already_exists')
       }
+      await reserveDocumentSlot(transaction, collection, REVISION_LIMIT)
       transaction.create(ref, document)
     })
     return revision
@@ -119,14 +128,11 @@ export class FirestoreTripStore {
     )
   }
 
-  async listRevisions(actor: Actor, tripId: string): Promise<PendingRevision[]> {
+  async listRevisions(actor: Actor, tripId: string) {
     const trip = await this.getTrip(actor, tripId)
-    const result = await this.trip(actor, trip.id)
-      .collection('revisions')
-      .where('ownerUid', '==', actor.uid)
-      .get()
-    return result.docs.map((doc) =>
-      found(readOwned(actor, doc, (data, key) => fromRevisionDocument(data, trip.id, key))),
+    const collection = this.trip(actor, trip.id).collection('revisions')
+    return listOwned(actor, collection, REVISION_LIMIT, (data, key) =>
+      fromRevisionDocument(data, trip.id, key),
     )
   }
 }
