@@ -1,19 +1,35 @@
-import { getAuthHeaders } from '@/lib/auth/client'
-import { LearningListResponseSchema, type VersionedLearning } from '@/server/persistence/contracts'
+import {
+  getAuthHeadersForScope,
+  SessionChangedError,
+  type ScopedValue,
+  type SessionScope,
+} from '@/lib/auth/session-scope'
+import type { VersionedLearning } from '@/server/persistence/contracts'
+
+import { isSelectableLearningList, ReusableLearningListResponseSchema } from './learning-list'
 
 // 本人の保存済みの学びを取得する。取得失敗や不完全な一覧を空配列として扱わない。
+// 成功した一覧は、取得した認証セッション（SessionScope）と組にして返す。
+// 同じIDとversionでも別のUIDの学びは別物なので、利用側はこの組ごと保持し、
+// セッションが変わったら組ごと破棄する（docs/AUTHENTICATION.md「セッションスコープ」）。
 export type LearningLoadResult =
-  | { ok: true; items: VersionedLearning[] }
+  | { ok: true; learnings: ScopedValue<VersionedLearning[]> }
   | {
       ok: false
-      kind: 'session' | 'unavailable' | 'interrupted' | 'incomplete' | 'unexpected'
+      // session: 認証状態を確認できない（失効・復元失敗）。session_changed: 取得時のUIDから変わった。
+      kind:
+        'session' | 'session_changed' | 'unavailable' | 'interrupted' | 'incomplete' | 'unexpected'
       message: string
     }
 
 export interface LearningLoadOptions {
+  // 取得するセッション。このセッションのトークンで取得し、結果もこのセッションに結び付ける。
+  scope: SessionScope
   signal?: AbortSignal
   fetchFn?: typeof fetch
-  getHeaders?: () => Promise<Headers>
+  // 既定は getAuthHeadersForScope。UIDが scope と違えばトークンを出さずに失敗する。
+  // 現在のUIDで getAuthHeaders() を作り直す関数に差し替えてはいけない。
+  getHeaders?: (scope: SessionScope) => Promise<Headers>
 }
 
 const fail = (
@@ -22,17 +38,22 @@ const fail = (
 ): LearningLoadResult => ({ ok: false, kind, message })
 
 export async function loadApprovedLearningOptions({
+  scope,
   signal,
   fetchFn = fetch,
-  getHeaders = getAuthHeaders,
-}: LearningLoadOptions = {}): Promise<LearningLoadResult> {
+  getHeaders = getAuthHeadersForScope,
+}: LearningLoadOptions): Promise<LearningLoadResult> {
   let headers: Headers
   try {
-    headers = await getHeaders()
-    if (signal?.aborted) return fail('interrupted', '読み込みを中断しました。')
-  } catch {
+    headers = await getHeaders(scope)
+  } catch (error) {
+    // 取得前にUIDが変わっていた。別のUIDのトークンでは取得しない。
+    if (error instanceof SessionChangedError) {
+      return fail('session_changed', '認証状態が変わりました。学びを読み込み直してください。')
+    }
     return fail('session', '認証状態を確認できません。ログイン状態を確認してください。')
   }
+  if (signal?.aborted) return fail('interrupted', '読み込みを中断しました。')
 
   let response: Response
   try {
@@ -62,7 +83,10 @@ export async function loadApprovedLearningOptions({
   } catch {
     return fail('unexpected', 'サーバーからの応答を読み取れませんでした。')
   }
-  const parsed = LearningListResponseSchema.safeParse(body)
+  // 本文を読んでいる間に中断された応答は、結果として返さない。
+  if (signal?.aborted) return fail('interrupted', '読み込みを中断しました。')
+
+  const parsed = ReusableLearningListResponseSchema.safeParse(body)
   if (!parsed.success) {
     return fail('incomplete', '学びの一覧を安全に確認できません。')
   }
@@ -71,9 +95,9 @@ export async function loadApprovedLearningOptions({
     listInfo.truncated ||
     listInfo.skippedInvalid > 0 ||
     listInfo.returned !== learnings.length ||
-    new Set(learnings.map(({ learning }) => learning.id)).size !== learnings.length
+    !isSelectableLearningList(learnings)
   ) {
     return fail('incomplete', '学びの一覧に未取得または不正な項目があります。')
   }
-  return { ok: true, items: learnings }
+  return { ok: true, learnings: { scope, value: learnings } }
 }

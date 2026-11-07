@@ -48,6 +48,13 @@ export function normalizeLearningRegion(region: string): string {
   return region.trim()
 }
 
+// 次回の旅程づくりに使える本文の長さか。取得（クライアントのZod）・表示・サーバー採用の
+// 3か所で同じ関数を使い、境界ごとに判定がずれないようにする。
+// 既存文書の読み取り互換のため、ApprovedLearningSchemaは上限を持たない。上限はここで確かめる。
+export function isLearningContentReusable(learning: Pick<Learning, 'content'>): boolean {
+  return learning.content.length <= MAX_LEARNING_CONTENT_LENGTH
+}
+
 // 全地域向け、または適用地域が（正規化後に）一致する学びか。
 export function isLearningApplicableToRegion(learning: Learning, region: string): boolean {
   const { scope } = learning

@@ -3,62 +3,114 @@
 import { useEffect, useRef, useState, type ChangeEvent } from 'react'
 
 import type { ApprovedLearning } from '@/domain'
+import {
+  createSessionScope,
+  isSameScope,
+  type ScopedValue,
+  type SessionScope,
+} from '@/lib/auth/session-scope'
+import type { SessionScopeState } from '@/lib/auth/use-session-scope'
 import { normalizeLearningRegion, selectApplicableLearnings } from '@/lib/learnings/lifecycle'
 import type { LearningSelection, VersionedLearning } from '@/server/persistence/contracts'
 
 import { loadApprovedLearningOptions, type LearningLoadResult } from './api-client'
+import { isSelectableLearningList } from './learning-list'
+import type { ScopedLearningSelection } from './selection-scope'
 
-export type LoadLearningOptions = (signal: AbortSignal) => Promise<LearningLoadResult>
+// 読み込みは取得するセッション（scope）と中断用のsignalを受け取る。
+// 結果の一覧は、取得したセッションと組（ScopedValue）で返す。
+export type LoadLearningOptions = (
+  scope: SessionScope,
+  signal: AbortSignal,
+) => Promise<LearningLoadResult>
 
 interface LearningReusePickerProps {
   region: string
-  // 選んだ学びを、画面に表示した版つきで通知する。サーバーは版が現行と一致するときだけ採用する。
-  onSelectionChange?: (selection: LearningSelection[]) => void
+  // 親が useSessionScope() で得た認証状態。一覧・選択・進行中の読み込みは、このUID（と世代scopeEpoch）に
+  // 結び付ける。親が選択を保持するときも、同じ状態を使って古い選択を捨てる。
+  session: SessionScopeState
+  // 選んだ学びを、画面に表示した版と、選択時の認証セッションの組で通知する。
+  // 地域・UID・世代が変わった、読み込み中、失敗、アンマウントのときは null（選択なし）を通知する。
+  // 送信の直前に resolveSelectionForRequest で現在のセッションと照合してから使う。
+  // サーバーは版が現行と一致するときだけ採用する。
+  onSelectionChange?: (selection: ScopedLearningSelection | null) => void
   // テスト・他の画面での依存性注入に使う。省略時は本人のFirestore保存APIを読む。
-  // 読み込みは地域の変更と「再読み込み」のときだけ行い、この関数の差し替えでは再実行しない。
+  // 読み込みは地域・UID・世代の変更と「再読み込み」のときだけ行い、この関数の差し替えでは再実行しない。
   load?: LoadLearningOptions
 }
 
-type PickerState =
-  | { region: string; status: 'loading' }
-  | { region: string; status: 'error'; message: string }
+// 表示している一覧と選択が属する条件。どれかが変わったら別の条件として扱い、前の状態を表示しない。
+interface ViewKey {
+  region: string
+  uid: string | null
+  epoch: number
+}
+
+type LoadedView =
+  | { status: 'loading' }
+  | { status: 'error'; message: string }
   | {
-      region: string
       status: 'ready'
-      items: VersionedLearning[]
+      // 取得したセッションと組で保持する。選択はこのセッションに対するものとして通知する。
+      list: ScopedValue<VersionedLearning[]>
       selected: LearningSelection[]
     }
 
-const defaultLoad: LoadLearningOptions = (signal) => loadApprovedLearningOptions({ signal })
+interface PickerState {
+  key: ViewKey
+  view: LoadedView
+}
+
+// 画面に出す状態。認証状態が読み込みを始められないときは、保持している状態を使わない。
+type PickerView = LoadedView | { status: 'restoring' } | { status: 'blocked'; message: string }
+
+const sameKey = (a: ViewKey, b: ViewKey) =>
+  a.region === b.region && a.uid === b.uid && a.epoch === b.epoch
+
+const defaultLoad: LoadLearningOptions = (scope, signal) =>
+  loadApprovedLearningOptions({ scope, signal })
 
 const categoryLabels: Record<ApprovedLearning['category'], string> = {
   verification: '情報の確認について',
   preference: '好み・過ごし方について',
 }
 
+const clearedNotice =
+  '地域または認証状態が変わったため、選んでいた学びを解除しました。もう一度選んでください。'
+
 // 読み上げ用の常設領域に出す文。領域は常に描画し、中身だけを入れ替える
 // （中身と同時に挿入された領域は、読み上げられないことがある）。
-function statusMessage(state: PickerState): string {
-  if (state.status === 'loading') return '保存済みの学びを確認しています…'
-  if (state.status === 'error') return ''
-  if (state.items.length === 0) {
+function statusMessage(view: PickerView): string {
+  if (view.status === 'restoring') return '認証状態を確認しています…'
+  if (view.status === 'loading') return '保存済みの学びを確認しています…'
+  if (view.status === 'error' || view.status === 'blocked') return ''
+  if (view.list.value.length === 0) {
     return '今回の地域に使える、承認済みの学びはありません。学びを使わずに旅程を作れます。'
   }
-  return `${state.items.length}件の学びから選べます。現在${state.selected.length}件を選択中です。`
+  return `${view.list.value.length}件の学びから選べます。現在${view.selected.length}件を選択中です。`
 }
 
-// このUIは、選んだ学びのIDと表示した版だけを返す。画面で受け取った学びの内容・承認状態は
-// 次回生成APIの信頼できる入力とはしない（サーバーで本人の保存データを再取得し、版を照合する）。
+// このUIは、選んだ学びのIDと表示した版だけを、選択時の認証セッションと組にして返す。
+// 画面で受け取った学びの内容・承認状態は次回生成APIの信頼できる入力とはしない
+// （サーバーで本人の保存データを再取得し、版を照合する）。
 export function LearningReusePicker({
   region,
+  session,
   onSelectionChange,
   load = defaultLoad,
 }: LearningReusePickerProps) {
   // サーバーと同じ正規化（前後の空白を除く）を、入口で1回だけ行う。
   const normalizedRegion = normalizeLearningRegion(region)
+  const uid = session.status === 'authenticated' ? session.scope.uid : null
+  const epoch = session.scopeEpoch
+  const currentKey: ViewKey = { region: normalizedRegion, uid, epoch }
+
   const [attempt, setAttempt] = useState(0)
-  const [state, setState] = useState<PickerState>({ region: normalizedRegion, status: 'loading' })
+  const [state, setState] = useState<PickerState>({ key: currentKey, view: { status: 'loading' } })
+  const [notice, setNotice] = useState('')
   const statusRef = useRef<HTMLDivElement>(null)
+  // 選択中の件数。条件が変わって選択を捨てたことを、利用者に伝えるために使う。
+  const selectedCountRef = useRef(0)
   // 親が毎回新しい関数を渡しても、読み込みの再実行や通知の連鎖を起こさないよう、
   // 最新の関数はrefで持つ。
   const loadRef = useRef(load)
@@ -68,54 +120,82 @@ export function LearningReusePicker({
     changeRef.current = onSelectionChange
   }, [load, onSelectionChange])
 
+  // Pickerが消えるとき、親に残る選択を無効にする（見えない選択が生成に使われない）。
+  useEffect(() => {
+    const notify = () => changeRef.current?.(null)
+    return notify
+  }, [])
+
   useEffect(() => {
     const controller = new AbortController()
-    setState({ region: normalizedRegion, status: 'loading' })
-    // 地域が変わった・再読み込みした場合も、前の選択を次の生成に流用しない。
-    changeRef.current?.([])
+    const key: ViewKey = { region: normalizedRegion, uid, epoch }
+    // 地域・UID・世代が変わった、または再読み込みした。前の一覧・選択・進行中の読み込みは使わない。
+    setState({ key, view: { status: 'loading' } })
+    setNotice(selectedCountRef.current > 0 ? clearedNotice : '')
+    selectedCountRef.current = 0
+    changeRef.current?.(null)
+    // 認証済みでなければ読み込みを始めない。匿名アカウントも作らない。
+    if (uid === null) return () => controller.abort()
     if (!normalizedRegion) {
       setState({
-        region: normalizedRegion,
-        status: 'error',
-        message: '先に旅行先の地域を入力してください。',
+        key,
+        view: { status: 'error', message: '先に旅行先の地域を入力してください。' },
       })
       return () => controller.abort()
     }
 
-    void loadRef.current(controller.signal).then(
+    const scope = createSessionScope(uid)
+    const fail = (message: string) => setState({ key, view: { status: 'error', message } })
+    void loadRef.current(scope, controller.signal).then(
       (result) => {
+        // 条件が変わった後に届いた応答（古い応答）は採用しない。
         if (controller.signal.aborted) return
-        if (!result.ok) {
-          setState({ region: normalizedRegion, status: 'error', message: result.message })
-          return
+        if (!result.ok) return fail(result.message)
+        const { scope: loadedScope, value } = result.learnings
+        // 読み込みを始めたセッションと違うセッションの一覧は、中身が正しく見えても採用しない。
+        if (!isSameScope(loadedScope, scope)) {
+          return fail('認証状態が変わりました。学びを読み込み直してください。')
+        }
+        // 読み込み関数は差し替えられるため、取得時の検証に頼らず、表示の入口でも確かめる。
+        if (!isSelectableLearningList(value)) {
+          return fail('学びの一覧に未取得または不正な項目があります。')
         }
         const applicable = selectApplicableLearnings(
-          result.items.map(({ learning }) => learning),
+          value.map(({ learning }) => learning),
           normalizedRegion,
         )
         const ids = new Set(applicable.map(({ id }) => id))
         setState({
-          region: normalizedRegion,
-          status: 'ready',
-          items: result.items.filter(({ learning }) => ids.has(learning.id)),
-          selected: [],
+          key,
+          view: {
+            status: 'ready',
+            list: {
+              scope: loadedScope,
+              value: value.filter(({ learning }) => ids.has(learning.id)),
+            },
+            selected: [],
+          },
         })
       },
       () => {
-        if (!controller.signal.aborted) {
-          setState({
-            region: normalizedRegion,
-            status: 'error',
-            message: '学びを取得できませんでした。もう一度お試しください。',
-          })
-        }
+        if (!controller.signal.aborted) fail('学びを取得できませんでした。もう一度お試しください。')
       },
     )
     return () => controller.abort()
-  }, [normalizedRegion, attempt])
+  }, [normalizedRegion, uid, epoch, attempt])
 
-  const visible: PickerState =
-    state.region === normalizedRegion ? state : { region: normalizedRegion, status: 'loading' }
+  let visible: PickerView
+  if (session.status === 'restoring') {
+    visible = { status: 'restoring' }
+  } else if (session.status !== 'authenticated') {
+    // 失効・復元失敗。ここから匿名アカウントを作らない（新規開始は利用者の明示操作だけ）。
+    visible = {
+      status: 'blocked',
+      message: '認証状態を確認できません。ログイン状態を確認してください。',
+    }
+  } else {
+    visible = sameKey(state.key, currentKey) ? state.view : { status: 'loading' }
+  }
 
   const toggle = (event: ChangeEvent<HTMLInputElement>, item: VersionedLearning) => {
     if (visible.status !== 'ready') return
@@ -123,8 +203,11 @@ export function LearningReusePicker({
     const next = event.target.checked
       ? [...visible.selected, { id, version: item.version }]
       : visible.selected.filter((value) => value.id !== id)
-    setState({ ...visible, selected: next })
-    changeRef.current?.(next)
+    selectedCountRef.current = next.length
+    setNotice('')
+    setState({ key: currentKey, view: { ...visible, selected: next } })
+    // 選択は、一覧を取得したセッションと組で渡す。
+    changeRef.current?.({ scope: visible.list.scope, value: [...next] })
   }
 
   const retry = () => {
@@ -133,6 +216,10 @@ export function LearningReusePicker({
     statusRef.current?.focus()
     setAttempt((count) => count + 1)
   }
+
+  const message = statusMessage(visible)
+  const errorMessage =
+    visible.status === 'error' || visible.status === 'blocked' ? visible.message : null
 
   return (
     <section
@@ -152,24 +239,26 @@ export function LearningReusePicker({
       </div>
 
       <div ref={statusRef} role="status" tabIndex={-1} className="text-sm">
-        {statusMessage(visible)}
+        {notice ? `${message}${message ? ' ' : ''}${notice}` : message}
       </div>
-      {visible.status === 'error' && (
+      {errorMessage !== null && (
         <div role="alert" className="space-y-2">
-          <p className="text-sm">{visible.message}</p>
-          <button
-            type="button"
-            onClick={retry}
-            className="min-h-11 rounded-lg border border-current/40 px-4 text-sm"
-          >
-            再読み込み
-          </button>
+          <p className="text-sm">{errorMessage}</p>
+          {visible.status === 'error' && (
+            <button
+              type="button"
+              onClick={retry}
+              className="min-h-11 rounded-lg border border-current/40 px-4 text-sm"
+            >
+              再読み込み
+            </button>
+          )}
         </div>
       )}
-      {visible.status === 'ready' && visible.items.length > 0 && (
+      {visible.status === 'ready' && visible.list.value.length > 0 && (
         <fieldset className="space-y-3">
           <legend className="mb-2 text-sm font-semibold">今回使う学び</legend>
-          {visible.items.map((item) => {
+          {visible.list.value.map((item) => {
             const { learning } = item
             return (
               <label

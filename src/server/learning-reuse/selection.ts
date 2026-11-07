@@ -3,7 +3,7 @@ import { z } from 'zod'
 import type { ApprovedLearning } from '@/domain'
 import {
   isLearningApplicableToRegion,
-  MAX_LEARNING_CONTENT_LENGTH,
+  isLearningContentReusable,
   normalizeLearningRegion,
 } from '@/lib/learnings/lifecycle'
 import {
@@ -93,8 +93,8 @@ export async function resolveSelectedLearnings(
     ) {
       throw new LearningSelectionError('selection_changed')
     }
-    // 保存時の上限を超える本文は、生成に渡さない。
-    if (record.learning.content.length > MAX_LEARNING_CONTENT_LENGTH) {
+    // 保存時の上限を超える本文は、生成に渡さない（画面の取得・表示と同じ判定）。
+    if (!isLearningContentReusable(record.learning)) {
       throw new LearningSelectionError('unavailable')
     }
     return record.learning

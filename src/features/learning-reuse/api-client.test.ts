@@ -1,24 +1,36 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { sampleApprovedLearning } from '@/domain/samples'
+import { createSessionScope } from '@/lib/auth/session-scope'
+import { MAX_LEARNING_CONTENT_LENGTH } from '@/lib/learnings/lifecycle'
 
 import { loadApprovedLearningOptions } from './api-client'
 
+// 既定の認証ヘッダー（getAuthHeadersForScope）の経路を、実際のsession-scope.tsのまま通すため、
+// 土台のgetAuthSnapshotだけを差し替える。
+const mocks = vi.hoisted(() => ({ getAuthSnapshot: vi.fn() }))
+vi.mock('@/lib/auth/client', () => ({ getAuthSnapshot: mocks.getAuthSnapshot }))
+
+beforeEach(() => {
+  mocks.getAuthSnapshot.mockReset()
+})
+
+const scopeA = createSessionScope('user-a')
 const headers = async () => new Headers({ Authorization: 'Bearer test-token' })
 const payload = (learnings: unknown[] = [{ learning: sampleApprovedLearning, version: 1 }]) => ({
   learnings,
   listInfo: { returned: learnings.length, skippedInvalid: 0, truncated: false },
 })
 const load = (fetchFn: typeof fetch) =>
-  loadApprovedLearningOptions({ fetchFn, getHeaders: headers })
+  loadApprovedLearningOptions({ scope: scopeA, fetchFn, getHeaders: headers })
 
 describe('承認済みLearningの取得', () => {
-  it('本人トークンを付け、完全な一覧だけを受け付ける', async () => {
+  it('本人トークンを付け、完全な一覧を、取得したセッションと組にして返す', async () => {
     const fetchFn = vi.fn<typeof fetch>(async () => Response.json(payload()))
     const result = await load(fetchFn)
     expect(result).toMatchObject({
       ok: true,
-      items: [{ learning: sampleApprovedLearning, version: 1 }],
+      learnings: { scope: scopeA, value: [{ learning: sampleApprovedLearning, version: 1 }] },
     })
     expect(fetchFn).toHaveBeenCalledWith(
       '/api/learnings',
@@ -31,12 +43,13 @@ describe('承認済みLearningの取得', () => {
 
   it('保存済みの学びが0件でも、完全な空の一覧として受け付ける', async () => {
     const result = await load(async () => Response.json(payload([])))
-    expect(result).toEqual({ ok: true, items: [] })
+    expect(result).toEqual({ ok: true, learnings: { scope: scopeA, value: [] } })
   })
 
   it('未認証ならAPIを呼ばない。匿名UIDを自動作成しない', async () => {
     const fetchFn = vi.fn<typeof fetch>(async () => Response.json(payload()))
     const result = await loadApprovedLearningOptions({
+      scope: scopeA,
       fetchFn,
       getHeaders: async () => {
         throw new Error('session_ended')
@@ -84,6 +97,8 @@ describe('承認済みLearningの取得', () => {
       payload([{ learning: sampleApprovedLearning, version: 1, extra: 'x' }]),
       payload([{ learning: sampleApprovedLearning }]),
       payload([{ learning: sampleApprovedLearning, version: 0 }]),
+      payload([{ learning: sampleApprovedLearning, version: 1.5 }]),
+      payload([{ learning: sampleApprovedLearning, version: -1 }]),
     ]
     for (const body of extras) {
       expect(await load(async () => Response.json(body))).toMatchObject({
@@ -122,11 +137,113 @@ describe('承認済みLearningの取得', () => {
 
     const fetchFn = vi.fn<typeof fetch>(async () => Response.json(payload()))
     const aborted = await loadApprovedLearningOptions({
+      scope: scopeA,
       fetchFn,
       getHeaders: headers,
       signal: AbortSignal.abort(),
     })
     expect(aborted).toMatchObject({ ok: false, kind: 'interrupted' })
     expect(fetchFn).not.toHaveBeenCalled()
+  })
+
+  it('応答の本文を読んでいる間に中断された場合は、その応答を結果として返さない', async () => {
+    const controller = new AbortController()
+    const result = await loadApprovedLearningOptions({
+      scope: scopeA,
+      signal: controller.signal,
+      getHeaders: headers,
+      fetchFn: async () => {
+        // 応答が届いた直後に、条件が変わって呼び出し側が中断した。
+        queueMicrotask(() => controller.abort())
+        return {
+          status: 200,
+          json: async () => {
+            await Promise.resolve()
+            return payload()
+          },
+        } as Response
+      },
+    })
+    expect(result).toMatchObject({ ok: false, kind: 'interrupted' })
+  })
+})
+
+describe('取得時の本文の長さ（サーバー採用・表示と同じ上限）', () => {
+  const withContent = (length: number) => ({
+    learning: { ...sampleApprovedLearning, content: 'あ'.repeat(length) },
+    version: 1,
+  })
+
+  it('上限ちょうどの本文は受け付ける', async () => {
+    const result = await load(async () =>
+      Response.json(payload([withContent(MAX_LEARNING_CONTENT_LENGTH)])),
+    )
+    expect(result).toMatchObject({ ok: true })
+  })
+
+  it('上限を超える本文を含む一覧は、選べる形で返さず不完全な一覧として拒否する', async () => {
+    const result = await load(async () =>
+      Response.json(payload([withContent(MAX_LEARNING_CONTENT_LENGTH + 1)])),
+    )
+    expect(result).toMatchObject({ ok: false, kind: 'incomplete' })
+  })
+
+  it('一覧の一部だけが上限を超えていても、その一覧ごと使わない', async () => {
+    const result = await load(async () =>
+      Response.json(
+        payload([
+          { learning: sampleApprovedLearning, version: 1 },
+          {
+            learning: {
+              ...sampleApprovedLearning,
+              id: 'long-one',
+              content: 'い'.repeat(MAX_LEARNING_CONTENT_LENGTH + 1),
+            },
+            version: 1,
+          },
+        ]),
+      ),
+    )
+    expect(result).toMatchObject({ ok: false, kind: 'incomplete' })
+  })
+})
+
+describe('認証セッションとの結び付け', () => {
+  it('既定では、取得するセッションのUIDと同じときだけ、そのトークンで取得する', async () => {
+    mocks.getAuthSnapshot.mockResolvedValue({ uid: 'user-a', token: 'token-of-a' })
+    const fetchFn = vi.fn<typeof fetch>(async () => Response.json(payload()))
+    const result = await loadApprovedLearningOptions({ scope: scopeA, fetchFn })
+
+    expect(result).toMatchObject({ ok: true, learnings: { scope: scopeA } })
+    const init = fetchFn.mock.calls[0][1]
+    expect(new Headers(init?.headers).get('authorization')).toBe('Bearer token-of-a')
+  })
+
+  it('現在のUIDが取得するセッションと違えば、トークンを送らず取得もしない', async () => {
+    mocks.getAuthSnapshot.mockResolvedValue({ uid: 'user-b', token: 'token-of-b' })
+    const fetchFn = vi.fn<typeof fetch>(async () => Response.json(payload()))
+    const result = await loadApprovedLearningOptions({ scope: scopeA, fetchFn })
+
+    expect(result).toMatchObject({ ok: false, kind: 'session_changed' })
+    expect(fetchFn).not.toHaveBeenCalled()
+  })
+
+  it('セッションの失効・復元失敗は、UIDの変更とは別の失敗として返し、取得しない', async () => {
+    mocks.getAuthSnapshot.mockRejectedValue(new Error('session_ended'))
+    const fetchFn = vi.fn<typeof fetch>(async () => Response.json(payload()))
+    const result = await loadApprovedLearningOptions({ scope: scopeA, fetchFn })
+
+    expect(result).toMatchObject({ ok: false, kind: 'session' })
+    expect(fetchFn).not.toHaveBeenCalled()
+  })
+
+  it('ヘッダーの作成には、取得するセッションそのものを渡す', async () => {
+    const getHeaders = vi.fn(headers)
+    await loadApprovedLearningOptions({
+      scope: scopeA,
+      getHeaders,
+      fetchFn: async () => Response.json(payload()),
+    })
+    expect(getHeaders).toHaveBeenCalledWith(scopeA)
   })
 })
