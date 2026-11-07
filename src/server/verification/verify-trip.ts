@@ -161,6 +161,32 @@ function timeZoneProblem(trip: Trip): string | null {
     : `旅程のタイムゾーン（${trip.timeZone}）では、施設の現地時刻との対応を確認できないため、営業時間を確認できません。`
 }
 
+// Placesの営業状態。取得できない・未指定・通常（OPERATIONAL）なら、通常営業時間で判定する（問題なし）。
+// 閉業は、営業中と判定できないため矛盾あり。一時休業・開業前・未知の状態は、確認できない。
+// 説明文には、Placesの値そのものを載せない。
+function businessStatusProblem(
+  status: string | undefined,
+): { status: 'conflicting' | 'unverifiable'; explanation: string } | null {
+  if (
+    status === undefined ||
+    status === 'OPERATIONAL' ||
+    status === 'BUSINESS_STATUS_UNSPECIFIED'
+  ) {
+    return null
+  }
+  if (status === 'CLOSED_PERMANENTLY') {
+    return {
+      status: 'conflicting',
+      explanation: '情報源では、この施設は閉業している可能性があります。営業中とは確認できません。',
+    }
+  }
+  return {
+    status: 'unverifiable',
+    explanation:
+      '情報源では、この施設は通常どおりの営業ではない可能性があり（休業中・開業前など）、予定の時間に営業しているかを確認できません。',
+  }
+}
+
 export function hoursEvidence(
   trip: Trip,
   stop: Stop,
@@ -195,6 +221,11 @@ export function hoursEvidence(
       { ...base, status: 'unverifiable', explanation: zoneProblem },
       checkedAt,
     )
+  }
+  // 営業状態が通常でない施設は、通常営業時間のデータが残っていても、営業中と判定しない。
+  const statusProblem = businessStatusProblem(place.businessStatus)
+  if (statusProblem) {
+    return evidence(stop, 'hours', { ...base, ...statusProblem }, checkedAt)
   }
   if (place.openingHours.status !== 'available') {
     return evidence(

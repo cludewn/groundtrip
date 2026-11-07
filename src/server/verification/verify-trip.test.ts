@@ -390,6 +390,65 @@ describe('verifyTrip: 名称の不一致・候補なし・営業時間（施設�
     expect(byId(trip, 1, '-hours').explanation).toContain('データが取得できない')
   })
 
+  describe('営業状態（businessStatus）と通常営業時間の組み合わせ', () => {
+    const withStatus = (businessStatus: string | undefined, periods: OpeningPeriod[] | null) => {
+      const base = found('P2', '昼食店A（架空）', periods)
+      if (base.status !== 'found') throw new Error('fixture')
+      return {
+        status: 'found' as const,
+        candidates: base.candidates.map((candidate) => ({ ...candidate, businessStatus })),
+      }
+    }
+    const hoursOf = async (businessStatus: string | undefined, periods: OpeningPeriod[] | null) =>
+      byId(
+        await verifiedTrip({
+          places: { ...allFound, 昼食店A: withStatus(businessStatus, periods) },
+          routes: route({ WALK: walk(10) }),
+        }),
+        1,
+        '-hours',
+      )
+
+    it('閉業（CLOSED_PERMANENTLY）は、通常営業時間が滞在を含んでいても、consistent にしない（矛盾あり）', async () => {
+      const hours = await hoursOf('CLOSED_PERMANENTLY', sundayAllDay)
+      expect(hours.status).toBe('conflicting')
+      expect(hours.explanation).toContain('閉業')
+      expect(hours.explanation).not.toContain('CLOSED_PERMANENTLY')
+    })
+
+    it('閉業は、営業時間のデータが無くても、確認できないではなく矛盾あり', async () => {
+      expect((await hoursOf('CLOSED_PERMANENTLY', null)).status).toBe('conflicting')
+    })
+
+    it.each(['CLOSED_TEMPORARILY', 'FUTURE_OPENING', 'SOMETHING_NEW'])(
+      '%s は、通常営業時間が滞在を含んでいても、consistent にしない（確認できない）',
+      async (status) => {
+        const hours = await hoursOf(status, sundayAllDay)
+        expect(hours.status).toBe('unverifiable')
+        expect(hours.explanation).not.toContain(status)
+      },
+    )
+
+    it.each([undefined, 'OPERATIONAL', 'BUSINESS_STATUS_UNSPECIFIED'])(
+      '営業状態が %s なら、通常営業時間で判定する（含まれるなら consistent、外なら conflicting）',
+      async (status) => {
+        expect((await hoursOf(status, sundayAllDay)).status).toBe('consistent')
+        const closedSunday: OpeningPeriod[] = [
+          { open: { day: 1, hour: 8 }, close: { day: 1, hour: 20 } } as OpeningPeriod,
+        ]
+        expect((await hoursOf(status, closedSunday)).status).toBe('conflicting')
+      },
+    )
+
+    it('営業状態が通常でなくても、施設の存在（-place）の根拠は変えない', async () => {
+      const trip = await verifiedTrip({
+        places: { ...allFound, 昼食店A: withStatus('CLOSED_PERMANENTLY', sundayAllDay) },
+        routes: route({ WALK: walk(10) }),
+      })
+      expect(byId(trip, 1, '-place').status).toBe('consistent')
+    })
+  })
+
   it('滞在が営業時間外にかかる場合は conflicting', async () => {
     const shortDay: OpeningPeriod[] = [
       { open: { day: 0, hour: 8 }, close: { day: 0, hour: 13 } } as OpeningPeriod,
