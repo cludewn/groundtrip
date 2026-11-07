@@ -26,11 +26,11 @@ const REAL_TABLE = [
   ['place_identity', 'consistent', '施設：確認できた', 'ok'],
   ['place_identity', 'conflicting', '施設：情報が食い違っています', 'conflict'],
   ['place_identity', 'unverifiable', '施設：確認できない', 'unknown'],
-  ['opening_hours', 'consistent', '営業時間：情報源と一致', 'ok'],
-  ['opening_hours', 'conflicting', '営業時間：情報源と食い違い', 'conflict'],
+  ['opening_hours', 'consistent', '営業時間：情報源と整合', 'ok'],
+  ['opening_hours', 'conflicting', '営業時間：矛盾あり', 'conflict'],
   ['opening_hours', 'unverifiable', '営業時間：確認できない', 'unknown'],
-  ['travel_time', 'consistent', '移動：情報源と一致', 'ok'],
-  ['travel_time', 'conflicting', '移動：情報源と食い違い', 'conflict'],
+  ['travel_time', 'consistent', '移動：情報源と整合', 'ok'],
+  ['travel_time', 'conflicting', '移動：矛盾あり', 'conflict'],
   ['travel_time', 'unverifiable', '移動：確認できない', 'unknown'],
   ['other', 'consistent', 'その他：情報源と一致', 'ok'],
   ['other', 'conflicting', 'その他：情報が食い違っています', 'conflict'],
@@ -49,6 +49,8 @@ const REAL_ONLY_PHRASES = [
   MATCH_PHRASE,
   '営業時間内の見込み',
   '情報源と一致',
+  '情報源と整合',
+  '矛盾あり',
   'Google Maps',
 ]
 const SUBJECTS = ['place_identity', 'opening_hours', 'travel_time', 'other'] as const
@@ -113,6 +115,69 @@ describe('describeEvidence：実測の出典', () => {
           }
         }
       }
+    }
+  })
+
+  // 共有の照合ロジック（#27のhoursEvidence／segmentEvidenceFields）が実際に出す根拠と同じ形・同じ意味の例。
+  // 営業時間：予定の滞在時間帯が通常営業時間に収まるか。移動：Routesの所要時間が予定間の使える時間に収まるか。
+  const SHARED_LOGIC_EVIDENCE = [
+    {
+      subject: 'opening_hours',
+      status: 'consistent',
+      claim: '2026-11-08の10:00から60分、営業している',
+      explanation:
+        '滞在時間帯（10:00〜11:00）は、日曜日の通常営業時間の範囲内です。臨時休業・祝日の変更などは考慮していません。',
+      mustContain: ['予定の時間帯', '通常営業時間', '整合', '臨時休業・祝日の変更'],
+    },
+    {
+      subject: 'opening_hours',
+      status: 'conflicting',
+      claim: '2026-11-08の10:00から60分、営業している',
+      explanation: '滞在時間帯（10:00〜11:00）は、日曜日の通常営業時間の範囲外です。',
+      mustContain: ['予定の時間帯', '通常営業時間', '合わない可能性'],
+    },
+    {
+      subject: 'travel_time',
+      status: 'consistent',
+      claim: 'AからBへ徒歩で移動できる',
+      explanation: '徒歩で間に合う見込みです（余裕10分）。渋滞・遅延は考慮していません。',
+      mustContain: ['所要時間', '予定の間隔', '収まって', '渋滞・遅延は考慮していません'],
+    },
+    {
+      subject: 'travel_time',
+      status: 'conflicting',
+      claim: 'AからBへ徒歩で移動できる',
+      explanation:
+        '徒歩では間に合いません（5分不足）。車・公共交通は、利用できるか分からないため、確認していません。',
+      mustContain: ['所要時間', '予定の間隔', '収まりません'],
+    },
+  ] as const
+
+  it('営業時間・移動の見出しと詳細は、共有の照合ロジックが実際に判定する内容と整合する（全出典）', () => {
+    for (const fixture of SHARED_LOGIC_EVIDENCE) {
+      for (const kind of ['places', 'routes', 'official', 'user_report'] as const) {
+        const { mustContain, ...rest } = fixture
+        const result = describeEvidence(evidence({ ...rest, source: { kind, label: '出典' } }))
+        for (const phrase of mustContain) {
+          expect(result.detail, `${fixture.subject}/${fixture.status}/${kind}`).toContain(phrase)
+        }
+        // 実際に行っていない判断・数値比較を示唆しない。
+        expect(result.detail).not.toContain('判断していません')
+        expect(result.detail).not.toContain('一致しました')
+        expect(result.detail).not.toContain('食い違')
+      }
+    }
+  })
+
+  it('営業時間・移動の見出しは、整合／矛盾あり（絶対的な正しさ・食い違いとは言わない）', () => {
+    const cases = [
+      ['opening_hours', 'consistent', '営業時間：情報源と整合'],
+      ['opening_hours', 'conflicting', '営業時間：矛盾あり'],
+      ['travel_time', 'consistent', '移動：情報源と整合'],
+      ['travel_time', 'conflicting', '移動：矛盾あり'],
+    ] as const
+    for (const [subject, status, label] of cases) {
+      expect(describeEvidence(evidence({ subject, status })).label).toBe(label)
     }
   })
 

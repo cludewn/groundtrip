@@ -67,17 +67,20 @@ export const EVIDENCE_WORDING: Record<
       tone: 'unknown',
     },
   },
-  // 営業時間・移動時間は、値が情報源と一致したかの照合結果だけを書く。
-  // 予定に合うか（営業時間内か・間に合うか）は制約チェックの役割で、ここでは結論にしない。
+  // 営業時間・移動は、共有の照合ロジックが実際に見ている範囲だけを書く。
+  // - 営業時間：予定の滞在時間帯が、通常営業時間に収まるか（臨時休業・祝日の変更は見ていない）。
+  // - 移動：Routesで見積もった所要時間が、予定間の使える時間に収まるか（渋滞・遅延は見ていない）。
+  // 制約全体の成立（営業時間内・間に合う見込み）は、制約判定の役割で、ここでは結論にしない。
   opening_hours: {
     consistent: {
-      headline: '情報源と一致',
-      detail: `${SOURCE_PLACEHOLDER}の営業時間の情報と一致しました。予定に合うかは、ここでは判断していません。臨時休業や混雑は考慮していません。`,
+      headline: '情報源と整合',
+      detail:
+        '予定の時間帯が、通常営業時間の情報源と整合しています。臨時休業・祝日の変更などは考慮していません。',
       tone: 'ok',
     },
     conflicting: {
-      headline: '情報源と食い違い',
-      detail: `${SOURCE_PLACEHOLDER}の営業時間の情報と食い違っています。公式情報などで確認してから判断してください。`,
+      headline: '矛盾あり',
+      detail: '予定の時間帯が、通常営業時間の情報源と合わない可能性があります。',
       tone: 'conflict',
     },
     unverifiable: {
@@ -88,13 +91,14 @@ export const EVIDENCE_WORDING: Record<
   },
   travel_time: {
     consistent: {
-      headline: '情報源と一致',
-      detail: `${SOURCE_PLACEHOLDER}で確認した移動時間と一致しました。予定に合うかは、ここでは判断していません。渋滞・遅延は考慮していません。`,
+      headline: '情報源と整合',
+      detail:
+        '情報源で見積もった所要時間が、予定の間隔に収まっています。渋滞・遅延は考慮していません。',
       tone: 'ok',
     },
     conflicting: {
-      headline: '情報源と食い違い',
-      detail: `${SOURCE_PLACEHOLDER}で確認した移動時間と食い違っています。予定に収まるかは、ここでは判断していません。`,
+      headline: '矛盾あり',
+      detail: '情報源で見積もった所要時間が、予定の間隔に収まりません。',
       tone: 'conflict',
     },
     unverifiable: {
