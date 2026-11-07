@@ -62,6 +62,11 @@ interface RevisionReviewProps {
   onCancel: () => void
   onApplied: (trip: Trip) => void
   onApplyUnresolvedChange: (unresolved: boolean) => void
+  // 現地報告は修正理由と文脈をまとめて受け取り、旅行前と同じ修正エンジンで扱う。
+  onSiteReport?: {
+    reason: string
+    context: Extract<RevisionRequest['context'], { phase: 'on_site' }>
+  }
 }
 
 type Review = { request: RevisionRequest; proposal: RevisionProposal; selected: number }
@@ -78,8 +83,9 @@ export function RevisionReview({
   onCancel,
   onApplied,
   onApplyUnresolvedChange,
+  onSiteReport,
 }: RevisionReviewProps) {
-  const [reason, setReason] = useState('')
+  const [reason, setReason] = useState(onSiteReport?.reason ?? '')
   const [preferences, setPreferences] = useState('')
   const [canDrive, setCanDrive] = useState(false)
   const [invalidReason, setInvalidReason] = useState(false)
@@ -142,7 +148,7 @@ export function RevisionReview({
       reason: [reason.trim(), preferences.trim() && `希望条件：${preferences.trim()}`]
         .filter(Boolean)
         .join('\n'),
-      context: { phase: 'planning' },
+      context: onSiteReport?.context ?? { phase: 'planning' },
       travelModes: canDrive ? ['walk', 'drive'] : ['walk'],
     }
     const controller = new AbortController()
@@ -284,7 +290,7 @@ export function RevisionReview({
           >
             <legend className="sr-only">部分修正の条件</legend>
             <label className="block space-y-1 text-sm font-semibold">
-              <span>修正理由（必須）</span>
+              <span>{onSiteReport ? '現地の報告内容' : '修正理由（必須）'}</span>
               <textarea
                 ref={reasonField}
                 required
@@ -292,6 +298,7 @@ export function RevisionReview({
                 maxLength={500}
                 className={inputClass}
                 value={reason}
+                readOnly={onSiteReport !== undefined}
                 aria-invalid={invalidReason}
                 aria-describedby={invalidReason ? 'revision-reason-error' : undefined}
                 onChange={(event) => {
@@ -300,6 +307,9 @@ export function RevisionReview({
                 }}
               />
             </label>
+            {onSiteReport && (
+              <p className="text-sm text-gt-muted">報告を直す場合は、前の画面に戻ってください。</p>
+            )}
             {invalidReason && (
               <p id="revision-reason-error" role="alert" className="text-sm text-gt-warn">
                 修正理由を入力してください。
