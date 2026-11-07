@@ -6,7 +6,11 @@ import type { Trip } from '@/domain'
 import { OnSiteReportForm } from '@/features/onsite-report/onsite-report-form'
 import type { OnSiteReportSubmission } from '@/features/onsite-report/report-model'
 import { RevisionReview } from '@/features/revision-review/revision-review'
-import { sameTrip, type ApplyRevision, type GenerateRevisions } from '@/features/revision-review/api-client'
+import {
+  sameTrip,
+  type ApplyRevision,
+  type GenerateRevisions,
+} from '@/features/revision-review/api-client'
 import { TripProgressView } from '@/features/trip-progress/trip-progress-view'
 
 interface OnSiteReplanningFlowProps {
@@ -92,7 +96,11 @@ export function OnSiteReplanningFlow({
 
   return (
     <section aria-label="旅行中の再計画" className="mx-auto w-full max-w-xl space-y-3">
-      <p role="status" aria-live="polite" className="text-sm not-empty:rounded-lg not-empty:border not-empty:border-gt-rule not-empty:p-3">
+      <p
+        role="status"
+        aria-live="polite"
+        className="text-sm not-empty:rounded-lg not-empty:border not-empty:border-gt-rule not-empty:p-3"
+      >
         {notice}
       </p>
 
