@@ -2,7 +2,14 @@ import { TripSchema, type Evidence, type Stop, type Trip } from '../../domain'
 import { MapsCallError, type MapsClient, type PlaceCandidate } from '../maps'
 import { selectPlace, type PlaceSelection } from './name-match'
 import { checkOpeningHours } from './opening-hours'
-import { availableMinutes, evaluateTravel, formatMinutes } from './travel'
+import {
+  measureSegment,
+  normalizeModes,
+  segmentEvidenceFields,
+  type SegmentMeasurement,
+  type TravelModeSetting,
+} from './segment'
+import { availableMinutes, formatMinutes } from './travel'
 
 // 旅程の各予定を、Google Maps Platform（Places・Routes）の情報と照合し、根拠（Evidence）を付ける。
 // - AIの提案（生成）と、照合は別の責務。ここでは、提案された予定を変更せず、根拠だけを付ける。
@@ -16,12 +23,13 @@ import { availableMinutes, evaluateTravel, formatMinutes } from './travel'
 //   判断の結果で、利用者が移動の無理を判断するために必要なため。出典（Routes API）は根拠に付ける。
 
 const SOURCE_LABEL_PLACES = 'Google Maps Platform（Places API）'
-const SOURCE_LABEL_ROUTES = 'Google Maps Platform（Routes API）'
 const TIME_ZONE_LABEL = 'Asia/Tokyo'
 
 export interface VerifyDeps {
   maps: Pick<MapsClient, 'searchPlaces' | 'computeRoute'>
   now?: () => Date
+  // 移動が間に合うかを確認する、利用者が使える手段。省略時は徒歩だけ（車を使えるとは限らないため）。
+  travelModes?: readonly TravelModeSetting[]
 }
 
 export type VerifyTripResult =
@@ -29,14 +37,14 @@ export type VerifyTripResult =
   // 全ての予定で、Mapsの呼び出し自体が失敗した（設定・認証・接続の失敗）。根拠は付けない。
   | { status: 'external_service_error'; message: string }
 
-type PlaceLookup =
+export type PlaceLookup =
   | { kind: 'selected'; selection: PlaceSelection }
   | { kind: 'failed'; reason: MapsCallError['reason'] }
 
 const stopApplicability = (trip: Trip, stop: Stop) =>
   `${trip.date} ${stop.plannedStartTime}（${trip.timeZone === 'Asia/Tokyo' ? TIME_ZONE_LABEL : trip.timeZone}）`
 
-function evidence(
+export function evidence(
   stop: Stop,
   suffix: string,
   fields: Omit<Evidence, 'id' | 'checkedAt'>,
@@ -45,7 +53,7 @@ function evidence(
   return { id: `evidence-${stop.id}-${suffix}`, checkedAt, ...fields }
 }
 
-function identityEvidence(
+export function identityEvidence(
   trip: Trip,
   stop: Stop,
   lookup: PlaceLookup,
@@ -121,7 +129,7 @@ function identityEvidence(
   }
 }
 
-function hoursEvidence(
+export function hoursEvidence(
   trip: Trip,
   stop: Stop,
   place: PlaceCandidate | null,
@@ -171,16 +179,19 @@ function hoursEvidence(
   )
 }
 
-async function lookupPlace(
-  maps: VerifyDeps['maps'],
-  trip: Trip,
-  stop: Stop,
+// 施設を検索し、名称が一致する施設だけを採用する。営業時間（Enterprise）は、必要なときだけ要求する
+// （Place IDだけが必要な場合は、要求せず、費用を抑える）。
+export async function lookupPlace(
+  maps: Pick<MapsClient, 'searchPlaces'>,
+  trip: Pick<Trip, 'region'>,
+  stop: Pick<Stop, 'name'>,
+  options: { includeOpeningHours?: boolean } = {},
 ): Promise<{ lookup: PlaceLookup; place: PlaceCandidate | null }> {
   try {
     const result = await maps.searchPlaces({
       query: `${stop.name} ${trip.region}`,
       maxResultCount: 3,
-      includeOpeningHours: true,
+      includeOpeningHours: options.includeOpeningHours ?? true,
     })
     const selection = selectPlace(stop.name, result.status === 'found' ? result.candidates : [])
     return {
@@ -195,99 +206,27 @@ async function lookupPlace(
   }
 }
 
-// 前の予定から、この予定へ間に合うかの根拠。徒歩で間に合えば徒歩、間に合わなければ車でも確認する。
-async function travelEvidence(
-  maps: VerifyDeps['maps'],
-  trip: Trip,
+// 前の予定から、この予定へ間に合うかの根拠。利用者が使える手段（既定は徒歩だけ）で確認する。
+// 構造化された移動区間（SegmentMeasurement）から、根拠の説明を作る。
+export function travelEvidenceFor(
+  trip: Pick<Trip, 'date'>,
   previous: Stop,
   stop: Stop,
-  previousPlaceId: string | null,
-  placeId: string | null,
+  measurement: SegmentMeasurement,
   checkedAt: string,
-  counter: { routes: number },
-): Promise<Evidence> {
+  suffix = 'travel',
+): Evidence {
   const available = availableMinutes({ previous, next: stop })
   const prevEnd = formatMinutes(
     Number(previous.plannedStartTime.slice(0, 2)) * 60 +
       Number(previous.plannedStartTime.slice(3)) +
       previous.durationMinutes,
   )
-  const base = {
-    subject: 'travel_time' as const,
+  const fields = segmentEvidenceFields(measurement, {
     claim: '前の予定の終了後、この予定の開始時刻までに移動できる',
     applicability: `${trip.date} ${prevEnd}〜${stop.plannedStartTime}（使える時間${available}分）`,
-    source: { kind: 'routes' as const, label: SOURCE_LABEL_ROUTES },
-  }
-  const unverifiable = (explanation: string) =>
-    evidence(stop, 'travel', { ...base, status: 'unverifiable', explanation }, checkedAt)
-
-  if (available < 0) {
-    // 時刻がすでに重なっている。移動時間を調べるまでもなく、成立しない。
-    return evidence(
-      stop,
-      'travel',
-      {
-        ...base,
-        status: 'conflicting',
-        explanation: '前の予定の終了時刻が、この予定の開始時刻より後で、時刻が重なっています。',
-      },
-      checkedAt,
-    )
-  }
-  if (!previousPlaceId || !placeId) {
-    return unverifiable('前後の施設を特定できていないため、移動時間を確認できません。')
-  }
-
-  try {
-    counter.routes += 1
-    const walk = await maps.computeRoute({
-      originPlaceId: previousPlaceId,
-      destinationPlaceId: placeId,
-      mode: 'WALK',
-    })
-    if (walk.status === 'found' && evaluateTravel(available, walk.minutes).status === 'fits') {
-      const { slackMinutes } = evaluateTravel(available, walk.minutes)
-      return evidence(
-        stop,
-        'travel',
-        {
-          ...base,
-          status: 'consistent',
-          explanation: `徒歩で間に合う見込みです（余裕${slackMinutes}分）。渋滞・遅延は考慮していません。`,
-        },
-        checkedAt,
-      )
-    }
-    counter.routes += 1
-    const drive = await maps.computeRoute({
-      originPlaceId: previousPlaceId,
-      destinationPlaceId: placeId,
-      mode: 'DRIVE',
-    })
-    if (drive.status === 'found') {
-      const fit = evaluateTravel(available, drive.minutes)
-      const walkNote =
-        walk.status === 'found' ? '徒歩では間に合いません。' : '徒歩の経路を確認できません。'
-      return evidence(
-        stop,
-        'travel',
-        {
-          ...base,
-          status: fit.status === 'fits' ? 'consistent' : 'conflicting',
-          explanation:
-            fit.status === 'fits'
-              ? `${walkNote}車なら間に合う見込みです（余裕${fit.slackMinutes}分）。渋滞・遅延は考慮していません。`
-              : `${walkNote}車でも間に合いません（${-fit.slackMinutes}分不足）。`,
-        },
-        checkedAt,
-      )
-    }
-    return unverifiable(
-      '徒歩・車の経路を確認できないため、移動時間を確認できません（公共交通は未対応です）。',
-    )
-  } catch {
-    return unverifiable('移動時間の取得に失敗したため、確認できません。')
-  }
+  })
+  return evidence(stop, suffix, fields, checkedAt)
 }
 
 export async function verifyTrip(input: Trip, deps: VerifyDeps): Promise<VerifyTripResult> {
@@ -311,21 +250,23 @@ export async function verifyTrip(input: Trip, deps: VerifyDeps): Promise<VerifyT
     }
   }
 
+  const modes = normalizeModes(deps.travelModes)
   const travel = await Promise.all(
-    input.stops.map((stop, index) =>
-      index === 0
-        ? Promise.resolve(null)
-        : travelEvidence(
-            maps,
-            input,
-            input.stops[index - 1],
-            stop,
-            lookups[index - 1].place?.placeId ?? null,
-            lookups[index].place?.placeId ?? null,
-            checkedAt,
-            counter,
-          ),
-    ),
+    input.stops.map(async (stop, index) => {
+      if (index === 0) return null
+      const previous = input.stops[index - 1]
+      const measurement = await measureSegment(maps, {
+        fromStopId: previous.id,
+        toStopId: stop.id,
+        fromPlaceId: lookups[index - 1].place?.placeId ?? null,
+        toPlaceId: lookups[index].place?.placeId ?? null,
+        availableMinutes: availableMinutes({ previous, next: stop }),
+        modes,
+        checkedAt,
+        counter,
+      })
+      return travelEvidenceFor(input, previous, stop, measurement, checkedAt)
+    }),
   )
 
   const stops = input.stops.map((stop, index): Stop => {

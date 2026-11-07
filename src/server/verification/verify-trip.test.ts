@@ -189,31 +189,50 @@ describe('verifyTrip: 移動の余裕', () => {
     expect(maps.computeRoute.mock.calls.every(([options]) => options.mode === 'WALK')).toBe(true)
   })
 
-  it('徒歩では間に合わず、車なら間に合う場合は consistent（車と明記）', async () => {
-    const trip = await verifiedTrip({
-      places: allFound,
-      routes: route({ WALK: walk(50), DRIVE: walk(8) }),
-    })
+  it('既定は徒歩だけ：徒歩で間に合わなければ、車で間に合っても consistent にしない（車を調べない）', async () => {
+    const setup: Setup = { places: allFound, routes: route({ WALK: walk(50), DRIVE: walk(8) }) }
+    const maps = makeMaps(setup)
+    const result = await verifyTrip(sampleTrip, { maps, now: () => NOW })
+    if (result.status !== 'verified') throw new Error('照合済みの旅程を期待しました')
 
-    // 庭園→昼食：使える60分。徒歩50分で足りるので徒歩。昼食→展示：使える45分。徒歩50分は不足→車8分。
-    expect(byId(trip, 1, '-travel').explanation).toContain('徒歩で間に合う')
-    expect(byId(trip, 2, '-travel')).toMatchObject({ status: 'consistent' })
-    expect(byId(trip, 2, '-travel').explanation).toContain('徒歩では間に合いません')
-    expect(byId(trip, 2, '-travel').explanation).toContain('車なら')
+    // 庭園→昼食：使える60分。徒歩50分で足りる。昼食→展示：使える45分。徒歩50分は不足（車は使えると分からない）。
+    expect(byId(result.trip, 1, '-travel').explanation).toContain('徒歩で間に合う')
+    expect(byId(result.trip, 2, '-travel')).toMatchObject({ status: 'conflicting' })
+    expect(byId(result.trip, 2, '-travel').explanation).toContain('徒歩では間に合いません')
+    expect(byId(result.trip, 2, '-travel').explanation).toContain(
+      '車・公共交通は、利用できるか分からない',
+    )
+    expect(maps.computeRoute.mock.calls.every(([options]) => options.mode === 'WALK')).toBe(true)
   })
 
-  it('徒歩でも車でも間に合わなければ conflicting（固定予定の展示に間に合わない）', async () => {
-    const trip = await verifiedTrip({
-      places: allFound,
-      routes: route({ WALK: walk(90), DRIVE: walk(60) }),
+  it('車を使えると明示したときだけ、徒歩で間に合わない区間を車で確認する（consistent・車と明記）', async () => {
+    const maps = makeMaps({ places: allFound, routes: route({ WALK: walk(50), DRIVE: walk(8) }) })
+    const result = await verifyTrip(sampleTrip, {
+      maps,
+      now: () => NOW,
+      travelModes: ['walk', 'drive'],
     })
+    if (result.status !== 'verified') throw new Error('照合済みの旅程を期待しました')
 
-    expect(byId(trip, 2, '-travel')).toMatchObject({
+    expect(byId(result.trip, 1, '-travel').explanation).toContain('徒歩で間に合う')
+    expect(byId(result.trip, 2, '-travel')).toMatchObject({ status: 'consistent' })
+    expect(byId(result.trip, 2, '-travel').explanation).toContain('車で間に合う')
+  })
+
+  it('車も使えるのに、徒歩でも車でも間に合わなければ conflicting（固定予定の展示に間に合わない）', async () => {
+    const maps = makeMaps({ places: allFound, routes: route({ WALK: walk(90), DRIVE: walk(60) }) })
+    const result = await verifyTrip(sampleTrip, {
+      maps,
+      now: () => NOW,
+      travelModes: ['walk', 'drive'],
+    })
+    if (result.status !== 'verified') throw new Error('照合済みの旅程を期待しました')
+
+    expect(byId(result.trip, 2, '-travel')).toMatchObject({
       subject: 'travel_time',
       status: 'conflicting',
     })
-    expect(byId(trip, 2, '-travel').explanation).toContain('車でも間に合いません')
-    expect(byId(trip, 2, '-travel').explanation).toContain('15分不足')
+    expect(byId(result.trip, 2, '-travel').explanation).toContain('15分不足')
   })
 
   it('ちょうど間に合う（余裕0分）は consistent', async () => {
