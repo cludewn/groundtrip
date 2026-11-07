@@ -1,0 +1,33 @@
+name: D担当の一時フォーマット
+on:
+  push:
+    branches:
+      - feat/learning-reuse
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - name: 依存関係
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: 書式を修正して一時ワークフローを削除
+        run: |
+          pnpm exec prettier src/features/learning-reuse src/server/learning-reuse --write
+          git rm .github/workflows/temp-format-learning.yml
+          git add src/features/learning-reuse src/server/learning-reuse
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore(learning): コードスタイルを整える"
+          git push origin HEAD:feat/learning-reuse
