@@ -10,9 +10,7 @@ afterEach(cleanup)
 
 describe('次回旅程への学びの適用記録', () => {
   it('生成結果の適用先と説明だけを表示し、因果効果を断定しない', () => {
-    render(
-      <LearningApplicationSummary trip={sampleTrip} learnings={[sampleApprovedLearning]} />,
-    )
+    render(<LearningApplicationSummary trip={sampleTrip} learnings={[sampleApprovedLearning]} />)
 
     expect(screen.getByText(sampleApprovedLearning.content)).toBeTruthy()
     expect(screen.getByText('対象：昼食店A（架空）')).toBeTruthy()
