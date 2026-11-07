@@ -41,6 +41,19 @@ export function rejectLearning(learning: Learning, decidedAt: string): Learning 
   return { ...learning, approval: { status: 'rejected', decidedAt } }
 }
 
+// 地域は前後の空白を除いた文字列の完全一致で照合する。全角・半角などの表記揺れの
+// 正規化は未決定（docs/DOMAIN_CONTRACTS.md）。画面とサーバーで同じ関数を使い、
+// 画面で見えた学びとサーバーが採用する学びがずれないようにする。
+export function normalizeLearningRegion(region: string): string {
+  return region.trim()
+}
+
+// 全地域向け、または適用地域が（正規化後に）一致する学びか。
+export function isLearningApplicableToRegion(learning: Learning, region: string): boolean {
+  const { scope } = learning
+  return scope.kind === 'all_trips' || scope.region === normalizeLearningRegion(region)
+}
+
 // 次回の旅程生成に渡せるのは、承認済みで、適用範囲が合うものだけ。
 // 各要素を契約で検証し直す（承認状態の申告を信用しない）。未承認・却下済み・地域違いは除く。
 export function selectApplicableLearnings(
@@ -51,8 +64,7 @@ export function selectApplicableLearnings(
   for (const learning of learnings) {
     const approved = ApprovedLearningSchema.safeParse(learning)
     if (!approved.success) continue
-    const { scope } = approved.data
-    if (scope.kind === 'all_trips' || scope.region === region) applicable.push(approved.data)
+    if (isLearningApplicableToRegion(approved.data, region)) applicable.push(approved.data)
   }
   return applicable
 }
