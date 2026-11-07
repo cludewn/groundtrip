@@ -13,7 +13,12 @@ afterEach(() => cleanup())
 
 const generated = TripSchema.parse({
   ...sampleTrip,
-  stops: sampleTrip.stops.map((stop) => ({ ...stop, isFixed: false, placeId: null, evidence: [] })),
+  stops: sampleTrip.stops.map((stop) => ({
+    ...stop,
+    isFixed: false,
+    placeId: null,
+    evidence: [],
+  })),
 })
 
 function evidence(stopId: string, status: Evidence['status'], subject: Evidence['subject']) {
@@ -73,7 +78,8 @@ describe('VerifiedTripView: 根拠照合の画面接続', () => {
     expect(screen.getByRole('group', { name: '確認に使った情報源' }).textContent).toContain(
       'Google Maps',
     )
-    expect(screen.getByRole('link', { name: '利用規約・プライバシーを見る' }).getAttribute('href')).toBe('/terms')
+    const terms = screen.getByRole('link', { name: '利用規約・プライバシーを見る' })
+    expect(terms.getAttribute('href')).toBe('/terms')
   })
 
   it('照合中は重複リクエストを防ぎ、未照合の旅程を表示し続ける', async () => {
@@ -108,7 +114,8 @@ describe('VerifiedTripView: 根拠照合の画面接続', () => {
   })
 
   it('502/503などのエラーでも元の旅程は残り、再試行できる', async () => {
-    const verify = vi.fn<VerifyTrip>()
+    const verify = vi
+      .fn<VerifyTrip>()
       .mockResolvedValueOnce({
         ok: false,
         failure: { kind: 'service_unavailable', message: '旅程の照合は現在利用できません。' },
