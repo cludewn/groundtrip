@@ -46,7 +46,7 @@ export default function TermsPage() {
           <LegalLinks includeSiteTerms={false} />
         </div>
         <p className="mt-2">
-          Google由来の内容を表示する画面では、枠で他の内容と区別し、出典として「Google
+          Google由来の内容を表示する場合は、枠で他の内容と区別し、出典として「Google
           Maps」と表示します。
         </p>
       </section>

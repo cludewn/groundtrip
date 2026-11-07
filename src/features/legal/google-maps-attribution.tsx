@@ -12,6 +12,7 @@ export const GOOGLE_MAPS_ATTRIBUTION_TEXT = 'Google Maps'
 export const attributionTones = {
   gray: '#5E5E5E',
   black: '#1F1F1F',
+  /** 暗い背景専用。明るい背景に置かないこと */
   white: '#FFFFFF',
 } as const
 
@@ -20,7 +21,12 @@ export type AttributionTone = keyof typeof attributionTones
 // 文字サイズ（px）。許可範囲は12〜16。
 export const ATTRIBUTION_FONT_SIZE_PX = 14
 
-export function GoogleMapsAttribution({ tone = 'gray' }: { tone?: AttributionTone }) {
+export function GoogleMapsAttribution({
+  tone = 'gray',
+}: {
+  /** 文字色。white は暗い背景専用。明るい背景に置かないこと */
+  tone?: AttributionTone
+}) {
   const style: CSSProperties = {
     fontFamily: 'Roboto, sans-serif',
     fontStyle: 'normal',

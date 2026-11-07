@@ -18,7 +18,7 @@ export const googleLegalLinks = [
   },
 ] as const
 
-const linkClass = 'inline-flex min-h-9 items-center underline underline-offset-2'
+const linkClass = 'inline-flex min-h-11 items-center underline underline-offset-2'
 
 export function LegalLinks({ includeSiteTerms = true }: { includeSiteTerms?: boolean }) {
   return (
