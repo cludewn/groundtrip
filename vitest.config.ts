@@ -10,6 +10,9 @@ export default defineConfig({
   // tsconfigは`jsx: preserve`（Next.jsが変換する）のため、テストでは別に変換方式を指定する。
   oxc: { jsx: { runtime: 'automatic' } },
   resolve: {
-    alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
+    alias: {
+      '@': fileURLToPath(new URL('./src', import.meta.url)),
+      'server-only': fileURLToPath(new URL('./tests/helpers/server-only.ts', import.meta.url)),
+    },
   },
 })
