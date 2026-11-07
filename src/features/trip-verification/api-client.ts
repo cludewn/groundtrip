@@ -63,6 +63,8 @@ const contentOf = (trip: Trip): string =>
       stop.plannedStartTime,
       stop.durationMinutes,
       stop.isFixed,
+      // 種別も、照合では変わらない。変更・削除・追加された応答は採用しない。
+      stop.kind ?? null,
     ]),
     trip.learningApplications,
   ])

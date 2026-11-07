@@ -79,6 +79,35 @@ describe('requestTripVerification', () => {
     }
   })
 
+  it('予定の種別（kind）が、変更・削除・追加されて返ったら、採用しない', async () => {
+    type Stop = (typeof sampleTrip.stops)[number]
+    const withKind = (kind: Stop['kind']) => ({
+      ...sampleTrip,
+      stops: sampleTrip.stops.map((stop, index) => {
+        if (index !== 1) return stop
+        // 種別を外した予定（サンプルの予定は、種別を持たない）に、必要なら種別を付ける。
+        return kind === undefined ? { ...stop } : { ...stop, kind }
+      }),
+    })
+    const respond = (trip: unknown) => vi.fn().mockResolvedValue(json({ status: 'verified', trip }))
+
+    // 変更（meal → sight）、削除（meal → なし）、追加（なし → meal）。
+    for (const [sent, received] of [
+      [withKind('meal'), withKind('sight')],
+      [withKind('meal'), withKind(undefined)],
+      [withKind(undefined), withKind('meal')],
+    ]) {
+      const result = await requestTripVerification(sent, { fetchFn: respond(received) })
+      expect(result).toMatchObject({ ok: false, failure: { kind: 'unexpected' } })
+    }
+
+    // 種別が同じなら、採用する。
+    const same = await requestTripVerification(withKind('meal'), {
+      fetchFn: respond(withKind('meal')),
+    })
+    expect(same.ok).toBe(true)
+  })
+
   it('別の旅程（ID違い・版違い）が返ったら採用しない', async () => {
     for (const other of [
       { ...sampleTrip, id: 'trip-other' },

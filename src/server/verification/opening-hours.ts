@@ -18,7 +18,10 @@ const WEEKDAY_NAMES = [
 
 export function weekdayIndex(isoDate: string): number {
   const [year, month, day] = isoDate.split('-').map(Number)
-  return new Date(Date.UTC(year, month - 1, day)).getUTCDay()
+  // Date.UTCは、0〜99年を1900年代として解釈するため、年は別に設定する。
+  const date = new Date(0)
+  date.setUTCFullYear(year, month - 1, day)
+  return date.getUTCDay()
 }
 
 export const weekdayName = (isoDate: string): string => WEEKDAY_NAMES[weekdayIndex(isoDate)]
@@ -54,14 +57,20 @@ export function checkOpeningHours(
       explanation: '営業時間の情報が空のため、営業の有無を確認できません。',
     }
   }
+  // 24時間営業の正規の表現は、日曜0:00開店・閉店なしの、ちょうど1件だけ。
+  // 他の区間と並ぶ「閉店なし」や、日曜0:00以外の「閉店なし」は、24時間営業とは解釈できない。
+  if (periods.length === 1 && !periods[0].close && weekMinute(periods[0].open) === 0) {
+    return { status: 'consistent', explanation: `24時間営業として登録されています。${CAVEAT}` }
+  }
+
   // 営業の区間を、週の先頭（日曜0:00）からの分で表す。日付をまたぐ営業は、閉店が開店より小さくなるため1週間足す。
   const intervals: [number, number][] = []
+  // 閉店の情報が無く、解釈できなかった区間がある（データが不完全）。
+  let incomplete = false
   for (const period of periods) {
     const open = weekMinute(period.open)
     if (!period.close) {
-      // 24時間営業は、日曜0:00開店・閉店なしの1件で表される。それ以外の「閉店なし」は解釈できない。
-      if (open === 0)
-        return { status: 'consistent', explanation: `24時間営業として登録されています。${CAVEAT}` }
+      incomplete = true
       continue
     }
     let close = weekMinute(period.close)
@@ -89,6 +98,15 @@ export function checkOpeningHours(
     return {
       status: 'consistent',
       explanation: `滞在時間帯（${stayLabel}）は、${weekdayName(isoDate)}の通常営業時間の範囲内です。${CAVEAT}`,
+    }
+  }
+
+  // 解釈できない区間があるのに、確認できた区間の範囲外だけを理由に、営業時間外とは断定できない。
+  if (incomplete) {
+    return {
+      status: 'unverifiable',
+      explanation:
+        '営業時間のデータの一部を解釈できないため、営業時間外とも、営業中とも断定できず、確認できません。',
     }
   }
 

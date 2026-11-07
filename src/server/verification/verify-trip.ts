@@ -103,6 +103,18 @@ export function identityEvidence(
         },
         checkedAt,
       )
+    case 'region_mismatch':
+      return evidence(
+        stop,
+        'place',
+        {
+          ...base,
+          status: 'unverifiable',
+          explanation:
+            '名称は一致しましたが、所在地が旅程の地域と一致する施設を確認できないため、同じ施設と判断できず、確認できません。',
+        },
+        checkedAt,
+      )
     case 'mismatch':
       return evidence(
         stop,
@@ -127,6 +139,19 @@ export function identityEvidence(
         checkedAt,
       )
   }
+}
+
+// 旅程のタイムゾーンと、施設の現地時刻が同じと確かめられないときの理由（確かめられるときはnull）。
+// MVPが対象とするのは、日本（Asia/Tokyo）の旅程と、日本国内の施設だけ。
+function timeZoneProblem(trip: Trip, place: PlaceCandidate): string | null {
+  if (trip.timeZone !== 'Asia/Tokyo') {
+    return `旅程のタイムゾーン（${trip.timeZone}）では、施設の現地時刻との対応を確認できないため、営業時間を確認できません。`
+  }
+  const address = place.address?.normalize('NFKC').toLowerCase() ?? ''
+  if (!address.includes('日本') && !address.includes('japan')) {
+    return '施設の所在地が日本国内と確認できず、現地時刻が旅程のタイムゾーンと異なる可能性があるため、営業時間を確認できません。'
+  }
+  return null
 }
 
 export function hoursEvidence(
@@ -165,6 +190,16 @@ export function hoursEvidence(
       checkedAt,
     )
   }
+  // 営業時間は、施設の現地時刻で表される。旅程のタイムゾーンと同じと確かめられるときだけ、照合する。
+  const zoneProblem = timeZoneProblem(trip, place)
+  if (zoneProblem) {
+    return evidence(
+      stop,
+      'hours',
+      { ...base, status: 'unverifiable', explanation: zoneProblem },
+      checkedAt,
+    )
+  }
   const result = checkOpeningHours(
     place.openingHours.periods,
     trip.date,
@@ -193,7 +228,11 @@ export async function lookupPlace(
       maxResultCount: 3,
       includeOpeningHours: options.includeOpeningHours ?? true,
     })
-    const selection = selectPlace(stop.name, result.status === 'found' ? result.candidates : [])
+    const selection = selectPlace(
+      stop.name,
+      trip.region,
+      result.status === 'found' ? result.candidates : [],
+    )
     return {
       lookup: { kind: 'selected', selection },
       place: selection.status === 'matched' ? selection.place : null,
@@ -215,7 +254,7 @@ export function travelEvidenceFor(
   measurement: SegmentMeasurement,
   checkedAt: string,
   suffix = 'travel',
-): Evidence {
+): Evidence | null {
   const available = availableMinutes({ previous, next: stop })
   const prevEnd = formatMinutes(
     Number(previous.plannedStartTime.slice(0, 2)) * 60 +
@@ -226,7 +265,8 @@ export function travelEvidenceFor(
     claim: '前の予定の終了後、この予定の開始時刻までに移動できる',
     applicability: `${trip.date} ${prevEnd}〜${stop.plannedStartTime}（使える時間${available}分）`,
   })
-  return evidence(stop, suffix, fields, checkedAt)
+  // Routesを照会していない区間は、根拠を付けない（Routes由来の確認結果として扱わない）。
+  return fields ? evidence(stop, suffix, fields, checkedAt) : null
 }
 
 export async function verifyTrip(input: Trip, deps: VerifyDeps): Promise<VerifyTripResult> {

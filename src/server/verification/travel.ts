@@ -23,6 +23,15 @@ export function availableMinutes({ previous, next }: GapInput): number {
   )
 }
 
+// 予定が、時刻順に並び、重なっていないか。重なっていれば、移動を調べるまでもなく成立しない。
+export function hasTimeConflict(
+  stops: readonly { plannedStartTime: string; durationMinutes: number }[],
+): boolean {
+  return stops.some(
+    (stop, index) => index > 0 && availableMinutes({ previous: stops[index - 1], next: stop }) < 0,
+  )
+}
+
 export type TravelFit =
   { status: 'fits'; slackMinutes: number } | { status: 'too_long'; slackMinutes: number }
 
