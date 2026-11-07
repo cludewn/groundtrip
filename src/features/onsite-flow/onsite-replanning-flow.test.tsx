@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { sampleRevision, sampleTrip } from '@/domain/samples'
-import type { Trip } from '@/domain'
+import { TripSchema, type Evidence, type Stop, type Trip } from '@/domain'
 import type {
   ApplyRevision,
   GenerateRevisions,
@@ -22,8 +22,15 @@ const goToLunch = async (user: User) => {
   await user.click(screen.getByRole('button', { name: '予定が変わった？この予定だけ変更する' }))
 }
 
-const submitReport = async (user: User, kind: 'actual' | 'simulated') => {
-  await user.click(screen.getByRole('radio', { name: /閉店・臨時休業だった/ }))
+const closedPreset = /閉店・臨時休業だった/
+const delayedPreset = /遅れていて、次の予定に間に合わない/
+
+const submitReport = async (
+  user: User,
+  kind: 'actual' | 'simulated',
+  preset: RegExp = closedPreset,
+) => {
+  await user.click(screen.getByRole('radio', { name: preset }))
   await user.click(
     screen.getByRole('radio', {
       name: kind === 'actual' ? /いまの現地の状況（実際の報告）/ : /デモ用の模擬報告/,
@@ -38,7 +45,7 @@ const submitReport = async (user: User, kind: 'actual' | 'simulated') => {
 
 // 成立（satisfied）する候補と、根拠になる比較データ。revision-route-view.test.tsx と同じ前提を使う。
 const lunch = sampleTrip.stops[1]
-const after = {
+const after: Stop = {
   ...sampleRevision.diff.after,
   placeId: 'test-place',
   evidence: (['place_identity', 'opening_hours'] as const).map((subject) => ({
@@ -70,32 +77,41 @@ function leg(fromStopId: string, toStopId: string, durationMinutes: number) {
 const [morning, , exhibition] = sampleTrip.stops
 
 // サーバーと同じく、依頼の理由と文脈をそのまま写した成立候補を返す。
-const propose: GenerateRevisions = async (request): Promise<RevisionProposal> => ({
-  status: 'proposed',
-  revisions: [
-    {
-      ...sampleRevision,
-      reason: request.reason,
-      context: request.context,
-      baseTripVersion: request.trip.version,
-      diff: { before: lunch, after },
-      constraintCheck: { status: 'satisfied', explanation: '固定展示に間に合う' },
-    },
-  ],
-  comparisons: [
-    {
-      revisionId: sampleRevision.id,
-      before: {
-        fromPrevious: leg(morning.id, lunch.id, 10),
-        toNext: leg(lunch.id, exhibition.id, 10),
-      },
-      after: {
-        fromPrevious: leg(morning.id, lunch.id, 8),
-        toNext: leg(lunch.id, exhibition.id, 6),
-      },
-    },
-  ],
-})
+// 変更前の予定は依頼の旅程から取り、候補の内容（after）と判定は呼び出し側が決める。
+const proposeWith =
+  (candidate: Stop, status: 'satisfied' | 'unknown' = 'satisfied'): GenerateRevisions =>
+  async (request): Promise<RevisionProposal> => {
+    const before = request.trip.stops.find((stop) => stop.id === request.targetStopId)
+    if (!before) throw new Error('テストデータが不正')
+    return {
+      status: 'proposed',
+      revisions: [
+        {
+          ...sampleRevision,
+          reason: request.reason,
+          context: request.context,
+          baseTripVersion: request.trip.version,
+          diff: { before, after: candidate },
+          constraintCheck: { status, explanation: '固定展示に間に合う' },
+        },
+      ],
+      comparisons: [
+        {
+          revisionId: sampleRevision.id,
+          before: {
+            fromPrevious: leg(morning.id, lunch.id, 10),
+            toNext: leg(lunch.id, exhibition.id, 10),
+          },
+          after: {
+            fromPrevious: leg(morning.id, lunch.id, 8),
+            toNext: leg(lunch.id, exhibition.id, 6),
+          },
+        },
+      ],
+    }
+  }
+
+const propose = proposeWith(after)
 
 // 適用後の旅程。昼食だけが候補に置き換わる。
 const savedTrip = (): Trip => {
@@ -108,14 +124,33 @@ const savedTrip = (): Trip => {
   return saved
 }
 
-const openCandidates = async (user: User, kind: 'actual' | 'simulated') => {
+// 予定を差し替えた旅程（版は変えない）。学びの適用先は存在しない予定を指さないよう外す。
+const withStops = (stops: Stop[], patch: Partial<Trip> = {}): Trip =>
+  TripSchema.parse({ ...sampleTrip, learningApplications: [], ...patch, stops })
+const cafe: Stop = {
+  ...lunch,
+  id: 'stop-cafe',
+  name: 'カフェC（架空）',
+  plannedStartTime: '13:20',
+  durationMinutes: 20,
+  evidence: [],
+}
+// 固定でない予定が昼食とカフェの2件ある旅程。
+const fourStopTrip = withStops([morning, lunch, cafe, exhibition])
+
+const openCandidates = async (
+  user: User,
+  kind: 'actual' | 'simulated',
+  preset: RegExp = closedPreset,
+) => {
   await goToLunch(user)
-  await submitReport(user, kind)
+  await submitReport(user, kind, preset)
   await user.click(screen.getByRole('button', { name: '変更候補を探す' }))
   await screen.findByRole('table')
 }
 
 const approve = () => screen.getByRole<HTMLButtonElement>('button', { name: '承認して適用を依頼' })
+const approvalNote = () => document.getElementById(approve().getAttribute('aria-describedby') ?? '')
 const replanButton = () =>
   screen.getByRole('button', { name: '予定が変わった？この予定だけ変更する' })
 const currentHeading = () => screen.getByRole('heading', { name: 'いまの予定' })
@@ -200,9 +235,8 @@ describe('現地報告から再計画', () => {
     })
 
     // 候補は成立していても、承認の操作は適用に届かない。理由は「未接続」ではなく模擬報告と伝える。
-    const note = document.getElementById(approve().getAttribute('aria-describedby') ?? '')
     expect(approve().getAttribute('aria-disabled')).toBe('true')
-    expect(note?.textContent).toBe('模擬報告のため適用できません。')
+    expect(approvalNote()?.textContent).toBe('模擬報告のため適用できません。')
     expect(screen.queryByText(/未接続/)).toBeNull()
     approve().focus()
     await user.keyboard('{Enter}')
@@ -252,6 +286,11 @@ describe('現地報告から再計画', () => {
     expect(currentStop()).toContain(after.name)
     expect(flowNotice().textContent).toContain('承認した1件の変更を旅程に反映しました')
     expect(document.activeElement).toBe(currentHeading())
+
+    // サーバーが適用を確定できたので、再計画を止めない（適用中の「結果不明」の状態は残さない）。
+    expect(screen.queryByRole('note')).toBeNull()
+    await user.click(replanButton())
+    expect(document.activeElement).toBe(reportHeading())
   })
 
   it('実際の報告でも、適用サービスが無ければ未接続と伝えて承認を送らない', async () => {
@@ -262,153 +301,6 @@ describe('現地報告から再計画', () => {
     expect(screen.getByText('承認・適用サービスは未接続です。')).toBeTruthy()
     await user.click(approve())
     expect(screen.queryByText(/旅程に反映しました/)).toBeNull()
-  })
-
-  it('途中で旅程が更新された場合は、古い報告による候補生成を許可しない', async () => {
-    const user = userEvent.setup()
-    const generate = vi.fn<GenerateRevisions>()
-    const { rerender } = render(<OnSiteReplanningFlow trip={sampleTrip} generate={generate} />)
-    await goToLunch(user)
-    await submitReport(user, 'actual')
-
-    const updated: Trip = { ...sampleTrip, version: sampleTrip.version + 1 }
-    rerender(<OnSiteReplanningFlow trip={updated} generate={generate} />)
-    const alert = screen.getByRole('alert')
-    expect(alert.textContent).toContain('古い報告からの再計画を中止しました')
-    expect(alert.textContent).not.toContain('適用結果')
-    // 比較画面が消えてフォーカスを失わないよう、通知へ移す。
-    expect(document.activeElement).toBe(alert)
-    expect(screen.queryByRole('button', { name: '変更候補を探す' })).toBeNull()
-    expect(generate).not.toHaveBeenCalled()
-
-    // 適用を送っていないので、戻れば通常どおり報告を始められる。
-    await user.click(within(alert).getByRole('button', { name: '旅行中の画面に戻る' }))
-    expect(document.activeElement).toBe(currentHeading())
-    await user.click(replanButton())
-    expect(document.activeElement).toBe(reportHeading())
-  })
-
-  it('適用の応答待ちに親が旅程を差し替えたら、結果不明として扱い、確認するまで再報告を始めさせない', async () => {
-    const user = userEvent.setup()
-    const pending = Promise.withResolvers<Awaited<ReturnType<ApplyRevision>>>()
-    const apply = vi.fn<ApplyRevision>().mockReturnValue(pending.promise)
-    const onTripChange = vi.fn()
-    const { rerender } = render(
-      <OnSiteReplanningFlow
-        trip={sampleTrip}
-        generate={propose}
-        apply={apply}
-        onTripChange={onTripChange}
-      />,
-    )
-    await openCandidates(user, 'actual')
-    await user.click(approve())
-    expect(apply).toHaveBeenCalledTimes(1)
-
-    // 送信済みの適用をサーバーが反映した可能性があるまま、親が旅程を差し替える。
-    const latest: Trip = { ...sampleTrip, version: 1 }
-    rerender(
-      <OnSiteReplanningFlow
-        trip={latest}
-        generate={propose}
-        apply={apply}
-        onTripChange={onTripChange}
-      />,
-    )
-    const alert = screen.getByRole('alert')
-    expect(alert.textContent).toContain('適用結果を確認できませんでした')
-    expect(alert.textContent).toContain('最新の旅程')
-    expect(alert.textContent).not.toContain('古い報告からの再計画を中止しました')
-    expect(document.activeElement).toBe(alert)
-
-    // 戻っても結果不明の状態を消さない。確認を促す表示を残し、そこへフォーカスを移す。
-    await user.click(within(alert).getByRole('button', { name: '旅行中の画面に戻る' }))
-    const unresolved = screen.getByRole('note')
-    expect(unresolved.textContent).toContain('適用結果を確認できていません')
-    expect(document.activeElement).toBe(unresolved)
-    expect(flowNotice().textContent).toContain('適用結果を確認できませんでした')
-
-    // 確認するまでは報告を始めない。ボタンは押せて、理由を伝えて確認の欄へ戻す。
-    await user.click(replanButton())
-    expect(screen.queryByRole('heading', { name: '現地の状況を報告する' })).toBeNull()
-    const firstNotice = screen.getByText(/最新の旅程を確認してから、報告を始めてください。/, {
-      selector: 'span',
-    })
-    expect(document.activeElement).toBe(unresolved)
-    // 同じ文言が続いても、通知の要素を作り直して読み上げ直させる。
-    await user.click(replanButton())
-    const secondNotice = screen.getByText(/最新の旅程を確認してから、報告を始めてください。/, {
-      selector: 'span',
-    })
-    expect(secondNotice).not.toBe(firstNotice)
-
-    // 遅れて届いた応答は、旅程を置き換えない。
-    await act(async () => pending.resolve({ status: 'applied', trip: savedTrip() }))
-    expect(onTripChange).not.toHaveBeenCalled()
-    expect(currentStop()).toContain('昼食店A（架空）')
-    expect(screen.getByRole('note')).toBeTruthy()
-
-    // 最新の旅程を確認した扱いにして、はじめて再報告を始められる。
-    await user.click(screen.getByRole('button', { name: '最新の旅程を確認した' }))
-    expect(screen.queryByRole('note')).toBeNull()
-    expect(document.activeElement).toBe(currentHeading())
-    await user.click(replanButton())
-    expect(document.activeElement).toBe(reportHeading())
-  })
-
-  it('適用結果が不明なまま比較画面から戻っても、不明の状態を保つ', async () => {
-    const user = userEvent.setup()
-    const apply = vi.fn<ApplyRevision>().mockResolvedValue({ status: 'uncertain' })
-    render(<OnSiteReplanningFlow trip={sampleTrip} generate={propose} apply={apply} />)
-    await openCandidates(user, 'actual')
-    await user.click(approve())
-    await user.click(await screen.findByRole('button', { name: '旅程を確認' }))
-
-    expect(screen.getByRole('note').textContent).toContain('適用結果を確認できていません')
-    expect(document.activeElement).toBe(screen.getByRole('note'))
-    await user.click(replanButton())
-    expect(screen.queryByRole('heading', { name: '現地の状況を報告する' })).toBeNull()
-  })
-
-  it('適用の応答待ちに、中身が同じで参照だけ違う旅程を渡されても、適用結果を巻き戻さない', async () => {
-    const user = userEvent.setup()
-    const pending = Promise.withResolvers<Awaited<ReturnType<ApplyRevision>>>()
-    const apply = vi.fn<ApplyRevision>().mockReturnValue(pending.promise)
-    const onTripChange = vi.fn()
-    const props = { generate: propose, apply, onTripChange }
-    const { rerender } = render(<OnSiteReplanningFlow trip={sampleTrip} {...props} />)
-    await openCandidates(user, 'actual')
-    await user.click(approve())
-
-    // 送信後に、親が同じ内容の旅程を別のオブジェクトとして渡し直す（比較は続けられる）。
-    rerender(<OnSiteReplanningFlow trip={structuredClone(sampleTrip)} {...props} />)
-    expect(screen.queryByRole('alert')).toBeNull()
-    await act(async () => pending.resolve({ status: 'applied', trip: savedTrip() }))
-    expect(onTripChange).toHaveBeenCalledTimes(1)
-    expect(currentStop()).toContain(after.name)
-
-    // 親が旅程の更新を反映しないまま、さらに同じ内容を渡し直されても、適用後の表示を保つ。
-    rerender(<OnSiteReplanningFlow trip={structuredClone(sampleTrip)} {...props} />)
-    expect(currentStop()).toContain(after.name)
-    // 親が適用後の旅程を渡せば、それに従う。
-    rerender(<OnSiteReplanningFlow trip={savedTrip()} {...props} />)
-    expect(currentStop()).toContain(after.name)
-  })
-
-  it('報告の入力中に旅程の版が変わったら、入力をリセットしたことを知らせる', async () => {
-    const user = userEvent.setup()
-    const { rerender } = render(<OnSiteReplanningFlow trip={sampleTrip} generate={propose} />)
-    await goToLunch(user)
-    await user.type(screen.getByRole('textbox', { name: /補足/ }), '貼り紙があった')
-    expect((screen.getByRole('textbox', { name: /補足/ }) as HTMLTextAreaElement).value).toBe(
-      '貼り紙があった',
-    )
-
-    rerender(<OnSiteReplanningFlow trip={{ ...sampleTrip, version: 1 }} generate={propose} />)
-    expect((screen.getByRole('textbox', { name: /補足/ }) as HTMLTextAreaElement).value).toBe('')
-    expect(
-      screen.getByText('旅程が更新されたため入力をリセットしました。').closest('[role="status"]'),
-    ).toBeTruthy()
   })
 
   it('現地の報告内容と希望条件を合わせて上限を超えるときは、送らずに短くするよう案内する', async () => {
@@ -447,5 +339,515 @@ describe('現地報告から再計画', () => {
     render(<OnSiteReplanningFlow trip={sampleTrip} />)
     expect(screen.getByText(/候補生成サービスを接続すると利用できます/)).toBeTruthy()
     expect(screen.queryByRole('button', { name: /この予定だけ変更する/ })).toBeNull()
+  })
+})
+
+describe('旅程が変わったあとの古い報告・比較は、元の内容に戻っても復活しない', () => {
+  it('途中で旅程が更新された場合は、古い報告による候補生成を許可しない', async () => {
+    const user = userEvent.setup()
+    const generate = vi.fn<GenerateRevisions>()
+    const { rerender } = render(<OnSiteReplanningFlow trip={sampleTrip} generate={generate} />)
+    await goToLunch(user)
+    await submitReport(user, 'actual')
+
+    const updated: Trip = { ...sampleTrip, version: sampleTrip.version + 1 }
+    rerender(<OnSiteReplanningFlow trip={updated} generate={generate} />)
+    const alert = screen.getByRole('alert')
+    expect(alert.textContent).toContain('古い報告からの再計画を中止しました')
+    expect(alert.textContent).not.toContain('適用結果')
+    // 比較画面が消えてフォーカスを失わないよう、通知へ移す。
+    expect(document.activeElement).toBe(alert)
+    expect(screen.queryByRole('button', { name: '変更候補を探す' })).toBeNull()
+    expect(generate).not.toHaveBeenCalled()
+
+    // 適用を送っていないので、戻れば通常どおり報告を始められる。
+    await user.click(within(alert).getByRole('button', { name: '旅行中の画面に戻る' }))
+    expect(document.activeElement).toBe(currentHeading())
+    await user.click(replanButton())
+    expect(document.activeElement).toBe(reportHeading())
+  })
+
+  it('候補を比較中に旅程が v0→v1→v0 と変わっても、一度中止した比較と承認は復活しない', async () => {
+    const user = userEvent.setup()
+    const generate = vi.fn<GenerateRevisions>(propose)
+    const apply = vi.fn<ApplyRevision>()
+    const props = { generate, apply }
+    const { rerender } = render(<OnSiteReplanningFlow trip={sampleTrip} {...props} />)
+    await openCandidates(user, 'actual')
+    expect(approve()).toBeTruthy()
+
+    rerender(<OnSiteReplanningFlow trip={{ ...sampleTrip, version: 1 }} {...props} />)
+    expect(screen.getByRole('alert').textContent).toContain('古い報告からの再計画を中止しました')
+    expect(screen.queryByRole('table')).toBeNull()
+
+    // 親の旅程が中身まで元と同じに戻っても、中止した比較・承認の操作は戻らない。
+    rerender(<OnSiteReplanningFlow trip={structuredClone(sampleTrip)} {...props} />)
+    expect(screen.getByRole('alert').textContent).toContain('古い報告からの再計画を中止しました')
+    expect(screen.queryByRole('table')).toBeNull()
+    expect(screen.queryByRole('button', { name: '承認して適用を依頼' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '変更候補を探す' })).toBeNull()
+    expect(generate).toHaveBeenCalledTimes(1)
+    expect(apply).not.toHaveBeenCalled()
+
+    // 戻れば、新しい報告として最初から始められる（古い入力は引き継がない）。
+    await user.click(screen.getByRole('button', { name: '旅行中の画面に戻る' }))
+    await user.click(replanButton())
+    expect((screen.getByRole('textbox', { name: /補足/ }) as HTMLTextAreaElement).value).toBe('')
+    expect(screen.queryByRole('table')).toBeNull()
+  })
+
+  it('適用を送った比較が v0→v1→v0 で中止されても、遅れて届いた応答は旅程を置き換えない', async () => {
+    const user = userEvent.setup()
+    const pending = Promise.withResolvers<Awaited<ReturnType<ApplyRevision>>>()
+    const apply = vi.fn<ApplyRevision>().mockReturnValue(pending.promise)
+    const onTripChange = vi.fn()
+    const props = { generate: propose, apply, onTripChange }
+    const { rerender } = render(<OnSiteReplanningFlow trip={sampleTrip} {...props} />)
+    await openCandidates(user, 'actual')
+    await user.click(approve())
+
+    rerender(<OnSiteReplanningFlow trip={{ ...sampleTrip, version: 1 }} {...props} />)
+    rerender(<OnSiteReplanningFlow trip={structuredClone(sampleTrip)} {...props} />)
+    await act(async () => pending.resolve({ status: 'applied', trip: savedTrip() }))
+
+    expect(onTripChange).not.toHaveBeenCalled()
+    expect(screen.queryByRole('table')).toBeNull()
+    expect(screen.getByRole('alert').textContent).toContain('適用結果を確認できませんでした')
+  })
+
+  it('適用後の表示は、親の旅程が一度別の内容になってから元に戻っても復活しない', async () => {
+    const user = userEvent.setup()
+    const apply = vi.fn<ApplyRevision>().mockResolvedValue({ status: 'applied', trip: savedTrip() })
+    const props = { generate: propose, apply }
+    const { rerender } = render(<OnSiteReplanningFlow trip={sampleTrip} {...props} />)
+    await openCandidates(user, 'actual')
+    await user.click(approve())
+    await waitFor(() => expect(currentStop()).toContain(after.name))
+
+    // 親が適用後の旅程を反映しないまま、別の内容（v5）を渡す。親の旅程に従う。
+    rerender(<OnSiteReplanningFlow trip={{ ...sampleTrip, version: 5 }} {...props} />)
+    expect(currentStop()).toContain('昼食店A（架空）')
+    // 元の内容（v0）に戻っても、以前の適用後の表示（ローカルの旅程）を呼び戻さない。
+    rerender(<OnSiteReplanningFlow trip={structuredClone(sampleTrip)} {...props} />)
+    expect(currentStop()).toContain('昼食店A（架空）')
+    expect(currentStop()).not.toContain(after.name)
+  })
+
+  it('適用の応答待ちに、中身が同じで参照だけ違う旅程を渡されても、適用結果を巻き戻さない', async () => {
+    const user = userEvent.setup()
+    const pending = Promise.withResolvers<Awaited<ReturnType<ApplyRevision>>>()
+    const apply = vi.fn<ApplyRevision>().mockReturnValue(pending.promise)
+    const onTripChange = vi.fn()
+    const props = { generate: propose, apply, onTripChange }
+    const { rerender } = render(<OnSiteReplanningFlow trip={sampleTrip} {...props} />)
+    await openCandidates(user, 'actual')
+    await user.click(approve())
+
+    // 送信後に、親が同じ内容の旅程を別のオブジェクトとして渡し直す（比較は続けられる）。
+    rerender(<OnSiteReplanningFlow trip={structuredClone(sampleTrip)} {...props} />)
+    expect(screen.queryByRole('alert')).toBeNull()
+    await act(async () => pending.resolve({ status: 'applied', trip: savedTrip() }))
+    expect(onTripChange).toHaveBeenCalledTimes(1)
+    expect(currentStop()).toContain(after.name)
+
+    // 親が旅程の更新を反映しないまま、さらに同じ内容を渡し直されても、適用後の表示を保つ。
+    rerender(<OnSiteReplanningFlow trip={structuredClone(sampleTrip)} {...props} />)
+    expect(currentStop()).toContain(after.name)
+    // 親が適用後の旅程を渡せば、それに従う。
+    rerender(<OnSiteReplanningFlow trip={savedTrip()} {...props} />)
+    expect(currentStop()).toContain(after.name)
+  })
+})
+
+describe('適用結果が不明なときは、利用者の操作では再操作を解除しない', () => {
+  it('適用の応答が届かないあいだは、承認を重ねて送れず、報告画面にも戻れない', async () => {
+    const user = userEvent.setup()
+    const apply = vi.fn<ApplyRevision>().mockReturnValue(new Promise(() => {}))
+    render(<OnSiteReplanningFlow trip={sampleTrip} generate={propose} apply={apply} />)
+    await openCandidates(user, 'actual')
+    await user.click(approve())
+
+    // 応答が失われたまま。承認を押し直しても、適用は1回しか送られない。
+    const waiting = screen.getByRole<HTMLButtonElement>('button', { name: '適用を確認中…' })
+    await user.click(waiting)
+    await user.click(waiting)
+    expect(apply).toHaveBeenCalledTimes(1)
+    // 画面を離れて別の操作へ進む手段も、確認が終わるまでは無効。
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: '報告を見直す' }).disabled).toBe(
+      true,
+    )
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: '条件を見直す' }).disabled).toBe(
+      true,
+    )
+  })
+
+  it('応答が失われたまま親が旅程を差し替えたら、結果不明として再計画を止め、確認する操作を出さない', async () => {
+    const user = userEvent.setup()
+    const pending = Promise.withResolvers<Awaited<ReturnType<ApplyRevision>>>()
+    const apply = vi.fn<ApplyRevision>().mockReturnValue(pending.promise)
+    const generate = vi.fn<GenerateRevisions>(propose)
+    const onTripChange = vi.fn()
+    const props = { generate, apply, onTripChange }
+    const { rerender } = render(<OnSiteReplanningFlow trip={sampleTrip} {...props} />)
+    await openCandidates(user, 'actual')
+    await user.click(approve())
+    expect(apply).toHaveBeenCalledTimes(1)
+
+    // 送信済みの適用をサーバーが反映した可能性があるまま、親が旅程を差し替える。
+    rerender(<OnSiteReplanningFlow trip={{ ...sampleTrip, version: 1 }} {...props} />)
+    const alert = screen.getByRole('alert')
+    expect(alert.textContent).toContain('適用結果を確認できませんでした')
+    expect(alert.textContent).toContain('この画面からは再操作できません')
+    expect(alert.textContent).not.toContain('古い報告からの再計画を中止しました')
+    expect(document.activeElement).toBe(alert)
+
+    // 戻っても結果不明の状態を消さない。確認できるまで再計画を停止していることを、静的に案内する。
+    await user.click(within(alert).getByRole('button', { name: '旅行中の画面に戻る' }))
+    const unresolved = screen.getByRole('note')
+    expect(unresolved.textContent).toContain('この画面からは再操作できません')
+    expect(unresolved.textContent).toContain('再計画を停止しています')
+    // 取得し直す手段（再読み込み）と、再読み込みで失われるものを、正直に伝える。
+    expect(unresolved.textContent).toContain('ページを再読み込み')
+    expect(unresolved.textContent).toContain('失われます')
+    expect(document.activeElement).toBe(unresolved)
+    expect(flowNotice().textContent).toContain('適用結果を確認できませんでした')
+    // 利用者のボタン操作だけで解除できる手段（旧「最新の旅程を確認した」）は存在しない。
+    expect(within(unresolved).queryAllByRole('button')).toHaveLength(0)
+    expect(screen.queryByRole('button', { name: /確認した/ })).toBeNull()
+
+    // 報告は始められない。ボタンは押せて、理由を伝えて案内の欄へ戻す。
+    await user.click(replanButton())
+    expect(screen.queryByRole('heading', { name: '現地の状況を報告する' })).toBeNull()
+    const firstNotice = screen.getByText(/再計画を停止しています。適用結果を確認できていない/, {
+      selector: 'span',
+    })
+    expect(document.activeElement).toBe(unresolved)
+    // 同じ文言が続いても、通知の要素を作り直して読み上げ直させる。
+    await user.click(replanButton())
+    const secondNotice = screen.getByText(/再計画を停止しています。適用結果を確認できていない/, {
+      selector: 'span',
+    })
+    expect(secondNotice).not.toBe(firstNotice)
+
+    // 遅れて届いた応答は、旅程を置き換えない。止めた状態もそのまま。
+    await act(async () => pending.resolve({ status: 'applied', trip: savedTrip() }))
+    expect(onTripChange).not.toHaveBeenCalled()
+    expect(currentStop()).toContain('昼食店A（架空）')
+    expect(screen.getByRole('note')).toBeTruthy()
+
+    // 親が旅程をさらに更新しても、元の内容に戻しても、画面の操作では解除されない。
+    rerender(<OnSiteReplanningFlow trip={{ ...sampleTrip, version: 2 }} {...props} />)
+    rerender(<OnSiteReplanningFlow trip={structuredClone(sampleTrip)} {...props} />)
+    expect(screen.getByRole('note')).toBeTruthy()
+    await user.click(replanButton())
+    expect(screen.queryByRole('heading', { name: '現地の状況を報告する' })).toBeNull()
+    expect(generate).toHaveBeenCalledTimes(1)
+  })
+
+  it('適用の応答が失われた（通信エラー）後に比較画面から戻っても、不明の状態を保ち、解除する操作を出さない', async () => {
+    const user = userEvent.setup()
+    const apply = vi.fn<ApplyRevision>().mockRejectedValue(new Error('通信が切れた'))
+    const generate = vi.fn<GenerateRevisions>(propose)
+    const { rerender } = render(
+      <OnSiteReplanningFlow trip={sampleTrip} generate={generate} apply={apply} />,
+    )
+    await openCandidates(user, 'actual')
+    await user.click(approve())
+    await user.click(await screen.findByRole('button', { name: '旅程を確認' }))
+
+    const unresolved = screen.getByRole('note')
+    expect(unresolved.textContent).toContain('この画面からは再操作できません')
+    expect(document.activeElement).toBe(unresolved)
+    expect(within(unresolved).queryAllByRole('button')).toHaveLength(0)
+    await user.click(replanButton())
+    expect(screen.queryByRole('heading', { name: '現地の状況を報告する' })).toBeNull()
+
+    // 親が別の旅程を渡しても、サーバーで確認できたことにはならない。
+    rerender(
+      <OnSiteReplanningFlow
+        trip={{ ...sampleTrip, version: 3 }}
+        generate={generate}
+        apply={apply}
+      />,
+    )
+    expect(screen.getByRole('note')).toBeTruthy()
+    await user.click(replanButton())
+    expect(screen.queryByRole('heading', { name: '現地の状況を報告する' })).toBeNull()
+    expect(apply).toHaveBeenCalledTimes(1)
+    expect(generate).toHaveBeenCalledTimes(1)
+  })
+
+  it('サーバーが適用を確定して失敗と返した場合は、止めずに報告をやり直せる', async () => {
+    const user = userEvent.setup()
+    const apply = vi.fn<ApplyRevision>().mockResolvedValue({ status: 'failed' })
+    render(<OnSiteReplanningFlow trip={sampleTrip} generate={propose} apply={apply} />)
+    await openCandidates(user, 'actual')
+    await user.click(approve())
+    await screen.findByText(/候補を適用できませんでした/)
+    await user.click(screen.getByRole('button', { name: '報告を見直す' }))
+    await user.click(screen.getByRole('button', { name: '旅行中の画面に戻る' }))
+    expect(screen.queryByRole('note')).toBeNull()
+    await user.click(replanButton())
+    expect(document.activeElement).toBe(reportHeading())
+  })
+
+  it('ページを読み込み直した（新しく表示した）画面では、止めた状態は引き継がれない', async () => {
+    const user = userEvent.setup()
+    const apply = vi.fn<ApplyRevision>().mockRejectedValue(new Error('通信が切れた'))
+    render(<OnSiteReplanningFlow trip={sampleTrip} generate={propose} apply={apply} />)
+    await openCandidates(user, 'actual')
+    await user.click(approve())
+    await user.click(await screen.findByRole('button', { name: '旅程を確認' }))
+    expect(screen.getByRole('note')).toBeTruthy()
+
+    cleanup()
+    render(<OnSiteReplanningFlow trip={savedTrip()} generate={propose} apply={apply} />)
+    expect(screen.queryByRole('note')).toBeNull()
+    await goToLunch(user)
+    expect(reportHeading()).toBeTruthy()
+  })
+})
+
+describe('報告の入力中に対象の予定が変わった場合', () => {
+  const fixedLunch = withStops([morning, { ...lunch, isFixed: true }, cafe, exhibition])
+  const deletedLunch = withStops([morning, cafe, exhibition])
+  const swappedLunch = withStops([
+    morning,
+    { ...lunch, name: '別の昼食店（架空）', placeId: 'place-other' },
+    cafe,
+    exhibition,
+  ])
+
+  it.each([
+    ['固定された', fixedLunch],
+    ['削除された', deletedLunch],
+    ['同じIDのまま別の施設に差し替えられた', swappedLunch],
+  ])(
+    '対象が%s（版は同じ）とき、残った予定へ報告を引き継がず、対象と内容の再確認を求める',
+    async (_, changed) => {
+      const user = userEvent.setup()
+      const generate = vi.fn<GenerateRevisions>().mockResolvedValue({
+        status: 'no_candidates',
+        message: '候補がありません',
+      })
+      const { rerender } = render(<OnSiteReplanningFlow trip={fourStopTrip} generate={generate} />)
+      await goToLunch(user)
+      await user.type(screen.getByRole('textbox', { name: /補足/ }), '貼り紙があった')
+      await user.click(screen.getByRole('radio', { name: closedPreset }))
+      await user.click(screen.getByRole('radio', { name: /いまの現地の状況（実際の報告）/ }))
+      expect(changed.version).toBe(fourStopTrip.version)
+
+      rerender(<OnSiteReplanningFlow trip={changed} generate={generate} />)
+
+      // 入力は残さず、どの項目も選ばれていない（残った予定が自動で選ばれることもない）。
+      expect((screen.getByRole('textbox', { name: /補足/ }) as HTMLTextAreaElement).value).toBe('')
+      expect(screen.queryAllByRole('radio', { checked: true })).toHaveLength(0)
+      expect(flowNotice().textContent).toContain('旅程が更新されたため入力をリセットしました')
+      expect(flowNotice().textContent).toContain('対象の予定を選び直し')
+      // 入力欄を作り直しても、キーボードのフォーカスを失わない。
+      expect(document.activeElement).toBe(reportHeading())
+
+      // 対象を選ばないまま送ろうとしても、別の予定への報告にはならない。
+      await user.click(screen.getByRole('radio', { name: closedPreset }))
+      await user.click(screen.getByRole('radio', { name: /いまの現地の状況（実際の報告）/ }))
+      await user.click(screen.getByRole('button', { name: '実際の報告として送る' }))
+      expect(screen.getByText(/どの予定の状況かを選んでください/)).toBeTruthy()
+      expect(screen.queryByRole('button', { name: '変更候補を探す' })).toBeNull()
+      expect(generate).not.toHaveBeenCalled()
+
+      // 利用者が対象を選び直せば、その予定として進められる。
+      await user.click(screen.getByRole('radio', { name: /カフェC（架空）/ }))
+      await user.click(screen.getByRole('button', { name: '実際の報告として送る' }))
+      await user.click(screen.getByRole('button', { name: '変更候補を探す' }))
+      await waitFor(() => expect(generate).toHaveBeenCalledTimes(1))
+      expect(generate.mock.calls[0][0].targetStopId).toBe('stop-cafe')
+    },
+  )
+
+  it('旅程の版が変わったときも、入力をリセットしたことを知らせ、フォーカスを見出しへ移す', async () => {
+    const user = userEvent.setup()
+    const { rerender } = render(<OnSiteReplanningFlow trip={sampleTrip} generate={propose} />)
+    await goToLunch(user)
+    await user.type(screen.getByRole('textbox', { name: /補足/ }), '貼り紙があった')
+    expect((screen.getByRole('textbox', { name: /補足/ }) as HTMLTextAreaElement).value).toBe(
+      '貼り紙があった',
+    )
+
+    rerender(<OnSiteReplanningFlow trip={{ ...sampleTrip, version: 1 }} generate={propose} />)
+    expect((screen.getByRole('textbox', { name: /補足/ }) as HTMLTextAreaElement).value).toBe('')
+    expect(
+      screen.getByText(/旅程が更新されたため入力をリセットしました。/).closest('[role="status"]'),
+    ).toBeTruthy()
+    expect(document.activeElement).toBe(reportHeading())
+  })
+
+  it('旅程が v0→v1→v0 と変わっても、入力は復活せず、リセットしたままになる', async () => {
+    const user = userEvent.setup()
+    const { rerender } = render(<OnSiteReplanningFlow trip={sampleTrip} generate={propose} />)
+    await goToLunch(user)
+    await user.type(screen.getByRole('textbox', { name: /補足/ }), '貼り紙があった')
+
+    rerender(<OnSiteReplanningFlow trip={{ ...sampleTrip, version: 1 }} generate={propose} />)
+    rerender(<OnSiteReplanningFlow trip={structuredClone(sampleTrip)} generate={propose} />)
+    expect((screen.getByRole('textbox', { name: /補足/ }) as HTMLTextAreaElement).value).toBe('')
+    expect(screen.queryAllByRole('radio', { checked: true })).toHaveLength(0)
+    expect(document.activeElement).toBe(reportHeading())
+  })
+
+  it('中身が同じで参照だけ違う旅程を渡されただけなら、入力中の内容を消さない', async () => {
+    const user = userEvent.setup()
+    const { rerender } = render(<OnSiteReplanningFlow trip={fourStopTrip} generate={propose} />)
+    await goToLunch(user)
+    await user.type(screen.getByRole('textbox', { name: /補足/ }), '貼り紙があった')
+
+    rerender(<OnSiteReplanningFlow trip={structuredClone(fourStopTrip)} generate={propose} />)
+    expect((screen.getByRole('textbox', { name: /補足/ }) as HTMLTextAreaElement).value).toBe(
+      '貼り紙があった',
+    )
+    expect(screen.queryByText(/入力をリセットしました/)).toBeNull()
+  })
+})
+
+describe('現地報告の候補は、暫定ガードで承認可能の判定を下げる方向にだけ働く', () => {
+  const lunchWithPlace: Stop = { ...lunch, placeId: 'place-lunch-a' }
+  const tripWithPlace = withStops([morning, lunchWithPlace, exhibition])
+  const userReport = (status: Evidence['status']): Evidence => ({
+    ...after.evidence[0],
+    id: `user-report-${status}`,
+    subject: 'opening_hours',
+    source: { kind: 'user_report', label: '本人の現地報告' },
+    status,
+    explanation: '現地で利用者が見たこと',
+  })
+
+  it('休業した施設と同じPlace IDの候補は、名称が違っても承認できず、理由を承認欄に示す', async () => {
+    const user = userEvent.setup()
+    const apply = vi.fn<ApplyRevision>()
+    render(
+      <OnSiteReplanningFlow
+        trip={tripWithPlace}
+        generate={proposeWith({ ...after, placeId: lunchWithPlace.placeId })}
+        apply={apply}
+      />,
+    )
+    await openCandidates(user, 'actual')
+
+    expect(approve().getAttribute('aria-disabled')).toBe('true')
+    expect(approvalNote()?.textContent).toContain('休業と報告された')
+    expect(approvalNote()?.textContent).toContain('同じPlace ID')
+    expect(screen.queryByText(/予定に間に合う見込みです/)).toBeNull()
+    await user.click(approve())
+    expect(apply).not.toHaveBeenCalled()
+  })
+
+  it('Place IDが違う候補は、同じ報告でも承認できる（ガードで過剰に止めない）', async () => {
+    const user = userEvent.setup()
+    render(
+      <OnSiteReplanningFlow
+        trip={tripWithPlace}
+        generate={propose}
+        apply={vi.fn<ApplyRevision>()}
+      />,
+    )
+    await openCandidates(user, 'actual')
+    expect(approve().getAttribute('aria-disabled')).toBe('false')
+    expect(screen.getByText(/予定に間に合う見込みです/)).toBeTruthy()
+  })
+
+  it('本人の現地報告と矛盾する根拠が残る候補は、ほかの根拠が整合していても承認できない', async () => {
+    const user = userEvent.setup()
+    const apply = vi.fn<ApplyRevision>()
+    render(
+      <OnSiteReplanningFlow
+        trip={sampleTrip}
+        generate={proposeWith({
+          ...after,
+          evidence: [...after.evidence, userReport('conflicting')],
+        })}
+        apply={apply}
+      />,
+    )
+    await openCandidates(user, 'actual')
+
+    expect(approve().getAttribute('aria-disabled')).toBe('true')
+    expect(approvalNote()?.textContent).toContain('現地報告と矛盾する根拠')
+    expect(screen.queryByText(/予定に間に合う見込みです/)).toBeNull()
+    await user.click(approve())
+    expect(apply).not.toHaveBeenCalled()
+  })
+
+  it('矛盾していない現地報告の根拠が付いた候補は、そのまま承認できる', async () => {
+    const user = userEvent.setup()
+    render(
+      <OnSiteReplanningFlow
+        trip={sampleTrip}
+        generate={proposeWith({
+          ...after,
+          evidence: [...after.evidence, userReport('consistent')],
+        })}
+        apply={vi.fn<ApplyRevision>()}
+      />,
+    )
+    await openCandidates(user, 'actual')
+    expect(approve().getAttribute('aria-disabled')).toBe('false')
+  })
+
+  it('遅れの報告では、元の時刻表だけを根拠に「間に合う見込み」と断定せず、未確認として理由を示す', async () => {
+    const user = userEvent.setup()
+    const apply = vi.fn<ApplyRevision>()
+    render(<OnSiteReplanningFlow trip={sampleTrip} generate={propose} apply={apply} />)
+    await openCandidates(user, 'actual', delayedPreset)
+
+    expect(approve().getAttribute('aria-disabled')).toBe('true')
+    expect(screen.queryByText(/予定に間に合う見込みです/)).toBeNull()
+    expect(screen.queryByText('予定に収まる')).toBeNull()
+    expect(screen.getAllByText('確認が必要').length).toBeGreaterThan(0)
+    expect(approvalNote()?.textContent).toContain('遅れの報告')
+    expect(approvalNote()?.textContent).toContain('評価できていない')
+    await user.click(approve())
+    expect(apply).not.toHaveBeenCalled()
+  })
+
+  it('遅れ以外の報告（休業）では、同じ候補を「間に合う見込み」と示して承認できる', async () => {
+    const user = userEvent.setup()
+    render(
+      <OnSiteReplanningFlow trip={sampleTrip} generate={propose} apply={vi.fn<ApplyRevision>()} />,
+    )
+    await openCandidates(user, 'actual', closedPreset)
+    expect(screen.getByText(/14:00の予定に間に合う見込みです/)).toBeTruthy()
+    expect(approve().getAttribute('aria-disabled')).toBe('false')
+  })
+
+  it('模擬報告でもガードは同じ。承認の操作は適用に届かず、理由は模擬ではなくガードの内容を示す', async () => {
+    const user = userEvent.setup()
+    const apply = vi.fn<ApplyRevision>()
+    render(
+      <OnSiteReplanningFlow
+        trip={tripWithPlace}
+        generate={proposeWith({ ...after, placeId: lunchWithPlace.placeId })}
+        apply={apply}
+      />,
+    )
+    await openCandidates(user, 'simulated')
+    expect(approve().getAttribute('aria-disabled')).toBe('true')
+    expect(approvalNote()?.textContent).toContain('同じPlace ID')
+    await user.click(approve())
+    expect(apply).not.toHaveBeenCalled()
+  })
+
+  it('もともと承認できない（未確認）候補は、ガードに当たっても承認できる状態にならない', async () => {
+    const user = userEvent.setup()
+    const apply = vi.fn<ApplyRevision>()
+    render(
+      <OnSiteReplanningFlow
+        trip={sampleTrip}
+        generate={proposeWith({ ...after, evidence: [] }, 'unknown')}
+        apply={apply}
+      />,
+    )
+    await openCandidates(user, 'actual', delayedPreset)
+    expect(approve().getAttribute('aria-disabled')).toBe('true')
+    await user.click(approve())
+    expect(apply).not.toHaveBeenCalled()
   })
 })

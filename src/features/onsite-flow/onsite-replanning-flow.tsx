@@ -2,16 +2,14 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
-import type { Trip } from '@/domain'
+import { TripSchema, type Trip } from '@/domain'
 import { OnSiteReportForm } from '@/features/onsite-report/onsite-report-form'
 import type { OnSiteReportSubmission } from '@/features/onsite-report/report-model'
+import type { ApplyRevision, GenerateRevisions } from '@/features/revision-review/api-client'
 import { RevisionReview } from '@/features/revision-review/revision-review'
-import {
-  sameTrip,
-  type ApplyRevision,
-  type GenerateRevisions,
-} from '@/features/revision-review/api-client'
 import { TripProgressView } from '@/features/trip-progress/trip-progress-view'
+
+import { guardOnSiteProposal } from './onsite-approval-guard'
 
 interface OnSiteReplanningFlowProps {
   trip: Trip
@@ -22,20 +20,33 @@ interface OnSiteReplanningFlowProps {
 }
 
 type Step = 'progress' | 'report' | 'review'
-type Session = { trip: Trip; submission: OnSiteReportSubmission }
+// 報告の入力。epoch は入力を作った時点の世代。targetId が null のときは、対象の予定を選び直してもらう。
+type Draft = { epoch: number; targetId: string | null }
+// 比較に進んだ報告。epoch は報告を送った時点の世代で、現在の世代と違えば無効。
+type Session = { epoch: number; submission: OnSiteReportSubmission }
 // 画面を切り替えたあとにフォーカスを移す先。
 type FocusTarget = 'progress' | 'report' | 'unresolved'
 
 const unresolvedMessage =
-  '適用結果を確認できませんでした。再操作する前に最新の旅程を確認してください。'
+  '適用結果を確認できませんでした。この画面からは再操作できません。旅程の最新状態を確認できるまで、再計画を停止しています。'
+const stoppedMessage =
+  '再計画を停止しています。適用結果を確認できていないため、この画面からは報告を始められません。ページを再読み込みして、最新の旅程を取得し直してください。'
 // 子の画面の見出し。画面ごとの切り替えでフォーカスを失わないよう、ここから探して移す。
 const progressHeadingSelector = '#trip-progress-current'
 const reportHeadingSelector = 'h2'
 
-// 同じ内容でも、トップレベルの参照が違うだけの旅程は同じものとして扱う。
-const sameSource = (left: Trip, right: Trip) => left === right || sameTrip(left, right)
+// 旅程の中身を比べるための文字列。共通スキーマで並びを揃えるので、キー順が違うだけの同じ旅程は同じ文字列になる。
+// 検証に通らない旅程でも、同じ入力なら同じ文字列になる（描画のたびに変化したと見なさない）。
+const fingerprintOf = (trip: Trip) => {
+  const parsed = TripSchema.safeParse(trip)
+  return JSON.stringify(parsed.success ? parsed.data : trip)
+}
 
 // 再計画だけの画面導線。進行状態は保存しない。候補生成・検証・適用は既存の部分修正処理を使う。
+//
+// 旅程が変わったあとの「古い報告・比較・適用処理」は、世代（epoch）で無効にする。
+// 世代は親の旅程の中身が変わるたびに増えるだけで、減らない。そのため、旅程が元の内容に戻っても
+// （v0→v1→v0）、一度無効になった報告・候補・適用結果は復活しない。内容の一致では判定しない。
 export function OnSiteReplanningFlow({
   trip: sourceTrip,
   generate,
@@ -43,12 +54,16 @@ export function OnSiteReplanningFlow({
   onTripChange,
   initialIndex,
 }: OnSiteReplanningFlowProps) {
-  const [local, setLocal] = useState<{ source: Trip; value: Trip } | null>(null)
-  const trip = local && sameSource(local.source, sourceTrip) ? local.value : sourceTrip
-
+  const [watch, setWatch] = useState(() => ({
+    fingerprint: fingerprintOf(sourceTrip),
+    epoch: 0,
+  }))
+  // 適用に成功した旅程。親が反映するまでの表示用で、その世代の間だけ使う。
+  const [local, setLocal] = useState<{ epoch: number; value: Trip } | null>(null)
   const [step, setStep] = useState<Step>('progress')
-  const [targetId, setTargetId] = useState<string | null>(null)
+  const [draft, setDraft] = useState<Draft | null>(null)
   const [session, setSession] = useState<Session | null>(null)
+  // 適用の結果をサーバーから確認できていない状態。利用者の操作では解除しない（下の注記を参照）。
   const [applyUnresolved, setApplyUnresolved] = useState(false)
   // 同じ文言が続いても読み上げ直されるよう、更新のたびに数える。
   const [notice, setNotice] = useState({ text: '', tick: 0 })
@@ -61,21 +76,33 @@ export function OnSiteReplanningFlow({
   const announce = (text: string) => setNotice((previous) => ({ text, tick: previous.tick + 1 }))
   const moveFocus = (to: FocusTarget) => setFocusRequest({ to })
 
-  // 報告の入力中に旅程の版が変わると、フォームは作り直される。無言で消さずに知らせる。
-  const tripKey = `${trip.id}:${trip.version}`
-  const [seenTripKey, setSeenTripKey] = useState(tripKey)
-  if (seenTripKey !== tripKey) {
-    setSeenTripKey(tripKey)
-    if (step === 'report' && targetId) announce('旅程が更新されたため入力をリセットしました。')
+  // 親の旅程の中身が変わったら世代を進める（描画中の状態調整）。
+  // 版が同じでも、対象の予定が固定・削除・差し替えされた場合は中身が変わるので、同じように扱う。
+  const sourceFingerprint = fingerprintOf(sourceTrip)
+  if (watch.fingerprint !== sourceFingerprint) {
+    const nextEpoch = watch.epoch + 1
+    setWatch({ fingerprint: sourceFingerprint, epoch: nextEpoch })
+    if (draft) {
+      // 入力中の報告は別の世代の旅程に向けたものになる。別の予定へ引き継がず、対象の選び直しを求める。
+      setDraft({ epoch: nextEpoch, targetId: null })
+      if (step === 'report') {
+        announce(
+          '旅程が更新されたため入力をリセットしました。対象の予定を選び直し、報告内容を確認してください。',
+        )
+        moveFocus('report')
+      }
+    }
   }
+  const epoch = watch.epoch
+  const trip = local && local.epoch === epoch ? local.value : sourceTrip
 
   const target = session && trip.stops.find((stop) => stop.id === session.submission.targetStopId)
   const activeReview =
     step === 'review' &&
     session !== null &&
+    session.epoch === epoch &&
     target != null &&
-    !target.isFixed &&
-    sameTrip(session.trip, trip)
+    !target.isFixed
   const stale = step === 'review' && !activeReview
 
   // 切り替えた先の見出しなどへフォーカスを移す。隠していた画面は、このコミットで表示される。
@@ -98,15 +125,23 @@ export function OnSiteReplanningFlow({
     if (stale && document.activeElement === document.body) staleAlert.current?.focus()
   }, [stale])
 
+  // 現地報告の候補は、承認の可否を下げる方向にだけ働く暫定ガードを通してから比較画面へ渡す。
+  const guardedGenerate: GenerateRevisions | undefined =
+    generate &&
+    (async (request, signal) => {
+      const result = await generate(request, signal)
+      return result.status === 'proposed' ? guardOnSiteProposal(result, request) : result
+    })
+
   const startReport = (stopId: string) => {
     if (!generate || !trip.stops.some((stop) => stop.id === stopId && !stop.isFixed)) return
     if (applyUnresolved) {
       // 前回の適用結果が分からないまま、古い旅程から報告を始めさせない。
-      announce('適用結果を確認できていません。最新の旅程を確認してから、報告を始めてください。')
+      announce(stoppedMessage)
       moveFocus('unresolved')
       return
     }
-    setTargetId(stopId)
+    setDraft({ epoch, targetId: stopId })
     setSession(null)
     announce('')
     setStep('report')
@@ -121,16 +156,16 @@ export function OnSiteReplanningFlow({
       announce('修正できる予定を確認してください。元の旅程は変更していません。')
       return
     }
-    setSession({ trip, submission })
+    setSession({ epoch, submission })
     announce('')
     setStep('review')
   }
 
-  // 適用結果が不明なまま進行画面へ戻る。確認するまで、不明の状態は保つ。
+  // 適用結果が不明なまま進行画面へ戻る。再操作の停止は保ち、解除しない。
   const leaveUnresolved = () => {
     announce(unresolvedMessage)
     setSession(null)
-    setTargetId(null)
+    setDraft(null)
     setStep('progress')
     moveFocus('unresolved')
   }
@@ -147,22 +182,15 @@ export function OnSiteReplanningFlow({
   }
 
   const applied = (next: Trip) => {
-    // 応答は送信時点の画面の関数で受けるため、sourceTripの参照が古いことがある。
-    // 参照ではなく内容（sameSource）で比べるので、同じ内容の旅程なら適用後の表示を保つ。
-    setLocal({ source: sourceTrip, value: next })
+    // 適用を確認できた応答は、その世代の画面に届く。親が反映するまでの間、適用後の旅程を表示する。
+    setLocal({ epoch, value: next })
     setSession(null)
-    setTargetId(null)
+    setDraft(null)
     setApplyUnresolved(false)
     setStep('progress')
     announce('承認した1件の変更を旅程に反映しました。')
     moveFocus('progress')
     onTripChange?.(next)
-  }
-
-  const confirmLatestTrip = () => {
-    setApplyUnresolved(false)
-    announce('最新の旅程を確認したものとして、再計画を始められます。')
-    moveFocus('progress')
   }
 
   return (
@@ -178,6 +206,8 @@ export function OnSiteReplanningFlow({
       {/* 画面を隠してもマウントを維持することで、手動で進めた現在位置を保持する。 */}
       <div hidden={step !== 'progress'} ref={progressArea}>
         {applyUnresolved && (
+          // 結果不明は、利用者のボタン操作では解除しない。サーバーから取得した最新の旅程か、
+          // 確定した結果と照合できるまで（確認手段が接続されるまで）、再計画を止めたままにする。
           <div
             ref={unresolvedNote}
             role="note"
@@ -185,15 +215,11 @@ export function OnSiteReplanningFlow({
             className="mx-4 mt-3 space-y-2 rounded-lg border-2 border-gt-rule p-3 text-sm"
           >
             <p className="font-bold">
-              直前の適用結果を確認できていません。最新の旅程を確認してから、報告を始めてください。
+              適用結果を確認できませんでした。この画面からは再操作できません。
             </p>
-            <button
-              type="button"
-              className="min-h-11 text-sm font-bold underline"
-              onClick={confirmLatestTrip}
-            >
-              最新の旅程を確認した
-            </button>
+            <p>
+              旅程の最新状態を確認できるまで、再計画を停止しています。ページを再読み込みして、最新の旅程を取得し直してください。再読み込みすると、この画面の入力と、手動で進めた現在位置は失われます。
+            </p>
           </div>
         )}
         <TripProgressView
@@ -209,14 +235,14 @@ export function OnSiteReplanningFlow({
       </div>
 
       {/* 報告を修正するために戻っても入力内容を維持する。 */}
-      {targetId && (
+      {draft && (
         <div hidden={step !== 'report'} ref={reportArea}>
           <div className="px-4 pt-3">
             <button
               type="button"
               className="min-h-11 text-sm font-bold underline"
               onClick={() => {
-                setTargetId(null)
+                setDraft(null)
                 setSession(null)
                 setStep('progress')
                 announce('元の旅程を表示しています。')
@@ -227,16 +253,18 @@ export function OnSiteReplanningFlow({
             </button>
           </div>
           <OnSiteReportForm
-            key={`${tripKey}:${targetId}`}
+            key={`${draft.epoch}:${draft.targetId ?? ''}`}
             trip={trip}
-            initialTargetStopId={targetId}
+            initialTargetStopId={draft.targetId ?? undefined}
+            // 対象の予定が変わって入力を作り直したときは、残った1件を自動で選ばない。
+            autoSelectSingleTarget={draft.targetId !== null}
             status={{ phase: 'idle' }}
             onSubmit={submitReport}
           />
         </div>
       )}
 
-      {activeReview && session && target && generate && (
+      {activeReview && session && target && guardedGenerate && (
         <div className="space-y-3">
           {session.submission.context.report.kind === 'simulated' && (
             <p role="note" className="rounded-lg border-2 border-dashed border-gt-rule p-3 text-sm">
@@ -249,10 +277,10 @@ export function OnSiteReplanningFlow({
             </p>
           )}
           <RevisionReview
-            key={`${trip.id}:${trip.version}:${target.id}`}
+            key={`${session.epoch}:${target.id}`}
             trip={trip}
             target={target}
-            generate={generate}
+            generate={guardedGenerate}
             // 模擬報告では適用の経路そのものを渡さず、承認が旅程へ届かないようにする。
             apply={session.submission.context.report.kind === 'actual' ? apply : undefined}
             applyUnavailableReason={
@@ -292,7 +320,7 @@ export function OnSiteReplanningFlow({
                 return
               }
               setSession(null)
-              setTargetId(null)
+              setDraft(null)
               setStep('progress')
               announce('最新の旅程を確認してから報告し直してください。')
               moveFocus('progress')
