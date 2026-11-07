@@ -178,9 +178,9 @@ export function ReflectionFlow({ initialTripId }: { initialTripId?: string }) {
               <p>
                 旅行計画を作るだけではFirestoreに保存されません。保存が完了した旅程だけを振り返りに利用できます。
               </p>
-              <a className="underline" href="/">
+              <Link className="underline" href="/">
                 旅行計画へ戻る
-              </a>
+              </Link>
             </div>
           ) : (
             <ul className="space-y-2">
