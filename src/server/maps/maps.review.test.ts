@@ -238,3 +238,143 @@ describe('外部APIの数値の検証', () => {
     })
   })
 })
+
+describe('認証の実装が通常の例外を投げる場合（再レビュー対応）', () => {
+  it('MapsAuthが通常のErrorを投げても、元の例外を伝播させず auth_failed にする', async () => {
+    const fetchFn = vi.fn<typeof fetch>()
+    const client = createMapsClient({
+      auth: {
+        async getHeaders() {
+          throw new Error(`raw credential error ${SECRET}`)
+        },
+      },
+      fetchFn,
+    })
+    const error = await failureOf(client.searchPlaces({ query: '清水寺' }))
+
+    expect(error.reason).toBe('auth_failed')
+    expect(error.cause).toBeUndefined()
+    expect(JSON.stringify(error, Object.getOwnPropertyNames(error))).not.toContain(SECRET)
+    expect(fetchFn).not.toHaveBeenCalled()
+  })
+
+  it('MapsAuthが文字列など、Errorでない値を投げても auth_failed', async () => {
+    const client = createMapsClient({
+      auth: {
+        async getHeaders() {
+          throw SECRET
+        },
+      },
+      fetchFn: vi.fn<typeof fetch>(),
+    })
+
+    expect((await failureOf(client.searchPlaces({ query: '清水寺' }))).reason).toBe('auth_failed')
+  })
+})
+
+describe('apiStatus は、Googleの既知のエラー名だけを保持する（再レビュー対応）', () => {
+  const statusOf = async (apiStatus: string) => {
+    const { client } = setup(() => jsonResponse({ error: { status: apiStatus } }, 400))
+    return (await failureOf(client.searchPlaces({ query: '清水寺' }))).apiStatus
+  }
+
+  it.each([
+    'INVALID_ARGUMENT',
+    'PERMISSION_DENIED',
+    'RESOURCE_EXHAUSTED',
+    'UNAUTHENTICATED',
+    'UNAVAILABLE',
+    'DEADLINE_EXCEEDED',
+    'INTERNAL',
+  ])('既知の名前 %s は保持する', async (name) => {
+    expect(await statusOf(name)).toBe(name)
+  })
+
+  it.each([
+    'SECRET_TOKEN_VALUE',
+    'USER_EMAIL_EXAMPLE',
+    'INVALID_ARGUMENT_EXTRA',
+    'invalid_argument',
+    'A'.repeat(40),
+    '',
+  ])('既知でない名前（文字種・長さが合っても）%s は保持しない', async (name) => {
+    expect(await statusOf(name)).toBeUndefined()
+  })
+})
+
+describe('認証の期限：単調時計での管理（再レビュー対応）', () => {
+  // 同期的に時間を消費して、イベントループを塞ぐ（期限のタイマーが実行できない状況を再現する）。
+  const blockFor = (ms: number) => {
+    const end = performance.now() + ms
+    while (performance.now() < end) {
+      // 待つ
+    }
+  }
+
+  it('タイマーが遅れて、認証の成功が先に処理されても、期限を過ぎていればMapsを呼ばない', async () => {
+    const fetchFn = vi.fn<typeof fetch>(async () => jsonResponse({}))
+    const client = createMapsClient({
+      auth: {
+        async getHeaders() {
+          // タイマー（30ms）が実行される前に、同期的に60msを消費してから、認証を成功させる。
+          blockFor(60)
+          return { Authorization: 'Bearer late', 'X-Goog-User-Project': 'p' }
+        },
+      },
+      fetchFn,
+      timeoutMs: 30,
+    })
+
+    const error = await failureOf(client.searchPlaces({ query: '清水寺' }))
+
+    expect(error.reason).toBe('timeout')
+    expect(fetchFn).not.toHaveBeenCalled()
+  })
+
+  it('期限内に認証が終われば、残りの時間で送信する（認証に使った時間を差し引く）', async () => {
+    let seenSignal: AbortSignal | undefined
+    const fetchFn = vi.fn<typeof fetch>(async (_url, init) => {
+      seenSignal = init?.signal ?? undefined
+      return jsonResponse({})
+    })
+    const client = createMapsClient({
+      auth: {
+        async getHeaders() {
+          await new Promise((resolve) => setTimeout(resolve, 20))
+          return { Authorization: 'Bearer ok', 'X-Goog-User-Project': 'p' }
+        },
+      },
+      fetchFn,
+      timeoutMs: 5000,
+    })
+
+    await client.searchPlaces({ query: '清水寺' })
+
+    expect(fetchFn).toHaveBeenCalledTimes(1)
+    expect(seenSignal?.aborted).toBe(false)
+  })
+
+  it('認証に時間を使い切ったあとに送信が始まる場合も、残り時間が尽きていれば送らない', async () => {
+    const fetchFn = vi.fn<typeof fetch>(async () => jsonResponse({}))
+    const client = createMapsClient({
+      auth: {
+        async getHeaders() {
+          await new Promise((resolve) => setTimeout(resolve, 15))
+          blockFor(30)
+          return { Authorization: 'Bearer ok', 'X-Goog-User-Project': 'p' }
+        },
+      },
+      fetchFn,
+      timeoutMs: 40,
+    })
+
+    expect(
+      (
+        await failureOf(
+          client.computeRoute({ originPlaceId: 'A', destinationPlaceId: 'B', mode: 'WALK' }),
+        )
+      ).reason,
+    ).toBe('timeout')
+    expect(fetchFn).not.toHaveBeenCalled()
+  })
+})
