@@ -66,9 +66,11 @@ describe('旅程の明示的保存', () => {
       isAnonymous: true,
     })
     vi.mocked(getAuthHeaders).mockResolvedValue(new Headers({ Authorization: 'Bearer token' }))
-    const fetchFn = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response(JSON.stringify({ error: { code: 'persistence_disabled' } }), { status: 503 }),
-    )
+    const fetchFn = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ error: { code: 'persistence_disabled' } }), { status: 503 }),
+      )
     vi.stubGlobal('fetch', fetchFn)
     render(<TripSavePanel trip={trip} />)
     fireEvent.click(screen.getByRole('button', { name: '本人の操作で旅程を保存する' }))
