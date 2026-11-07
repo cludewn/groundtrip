@@ -48,7 +48,11 @@ const ProposedSchema = z.strictObject({
   learnings: z
     .array(LearningSchema.refine((learning) => learning.approval.status === 'pending'))
     .min(1)
-    .max(3),
+    .max(3)
+    // 同じIDの候補があると、承認の操作が、意図しない候補にも作用する。
+    .refine(
+      (learnings) => new Set(learnings.map((learning) => learning.id)).size === learnings.length,
+    ),
 })
 const ApiErrorSchema = z.object({ status: z.string(), message: z.string() })
 

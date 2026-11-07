@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import type { ApprovedLearning } from '@/domain'
+import type { ApprovedLearning, Learning, Revision, Trip } from '@/domain'
 import { sampleLearning, sampleRevision, sampleTrip } from '@/domain/samples'
 
 import type { CandidatesResult } from './api-client'
@@ -14,16 +14,32 @@ afterEach(() => {
 })
 
 const NOW = new Date('2026-11-08T10:00:00+09:00')
-const proposed: CandidatesResult = { ok: true, learnings: [sampleLearning] }
+const learningWith = (id: string, content = sampleLearning.content): Learning => ({
+  ...sampleLearning,
+  id,
+  content,
+})
+const proposed = (...learnings: Learning[]): CandidatesResult => ({ ok: true, learnings })
 
-const setup = (
-  result: CandidatesResult = proposed,
-  props: Partial<React.ComponentProps<typeof LearningReview>> = {},
-) => {
+// 承認済みの変更。sampleRevision は模擬報告（on_site・simulated）。
+const approvedSimulated: Revision = {
+  ...sampleRevision,
+  constraintCheck: { status: 'satisfied', explanation: 'テスト用' },
+  approval: { status: 'approved', decidedAt: '2026-11-08T12:10:00+09:00' },
+}
+const approvedActual: Revision = {
+  ...approvedSimulated,
+  id: 'revision-actual',
+  context: { phase: 'on_site', report: { kind: 'actual', description: '昼食店Aが臨時休業だった' } },
+}
+
+type Props = Partial<React.ComponentProps<typeof LearningReview>>
+
+const setup = (result: CandidatesResult = proposed(sampleLearning), props: Props = {}) => {
   const request = vi.fn<RequestCandidates>().mockResolvedValue(result)
   const onApprovedChange = vi.fn<(approved: ApprovedLearning[]) => void>()
   const user = userEvent.setup()
-  render(
+  const view = render(
     <LearningReview
       trip={sampleTrip}
       requestCandidates={request}
@@ -32,23 +48,46 @@ const setup = (
       {...props}
     />,
   )
-  return { request, onApprovedChange, user }
+  const rerender = (next: Props) =>
+    view.rerender(
+      <LearningReview
+        trip={sampleTrip}
+        requestCandidates={request}
+        now={() => NOW}
+        onApprovedChange={onApprovedChange}
+        {...props}
+        {...next}
+      />,
+    )
+  return { request, onApprovedChange, user, rerender }
 }
 
 const feedback = () => screen.getByLabelText(/感想・変更した理由/)
 const makeButton = () => screen.getByRole('button', { name: /学びの候補を作/ })
+const lastApproved = (fn: ReturnType<typeof setup>['onApprovedChange']) =>
+  fn.mock.lastCall?.[0] ?? []
+const approvedHeading = (count: number) =>
+  screen.getByRole('heading', { name: `承認済みの学び（${count}件）` })
 
-const generate = async (user: ReturnType<typeof userEvent.setup>) => {
-  await user.type(feedback(), '昼食後は休みたかった')
+const generate = async (
+  user: ReturnType<typeof userEvent.setup>,
+  text = '昼食後は休みたかった',
+) => {
+  const textarea = feedback()
+  await user.clear(textarea)
+  await user.type(textarea, text)
   await user.click(makeButton())
   await screen.findByRole('heading', { name: /学びの候補（/ })
 }
 
-describe('LearningReview: 候補の作成', () => {
-  it('初期表示では、承認済みの学びは0件で、保存されないことを案内する', () => {
+describe('LearningReview: 表示と候補の作成', () => {
+  it('冒頭で、承認しても保存・次回への反映は行われないことを明示する', () => {
     setup()
-    expect(screen.getByRole('heading', { name: '承認済みの学び（0件）' })).toBeTruthy()
-    expect(screen.getByText(/まだ保存されません/)).toBeTruthy()
+    const intro = screen.getByText(/いまの画面で承認しても/)
+
+    expect(intro.textContent).toContain('保存されず')
+    expect(intro.textContent).toContain('次回の旅程づくりにも反映されません')
+    expect(approvedHeading(0)).toBeTruthy()
   })
 
   it('感想を送って候補を作る。候補は未承認で、承認済みには入らない', async () => {
@@ -61,60 +100,18 @@ describe('LearningReview: 候補の作成', () => {
       feedback: '昼食後は休みたかった',
     })
     expect(screen.getByText('未承認')).toBeTruthy()
-    expect(screen.getByRole('heading', { name: '承認済みの学び（0件）' })).toBeTruthy()
+    expect(approvedHeading(0)).toBeTruthy()
     expect(onApprovedChange).toHaveBeenLastCalledWith([])
   })
 
-  it('候補が出たら、見出しへフォーカスを移す', async () => {
+  it('候補が出たら、見出しへフォーカスを移す。見出しには、フォーカスの表示がある', async () => {
     const { user } = setup()
     await generate(user)
-    await waitFor(() =>
-      expect(document.activeElement).toBe(screen.getByRole('heading', { name: /学びの候補（/ })),
-    )
-  })
+    const heading = screen.getByRole('heading', { name: /学びの候補（/ })
 
-  it('材料（感想も承認済みの変更）が無いときは、ボタンは押せて、AIを呼ばず感想欄を示す', async () => {
-    const { request, user } = setup()
-    const button = makeButton()
-    expect(button.getAttribute('aria-disabled')).toBeNull()
-
-    await user.click(button)
-
-    expect(request).not.toHaveBeenCalled()
-    expect(screen.getByRole('alert').textContent).toContain('感想を入力')
-    expect(feedback().getAttribute('aria-invalid')).toBe('true')
-    expect(document.activeElement).toBe(feedback())
-  })
-
-  it('承認した変更があれば、感想が空でも作成できる', async () => {
-    const approvedRevision = {
-      ...sampleRevision,
-      approval: { status: 'approved' as const, decidedAt: '2026-11-08T11:50:00+09:00' },
-    }
-    const { request, user } = setup(proposed, { revisions: [approvedRevision] })
-
-    await user.click(makeButton())
-
-    expect(request).toHaveBeenCalledTimes(1)
-  })
-
-  it('未承認の変更しか無いときは、材料にならないと案内する', async () => {
-    const { request, user } = setup(proposed, { revisions: [sampleRevision] })
-    expect(screen.getByText(/未承認または却下（学びの材料にしません）/)).toBeTruthy()
-
-    await user.click(makeButton())
-
-    expect(request).not.toHaveBeenCalled()
-  })
-
-  it('感想が長すぎるときは、AIを呼ばずに案内する', async () => {
-    const { request, user } = setup()
-    await user.click(feedback())
-    await user.paste('あ'.repeat(1001))
-    await user.click(makeButton())
-
-    expect(request).not.toHaveBeenCalled()
-    expect(screen.getByRole('alert').textContent).toContain('1000文字以内')
+    await waitFor(() => expect(document.activeElement).toBe(heading))
+    expect(heading.className).toContain('focus:outline')
+    expect(heading.className).not.toContain('outline-none')
   })
 
   it('失敗したら理由を示し、入力した感想は残す', async () => {
@@ -130,20 +127,71 @@ describe('LearningReview: 候補の作成', () => {
     expect(screen.queryByRole('heading', { name: /学びの候補（/ })).toBeNull()
   })
 
-  it('生成中は二重に送信しない', async () => {
-    let resolve: (value: CandidatesResult) => void = () => undefined
-    const request = vi.fn<RequestCandidates>(
-      () => new Promise<CandidatesResult>((r) => (resolve = r)),
-    )
-    const user = userEvent.setup()
-    render(<LearningReview trip={sampleTrip} requestCandidates={request} />)
-    await user.type(feedback(), '感想')
+  it('感想が長すぎるときは、AIを呼ばずに案内する', async () => {
+    const { request, user } = setup()
+    await user.click(feedback())
+    await user.paste('あ'.repeat(1001))
     await user.click(makeButton())
-    await user.click(screen.getByRole('button', { name: /作っています/ }))
+
+    expect(request).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert').textContent).toContain('1000文字以内')
+  })
+})
+
+describe('LearningReview: 材料の判定（模擬報告）', () => {
+  it('材料（感想も使える変更も）が無いときは、ボタンは押せて、AIを呼ばず感想欄を示す', async () => {
+    const { request, user } = setup()
+    const button = makeButton()
+    expect(button.getAttribute('aria-disabled')).toBeNull()
+
+    await user.click(button)
+
+    expect(request).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert').textContent).toContain('感想を入力')
+    expect(feedback().getAttribute('aria-invalid')).toBe('true')
+    expect(document.activeElement).toBe(feedback())
+  })
+
+  it('承認済みの模擬報告だけで、感想が無ければ、APIを呼ばず、入力案内へ誘導する', async () => {
+    const { request, user } = setup(proposed(sampleLearning), { revisions: [approvedSimulated] })
+
+    await user.click(makeButton())
+
+    expect(request).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert').textContent).toContain('感想を入力')
+    expect(document.activeElement).toBe(feedback())
+  })
+
+  it('承認済みで、実際の報告に基づく変更があれば、感想が空でも作成できる', async () => {
+    const { request, user } = setup(proposed(sampleLearning), { revisions: [approvedActual] })
+
+    await user.click(makeButton())
 
     expect(request).toHaveBeenCalledTimes(1)
-    resolve(proposed)
-    await screen.findByRole('heading', { name: /学びの候補（/ })
+  })
+
+  it('模擬報告と感想があれば作成できる（模擬報告は材料として案内しない）', async () => {
+    const { request, user } = setup(proposed(sampleLearning), { revisions: [approvedSimulated] })
+    await user.type(feedback(), '昼食後は休みたかった')
+    await user.click(makeButton())
+
+    expect(request).toHaveBeenCalledTimes(1)
+  })
+
+  it('変更の履歴で、実報告・模擬報告・未承認を区別して案内する', () => {
+    setup(proposed(sampleLearning), {
+      revisions: [
+        approvedActual,
+        { ...approvedSimulated, id: 'revision-simulated' },
+        { ...sampleRevision, id: 'revision-pending' },
+      ],
+    })
+
+    expect(screen.getAllByText('承認済み（学びの材料にします）')).toHaveLength(1)
+    expect(
+      screen.getAllByText('模擬報告（デモ用の想定）のため、学びの材料にしません'),
+    ).toHaveLength(1)
+    expect(screen.getAllByText('未承認または却下のため、学びの材料にしません')).toHaveLength(1)
   })
 })
 
@@ -154,24 +202,26 @@ describe('LearningReview: 承認・却下・編集', () => {
 
     await user.click(screen.getByRole('button', { name: '承認する' }))
 
-    expect(screen.getByRole('heading', { name: '承認済みの学び（1件）' })).toBeTruthy()
-    const last = onApprovedChange.mock.lastCall?.[0] ?? []
+    expect(approvedHeading(1)).toBeTruthy()
+    const last = lastApproved(onApprovedChange)
     expect(last).toHaveLength(1)
     expect(last[0].approval).toEqual({ status: 'approved', decidedAt: NOW.toISOString() })
   })
 
-  it('却下した学びは承認済みに入らない。取り消すと未承認に戻る', async () => {
+  it('却下した学びは承認済みに入らない。取り消すと未承認に戻り、「承認する」へフォーカスが移る', async () => {
     const { onApprovedChange, user } = setup()
     await generate(user)
 
     await user.click(screen.getByRole('button', { name: '却下する' }))
-    expect(screen.getAllByText('却下').length).toBeGreaterThan(0)
-    expect(screen.getByRole('heading', { name: '承認済みの学び（0件）' })).toBeTruthy()
+    expect(approvedHeading(0)).toBeTruthy()
     expect(onApprovedChange).toHaveBeenLastCalledWith([])
 
     await user.click(screen.getByRole('button', { name: '却下を取り消す' }))
     expect(screen.getByText('未承認')).toBeTruthy()
-    expect(screen.getByRole('heading', { name: '承認済みの学び（0件）' })).toBeTruthy()
+    expect(approvedHeading(0)).toBeTruthy()
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: '承認する' })),
+    )
   })
 
   it('内容を編集してから承認すると、編集後の内容が承認される', async () => {
@@ -183,8 +233,7 @@ describe('LearningReview: 承認・却下・編集', () => {
 
     await user.click(screen.getByRole('button', { name: '承認する' }))
 
-    const approved = onApprovedChange.mock.lastCall?.[0] ?? []
-    expect(approved[0].content).toBe('昼食の候補は2つ用意したい')
+    expect(lastApproved(onApprovedChange)[0].content).toBe('昼食の候補は2つ用意したい')
   })
 
   it('適用範囲を「すべての旅行」に変えて承認できる', async () => {
@@ -194,45 +243,302 @@ describe('LearningReview: 承認・却下・編集', () => {
 
     await user.click(screen.getByRole('button', { name: '承認する' }))
 
-    expect((onApprovedChange.mock.lastCall?.[0] ?? [])[0].scope).toEqual({ kind: 'all_trips' })
+    expect(lastApproved(onApprovedChange)[0].scope).toEqual({ kind: 'all_trips' })
   })
 
-  it('内容を空にしたまま承認しようとすると、承認されず理由が出る', async () => {
+  it('承認済みの内容を編集し始めた時点で、承認が取り消され、承認済み一覧と通知から外れる', async () => {
+    const { onApprovedChange, user } = setup()
+    await generate(user)
+    await user.click(screen.getByRole('button', { name: '承認する' }))
+    expect(approvedHeading(1)).toBeTruthy()
+
+    await user.type(screen.getByLabelText('学びの内容'), 'あ')
+
+    expect(approvedHeading(0)).toBeTruthy()
+    expect(onApprovedChange).toHaveBeenLastCalledWith([])
+    expect(screen.getByText('未承認')).toBeTruthy()
+    expect(screen.queryByText('承認済み')).toBeNull()
+    expect(screen.getByText(/承認が取り消されました/)).toBeTruthy()
+  })
+
+  it('適用範囲を変え始めた時点でも、承認が取り消される', async () => {
+    const { onApprovedChange, user } = setup()
+    await generate(user)
+    await user.click(screen.getByRole('button', { name: '承認する' }))
+
+    await user.selectOptions(screen.getByLabelText('適用範囲'), 'all_trips')
+
+    expect(onApprovedChange).toHaveBeenLastCalledWith([])
+    expect(approvedHeading(0)).toBeTruthy()
+  })
+
+  it('入力途中の空欄は下書きとして保持し、承認時に検証する（承認されず、理由が出る）', async () => {
     const { onApprovedChange, user } = setup()
     await generate(user)
     await user.clear(screen.getByLabelText('学びの内容'))
 
+    expect((screen.getByLabelText('学びの内容') as HTMLTextAreaElement).value).toBe('')
     await user.click(screen.getByRole('button', { name: '承認する' }))
 
     expect(screen.getByText('学びの内容を入力してください')).toBeTruthy()
-    expect(screen.getByRole('heading', { name: '承認済みの学び（0件）' })).toBeTruthy()
+    expect(approvedHeading(0)).toBeTruthy()
     expect(onApprovedChange).toHaveBeenLastCalledWith([])
   })
 
-  it('承認したあとに内容を変えて承認し直すと、新しい内容に置き換わる', async () => {
+  it('承認後に内容を変え、承認し直すと、新しい内容に置き換わる', async () => {
     const { onApprovedChange, user } = setup()
     await generate(user)
     await user.click(screen.getByRole('button', { name: '承認する' }))
-
     const content = screen.getByLabelText('学びの内容')
     await user.clear(content)
     await user.type(content, '昼食は予約しておく')
-    expect(screen.getByRole('button', { name: '承認する' })).toBeTruthy()
+
     await user.click(screen.getByRole('button', { name: '承認する' }))
 
-    const approved = onApprovedChange.mock.lastCall?.[0] ?? []
+    const approved = lastApproved(onApprovedChange)
     expect(approved).toHaveLength(1)
     expect(approved[0].content).toBe('昼食は予約しておく')
   })
 
-  it('承認済みの一覧には、内容と適用範囲が表示される', async () => {
-    const { user } = setup()
+  it('承認済みの一覧には、内容と適用範囲が表示され、長い文字列は折り返す', async () => {
+    const long = 'あ'.repeat(100)
+    const { user } = setup(proposed(learningWith('learning-long', long)))
     await generate(user)
     await user.click(screen.getByRole('button', { name: '承認する' }))
 
-    const section = screen.getByRole('heading', { name: '承認済みの学び（1件）' }).parentElement
-    expect(section).not.toBeNull()
-    expect(within(section as HTMLElement).getByText(/昼食の営業情報を当日確認し/)).toBeTruthy()
-    expect(within(section as HTMLElement).getByText(/東山エリア|の旅行/)).toBeTruthy()
+    const list = approvedHeading(1).parentElement as HTMLElement
+    expect(within(list).getByText(new RegExp(long))).toBeTruthy()
+    expect(list.querySelector('ul')?.className).toContain('break-words')
+  })
+})
+
+describe('LearningReview: 再生成で、既存のデータを失わない', () => {
+  it('再生成に成功しても、承認結果・編集中の内容は消えず、新しい候補が追加される', async () => {
+    const request = vi
+      .fn<RequestCandidates>()
+      .mockResolvedValueOnce(proposed(learningWith('learning-a', '1件目の学び')))
+      .mockResolvedValueOnce(proposed(learningWith('learning-b', '2件目の学び')))
+    const { onApprovedChange, user } = setup(undefined, { requestCandidates: request })
+    await generate(user)
+    await user.click(screen.getByRole('button', { name: '承認する' }))
+    await user.type(screen.getByLabelText('学びの内容'), '（追記）')
+    await user.click(screen.getByRole('button', { name: '承認する' }))
+
+    await generate(user, '別の感想')
+
+    expect(screen.getByRole('heading', { name: '学びの候補（2件）' })).toBeTruthy()
+    expect(approvedHeading(1)).toBeTruthy()
+    expect(lastApproved(onApprovedChange)[0].content).toBe('1件目の学び（追記）')
+    expect(screen.getByDisplayValue('2件目の学び')).toBeTruthy()
+  })
+
+  it('再生成に成功しても、編集中（未承認）の内容は、そのまま残る', async () => {
+    const request = vi
+      .fn<RequestCandidates>()
+      .mockResolvedValueOnce(proposed(learningWith('learning-a', '1件目の学び')))
+      .mockResolvedValueOnce(proposed(learningWith('learning-b', '2件目の学び')))
+    const { user } = setup(undefined, { requestCandidates: request })
+    await generate(user)
+    await user.type(screen.getByLabelText('学びの内容'), '（編集中）')
+
+    await generate(user, '別の感想')
+
+    expect(screen.getByDisplayValue('1件目の学び（編集中）')).toBeTruthy()
+    expect(screen.getByDisplayValue('2件目の学び')).toBeTruthy()
+  })
+
+  it('再生成に失敗しても、承認結果・編集中の内容は、そのまま残る', async () => {
+    const request = vi
+      .fn<RequestCandidates>()
+      .mockResolvedValueOnce(proposed(learningWith('learning-a', '1件目の学び')))
+      .mockResolvedValueOnce({
+        ok: false,
+        failure: { kind: 'external_service_error', message: '接続できませんでした。' },
+      })
+    const { onApprovedChange, user } = setup(undefined, { requestCandidates: request })
+    await generate(user)
+    await user.click(screen.getByRole('button', { name: '承認する' }))
+    await user.click(makeButton())
+
+    expect((await screen.findByRole('alert')).textContent).toContain('そのまま残っています')
+    expect(approvedHeading(1)).toBeTruthy()
+    expect(lastApproved(onApprovedChange)).toHaveLength(1)
+    expect(screen.getByDisplayValue('1件目の学び')).toBeTruthy()
+  })
+})
+
+const deferred = () => {
+  let resolve: (value: CandidatesResult) => void = () => undefined
+  const promise = new Promise<CandidatesResult>((r) => (resolve = r))
+  return { promise, resolve }
+}
+
+describe('LearningReview: 非同期の競合', () => {
+  it('送信の直後に、すぐ、もう一度押しても、二重に送らない（即時ロック）', async () => {
+    const pending = deferred()
+    const request = vi.fn<RequestCandidates>(() => pending.promise)
+    const { user } = setup(undefined, { requestCandidates: request })
+    await user.type(feedback(), '感想')
+
+    await user.click(makeButton())
+    await user.click(screen.getByRole('button', { name: /作っています/ }))
+    await user.click(screen.getByRole('button', { name: /作っています/ }))
+
+    expect(request).toHaveBeenCalledTimes(1)
+    pending.resolve(proposed(sampleLearning))
+    await screen.findByRole('heading', { name: /学びの候補（/ })
+  })
+
+  it('リクエスト中に旅程が更新されたら、進行中の取得を中止し、古い応答を候補として採用しない', async () => {
+    const pending = deferred()
+    const signals: AbortSignal[] = []
+    const request = vi.fn<RequestCandidates>((_request, options) => {
+      if (options?.signal) signals.push(options.signal)
+      return pending.promise
+    })
+    const { user, rerender } = setup(undefined, { requestCandidates: request })
+    await user.type(feedback(), '感想')
+    await user.click(makeButton())
+
+    const updated: Trip = { ...sampleTrip, version: sampleTrip.version + 1 }
+    rerender({ trip: updated })
+    await act(async () => {
+      pending.resolve(proposed(sampleLearning))
+    })
+
+    expect(signals[0].aborted).toBe(true)
+    expect(screen.queryByRole('heading', { name: /学びの候補（/ })).toBeNull()
+    expect(approvedHeading(0)).toBeTruthy()
+    // 更新後は、もう一度、送信できる。
+    expect(makeButton().getAttribute('aria-disabled')).toBeNull()
+  })
+
+  it('リクエスト中に変更履歴が更新されても、古い応答を採用しない', async () => {
+    const pending = deferred()
+    const request = vi.fn<RequestCandidates>(() => pending.promise)
+    const { user, rerender } = setup(undefined, { requestCandidates: request })
+    await user.type(feedback(), '感想')
+    await user.click(makeButton())
+
+    rerender({ revisions: [approvedActual] })
+    await act(async () => {
+      pending.resolve(proposed(sampleLearning))
+    })
+
+    expect(screen.queryByRole('heading', { name: /学びの候補（/ })).toBeNull()
+  })
+
+  it('古い応答が、新しい送信の結果を、上書きしない', async () => {
+    const first = deferred()
+    const second = deferred()
+    const request = vi
+      .fn<RequestCandidates>()
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise)
+    const { user, rerender } = setup(undefined, { requestCandidates: request })
+    await user.type(feedback(), '感想')
+    await user.click(makeButton())
+    // 更新で1回目は古くなる。2回目を送る。
+    rerender({ revisions: [approvedActual] })
+    await user.click(makeButton())
+
+    await act(async () => {
+      second.resolve(proposed(learningWith('learning-new', '新しい結果')))
+    })
+    await act(async () => {
+      first.resolve(proposed(learningWith('learning-old', '古い結果')))
+    })
+
+    expect(screen.getByDisplayValue('新しい結果')).toBeTruthy()
+    expect(screen.queryByDisplayValue('古い結果')).toBeNull()
+  })
+
+  it('別の旅程に切り替わったら、前の旅程の候補・承認状態を消し、親へも空を通知する', async () => {
+    const { onApprovedChange, user, rerender } = setup()
+    await generate(user)
+    await user.click(screen.getByRole('button', { name: '承認する' }))
+    expect(lastApproved(onApprovedChange)).toHaveLength(1)
+
+    rerender({ trip: { ...sampleTrip, id: 'trip-other' } })
+
+    expect(screen.queryByRole('heading', { name: /学びの候補（/ })).toBeNull()
+    expect(approvedHeading(0)).toBeTruthy()
+    expect(onApprovedChange).toHaveBeenLastCalledWith([])
+    expect((feedback() as HTMLTextAreaElement).value).toBe('')
+  })
+
+  it('別の旅程に切り替わったあとに届いた、前の旅程の応答は、採用しない', async () => {
+    const pending = deferred()
+    const request = vi.fn<RequestCandidates>(() => pending.promise)
+    const { user, rerender } = setup(undefined, { requestCandidates: request })
+    await user.type(feedback(), '感想')
+    await user.click(makeButton())
+
+    rerender({ trip: { ...sampleTrip, id: 'trip-other' } })
+    await act(async () => {
+      pending.resolve(proposed(sampleLearning))
+    })
+
+    expect(screen.queryByRole('heading', { name: /学びの候補（/ })).toBeNull()
+  })
+})
+
+describe('LearningReview: 候補の取り込み時の検証（差し替えた取得関数の応答にも適用）', () => {
+  const failsToAdopt = async (result: CandidatesResult, expected: string) => {
+    const { user } = setup(result)
+    await user.type(feedback(), '感想')
+    await user.click(makeButton())
+
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain(expected)
+    expect(screen.queryByRole('heading', { name: /学びの候補（/ })).toBeNull()
+  }
+
+  it('同じIDの候補が複数あれば、全体を採用しない', async () => {
+    await failsToAdopt(proposed(sampleLearning, sampleLearning), '同じID')
+  })
+
+  it('承認済みの候補が含まれていれば、全体を採用しない', async () => {
+    const approved: Learning = {
+      ...learningWith('learning-x'),
+      approval: { status: 'approved', decidedAt: '2026-11-08T10:00:00+09:00' },
+    }
+    await failsToAdopt(proposed(sampleLearning, approved), '承認済み')
+  })
+
+  it('別の旅程の候補は、採用しない', async () => {
+    await failsToAdopt(
+      proposed({ ...learningWith('learning-x'), sourceTripId: 'trip-other' }),
+      '別の旅程',
+    )
+  })
+
+  it('旅程の地域と一致しない候補は、採用しない', async () => {
+    await failsToAdopt(
+      proposed({ ...learningWith('learning-y'), scope: { kind: 'region', region: '別の地域' } }),
+      '地域',
+    )
+  })
+
+  it('4件以上の候補は、採用しない', async () => {
+    await failsToAdopt(
+      proposed(...['a', 'b', 'c', 'd'].map((n) => learningWith(`learning-${n}`))),
+      '候補の数',
+    )
+  })
+
+  it('既存の候補と同じIDの候補は、再生成でも採用しない（既存の承認結果を守る）', async () => {
+    const request = vi
+      .fn<RequestCandidates>()
+      .mockResolvedValueOnce(proposed(sampleLearning))
+      .mockResolvedValueOnce(proposed({ ...sampleLearning, content: '上書きしようとする内容' }))
+    const { onApprovedChange, user } = setup(undefined, { requestCandidates: request })
+    await generate(user)
+    await user.click(screen.getByRole('button', { name: '承認する' }))
+    await user.click(makeButton())
+
+    expect((await screen.findByRole('alert')).textContent).toContain('同じID')
+    expect(lastApproved(onApprovedChange)[0].content).toBe(sampleLearning.content)
+    expect(screen.queryByDisplayValue('上書きしようとする内容')).toBeNull()
   })
 })

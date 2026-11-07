@@ -34,6 +34,17 @@ describe('requestLearningCandidates', () => {
     })
   })
 
+  it('同じIDの候補が含まれていれば、全体を採用しない（承認の操作が、意図しない候補に作用するため）', async () => {
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValue(json({ status: 'proposed', learnings: [sampleLearning, sampleLearning] }))
+
+    expect(await requestLearningCandidates(request, { fetchFn })).toMatchObject({
+      ok: false,
+      failure: { kind: 'unexpected' },
+    })
+  })
+
   it('4件以上・0件の候補は採用しない', async () => {
     for (const count of [0, 4]) {
       const learnings = Array.from({ length: count }, (_, i) => ({

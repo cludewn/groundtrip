@@ -1,9 +1,10 @@
 'use client'
 
-import { useEffect, useReducer, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useReducer, useRef, useState, type FormEvent } from 'react'
 
 import type { ApprovedLearning, Learning, Revision, Trip } from '@/domain'
-import { MAX_LEARNING_CONTENT_LENGTH, editLearning } from '@/lib/learnings/lifecycle'
+import { MAX_LEARNING_CONTENT_LENGTH } from '@/lib/learnings/lifecycle'
+import { hasMaterial, revisionMaterialStatus } from '@/lib/learnings/material'
 
 import {
   requestLearningCandidates,
@@ -12,9 +13,17 @@ import {
   type CandidatesRequest,
   type CandidatesResult,
 } from './api-client'
-import { approvedOf, initialReviewState, reviewReducer, type ReviewAction } from './review-model'
+import { validateIncomingCandidates } from './intake'
+import {
+  approvedOf,
+  initialReviewState,
+  reviewReducer,
+  type ReviewAction,
+  type ReviewItem,
+} from './review-model'
 
 const MAX_FEEDBACK_LENGTH = 1000
+const NO_REVISIONS: Revision[] = []
 
 export type RequestCandidates = (
   request: CandidatesRequest,
@@ -23,7 +32,7 @@ export type RequestCandidates = (
 
 interface LearningReviewProps {
   trip: Trip
-  // 旅行中に行った部分修正の履歴。承認したものだけが、学びの材料になる。
+  // 旅行中に行った部分修正の履歴。承認した、実際の報告に基づくものだけが、学びの材料になる。
   revisions?: Revision[]
   // テスト・先行開発で差し替える。省略時は実際のAPIを呼ぶ。
   requestCandidates?: RequestCandidates
@@ -43,10 +52,18 @@ const STATUS_LABEL = {
   rejected: '却下',
 } as const
 
+const REVISION_MATERIAL_LABEL = {
+  usable: '承認済み（学びの材料にします）',
+  simulated: '模擬報告（デモ用の想定）のため、学びの材料にしません',
+  not_approved: '未承認または却下のため、学びの材料にしません',
+} as const
+
 const fieldClass =
   'w-full rounded border border-current/40 bg-transparent px-3 py-3 text-base aria-[invalid=true]:border-2'
 const buttonClass =
   'rounded border border-current/50 px-4 py-3 text-sm font-medium aria-disabled:opacity-50'
+// 長い文字列でも、モバイル画面で横にはみ出さない。
+const wrapClass = 'break-words [overflow-wrap:anywhere]'
 
 type Phase =
   | { kind: 'idle' }
@@ -56,9 +73,15 @@ type Phase =
 
 // 旅行後の振り返り：感想と変更履歴から学びの候補（1〜3件）を作り、本人が編集・承認・却下する。
 // 候補は提案であり、承認するまで次回の旅程には使われない。学びはAIの再学習ではなく、本人の設定である。
+//
+// 状態の扱い：
+// - 承認済みの内容を編集し始めたら、その時点で再承認待ちにする（承認済み一覧と通知から、すぐに外れる）。
+// - 候補を再生成しても、既存の候補・承認結果・編集中の内容は消さない（新しい候補を追加する）。
+// - 旅程・履歴が更新されたら、進行中の取得を中止し、古い応答を採用しない。別の旅程に切り替わったら、
+//   前の旅程の候補・承認状態を消し、混在させない。
 export function LearningReview({
   trip,
-  revisions = [],
+  revisions = NO_REVISIONS,
   requestCandidates = requestLearningCandidates,
   now = () => new Date(),
   onApprovedChange,
@@ -67,16 +90,60 @@ export function LearningReview({
   const [feedbackError, setFeedbackError] = useState('')
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' })
   const [review, dispatch] = useReducer(reviewReducer, initialReviewState)
+  const [focusApproveId, setFocusApproveId] = useState<string | null>(null)
+  const [lastTripId, setLastTripId] = useState(trip.id)
+
   const feedbackRef = useRef<HTMLTextAreaElement>(null)
   const resultHeadingRef = useRef<HTMLHeadingElement>(null)
   const controllerRef = useRef<AbortController | null>(null)
+  // 送信の即時ロック（状態の更新は非同期のため、二重送信はrefで確実に止める）。
+  const inFlightRef = useRef(false)
+  // 最新の応答だけを採用するための通し番号。
+  const seqRef = useRef(0)
 
+  // 旅程・履歴の内容。変わったら、進行中の取得の結果は、古いものとして扱う。
+  const contextKey = useMemo(() => JSON.stringify([trip, revisions]), [trip, revisions])
+  const contextKeyRef = useRef(contextKey)
+  const reviewRef = useRef(review)
+  const tripRef = useRef(trip)
+  useEffect(() => {
+    contextKeyRef.current = contextKey
+    reviewRef.current = review
+    tripRef.current = trip
+  })
+
+  // 別の旅程に切り替わったら、前の旅程の候補・承認状態・入力を消す（描画中の状態調整）。
+  if (trip.id !== lastTripId) {
+    setLastTripId(trip.id)
+    dispatch({ type: 'reset' })
+    setFeedback('')
+    setFeedbackError('')
+    setPhase({ kind: 'idle' })
+    setFocusApproveId(null)
+  }
+
+  // 旅程・履歴が更新されたら、進行中の取得を中止する（古い応答を採用しない）。
+  useEffect(() => {
+    controllerRef.current?.abort()
+    controllerRef.current = null
+    seqRef.current += 1
+    inFlightRef.current = false
+    setPhase((current) => (current.kind === 'generating' ? { kind: 'idle' } : current))
+  }, [contextKey])
   useEffect(() => () => controllerRef.current?.abort(), [])
+
   useEffect(() => {
     if (phase.kind === 'ready') resultHeadingRef.current?.focus()
   }, [phase.kind])
 
-  const approved = approvedOf(review)
+  // 却下を取り消したあと、消えたボタンの代わりに、その候補の「承認する」へフォーカスを移す。
+  useEffect(() => {
+    if (focusApproveId === null) return
+    document.getElementById(`learning-approve-${focusApproveId}`)?.focus()
+    setFocusApproveId(null)
+  }, [focusApproveId])
+
+  const approved = approvedOf(review).filter((item) => item.sourceTripId === trip.id)
   // 承認済みの内容が変わったときだけ、呼び出し側へ通知する。
   const approvedKey = JSON.stringify(approved)
   const notifyRef = useRef(onApprovedChange)
@@ -89,33 +156,40 @@ export function LearningReview({
     notifyRef.current?.(approvedRef.current)
   }, [approvedKey])
 
-  const approvedRevisions = revisions.filter((revision) => revision.approval.status === 'approved')
   const generating = phase.kind === 'generating'
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (generating) return
+    if (inFlightRef.current) return
     const text = feedback.trim()
     if (text.length > MAX_FEEDBACK_LENGTH) {
       setFeedbackError(`感想は${MAX_FEEDBACK_LENGTH}文字以内にしてください。`)
       feedbackRef.current?.focus()
       return
     }
-    if (text.length === 0 && approvedRevisions.length === 0) {
+    // サーバーと同じ判定（承認済みで、模擬報告ではない変更）。材料が無ければ、APIを呼ばず、入力へ誘導する。
+    if (!hasMaterial({ revisions, feedback: text })) {
       // ボタンは常に押せるようにし、押されたら不備の欄を示して移動する。
-      setFeedbackError('感想を入力してください（承認した変更が無いため、材料が必要です）。')
+      setFeedbackError(
+        '感想を入力してください（学びの材料にできる、承認済みで実際の報告に基づく変更が無いため、材料が必要です）。',
+      )
       feedbackRef.current?.focus()
       return
     }
     setFeedbackError('')
 
+    inFlightRef.current = true
+    const seq = (seqRef.current += 1)
     const controller = new AbortController()
     controllerRef.current = controller
+    const startedContext = contextKey
+    const startedTrip = trip
     setPhase({ kind: 'generating' })
+
     let result: CandidatesResult
     try {
       result = await requestCandidates(
-        { trip, revisions, feedback: text },
+        { trip: startedTrip, revisions, feedback: text },
         { signal: controller.signal },
       )
     } catch {
@@ -124,15 +198,35 @@ export function LearningReview({
         failure: { kind: 'unexpected', message: '予期しないエラーが発生しました。' },
       }
     }
-    if (controller.signal.aborted) return
-    controllerRef.current = null
-    if (result.ok) {
-      dispatch({ type: 'load', learnings: result.learnings })
-      setPhase({ kind: 'ready' })
-    } else {
-      // 失敗しても、感想の入力と、すでに確認中の候補は残す。
-      setPhase({ kind: 'failed', failure: result.failure })
+
+    // 古い応答（中止された・新しい送信がある・旅程や履歴が更新された）は、採用しない。
+    if (
+      seq !== seqRef.current ||
+      controller.signal.aborted ||
+      contextKeyRef.current !== startedContext
+    ) {
+      return
     }
+    inFlightRef.current = false
+    controllerRef.current = null
+
+    if (!result.ok) {
+      // 失敗しても、感想の入力と、確認中の候補・承認結果は残す。
+      setPhase({ kind: 'failed', failure: result.failure })
+      return
+    }
+    // 取り込む前に検証する（差し替えた取得関数の応答にも、同じ条件を適用する）。
+    const intake = validateIncomingCandidates(result.learnings, {
+      tripId: startedTrip.id,
+      region: startedTrip.region,
+      existingIds: new Set(reviewRef.current.items.map((item) => item.learning.id)),
+    })
+    if (!intake.ok) {
+      setPhase({ kind: 'failed', failure: { kind: 'unexpected', message: intake.reason } })
+      return
+    }
+    dispatch({ type: 'append', learnings: intake.learnings })
+    setPhase({ kind: 'ready' })
   }
 
   return (
@@ -142,7 +236,11 @@ export function LearningReview({
           旅の振り返り
         </h2>
         <p className="mt-1 text-sm">
-          感想と変更の履歴から、次の旅に活かせる「学び」の候補を作ります。承認した学びだけが、次回の旅程づくりに使われます（AIが学習し直すわけではありません）。
+          感想と変更の履歴から、次の旅に活かせる「学び」の候補を作ります。
+          <b>
+            いまの画面で承認しても、承認した内容は保存されず、次回の旅程づくりにも反映されません
+          </b>
+          （保存と次回への反映は、今後の機能です）。AIが学習し直すわけではありません。
         </p>
       </div>
 
@@ -155,16 +253,12 @@ export function LearningReview({
         ) : (
           <ul className="space-y-2 text-sm">
             {revisions.map((revision) => (
-              <li key={revision.id} className="rounded border border-current/30 p-3">
+              <li key={revision.id} className={`rounded border border-current/30 p-3 ${wrapClass}`}>
                 <p>
                   <b>{revision.diff.before.name}</b> → <b>{revision.diff.after.name}</b>
                 </p>
                 <p>理由：{revision.reason}</p>
-                <p>
-                  {revision.approval.status === 'approved'
-                    ? '承認済み（学びの材料にします）'
-                    : '未承認または却下（学びの材料にしません）'}
-                </p>
+                <p>{REVISION_MATERIAL_LABEL[revisionMaterialStatus(revision)]}</p>
               </li>
             ))}
           </ul>
@@ -210,32 +304,35 @@ export function LearningReview({
       {phase.kind === 'failed' && (
         <p role="alert" className="rounded border-2 border-current p-3 text-sm">
           {phase.failure.message}
-          {review.learnings.length > 0 && '（すでに確認中の候補は、そのまま残っています。）'}
+          {review.items.length > 0 && '（すでに確認中の候補は、そのまま残っています。）'}
         </p>
       )}
 
-      {review.learnings.length > 0 && (
+      {review.items.length > 0 && (
         <section aria-labelledby="candidates-heading" className="space-y-3">
           <h3
             id="candidates-heading"
             ref={resultHeadingRef}
             tabIndex={-1}
-            className="text-base font-semibold outline-none"
+            className="text-base font-semibold focus:outline-2 focus:outline-offset-4"
           >
-            学びの候補（{review.learnings.length}件）
+            学びの候補（{review.items.length}件）
           </h3>
           <p className="text-sm">
             内容と適用範囲を直してから、承認または却下してください。AIの提案は、承認するまで使われません。
+            承認した内容を変えると、承認が取り消され、もう一度、承認が必要です。
+            もう一度、候補を作っても、いまの候補と承認結果は消えません（新しい候補が追加されます）。
           </p>
           <ul className="space-y-3">
-            {review.learnings.map((learning) => (
+            {review.items.map((item) => (
               <CandidateCard
-                key={learning.id}
-                learning={learning}
+                key={item.learning.id}
+                item={item}
                 region={trip.region}
-                message={review.messages[learning.id]}
+                message={review.messages[item.learning.id]}
                 decidedAt={() => now().toISOString()}
                 dispatch={dispatch}
+                onReopened={setFocusApproveId}
               />
             ))}
           </ul>
@@ -249,7 +346,7 @@ export function LearningReview({
         {approved.length === 0 ? (
           <p className="text-sm">承認した学びはまだありません。</p>
         ) : (
-          <ul className="list-disc space-y-1 pl-5 text-sm">
+          <ul className={`list-disc space-y-1 pl-5 text-sm ${wrapClass}`}>
             {approved.map((item) => (
               <li key={item.id}>
                 {item.content}（
@@ -267,35 +364,29 @@ export function LearningReview({
 }
 
 interface CandidateCardProps {
-  learning: Learning
+  item: ReviewItem
   region: string
   message: string | undefined
   decidedAt: () => string
   dispatch: (action: ReviewAction) => void
+  onReopened: (id: string) => void
 }
 
-function CandidateCard({ learning, region, message, decidedAt, dispatch }: CandidateCardProps) {
-  const [content, setContent] = useState(learning.content)
-  const [scopeKind, setScopeKind] = useState<'all_trips' | 'region'>(learning.scope.kind)
+function CandidateCard({
+  item,
+  region,
+  message,
+  decidedAt,
+  dispatch,
+  onReopened,
+}: CandidateCardProps) {
+  const { learning, draft } = item
   const status = learning.approval.status
   const contentId = `learning-content-${learning.id}`
   const scopeId = `learning-scope-${learning.id}`
 
-  const draftScope: Learning['scope'] =
-    scopeKind === 'all_trips' ? { kind: 'all_trips' } : { kind: 'region', region }
-  const dirty = content.trim() !== learning.content || scopeKind !== learning.scope.kind
-
-  // 画面に見えている内容（編集中のものを含む）に対して、承認する。
-  // 入力が不正なら承認せず、理由を案内する。
-  const applyDraft = (): boolean => {
-    if (!dirty) return true
-    const check = editLearning(learning, { content, scope: draftScope })
-    dispatch({ type: 'edit', id: learning.id, edit: { content, scope: draftScope } })
-    return check.ok
-  }
-
   return (
-    <li className="space-y-3 rounded border border-current/40 p-4">
+    <li className={`space-y-3 rounded border border-current/40 p-4 ${wrapClass}`}>
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <span className="rounded border border-current/50 px-2 py-0.5">
           {CATEGORY_LABEL[learning.category]}
@@ -311,13 +402,15 @@ function CandidateCard({ learning, region, message, decidedAt, dispatch }: Candi
         <textarea
           id={contentId}
           rows={2}
-          value={content}
-          onChange={(event) => setContent(event.target.value)}
+          value={draft.content}
+          onChange={(event) =>
+            dispatch({ type: 'draft', id: learning.id, content: event.target.value, region })
+          }
           className={`${fieldClass} mt-1`}
           aria-describedby={message ? `${contentId}-message` : undefined}
         />
         <p className="mt-1 text-xs">
-          {content.trim().length} / {MAX_LEARNING_CONTENT_LENGTH}文字
+          {draft.content.trim().length} / {MAX_LEARNING_CONTENT_LENGTH}文字
         </p>
       </div>
       <div>
@@ -326,9 +419,14 @@ function CandidateCard({ learning, region, message, decidedAt, dispatch }: Candi
         </label>
         <select
           id={scopeId}
-          value={scopeKind}
+          value={draft.scopeKind}
           onChange={(event) =>
-            setScopeKind(event.target.value === 'region' ? 'region' : 'all_trips')
+            dispatch({
+              type: 'draft',
+              id: learning.id,
+              scopeKind: event.target.value === 'region' ? 'region' : 'all_trips',
+              region,
+            })
           }
           className={`${fieldClass} mt-1`}
         >
@@ -344,12 +442,13 @@ function CandidateCard({ learning, region, message, decidedAt, dispatch }: Candi
       <div className="flex flex-wrap gap-2">
         <button
           type="button"
+          id={`learning-approve-${learning.id}`}
           className={buttonClass}
-          onClick={() => {
-            if (applyDraft()) dispatch({ type: 'approve', id: learning.id, decidedAt: decidedAt() })
-          }}
+          onClick={() =>
+            dispatch({ type: 'approve', id: learning.id, decidedAt: decidedAt(), region })
+          }
         >
-          {status === 'approved' && !dirty ? '承認済み（再承認）' : '承認する'}
+          {status === 'approved' ? '承認済み（再承認）' : '承認する'}
         </button>
         <button
           type="button"
@@ -362,7 +461,10 @@ function CandidateCard({ learning, region, message, decidedAt, dispatch }: Candi
           <button
             type="button"
             className={buttonClass}
-            onClick={() => dispatch({ type: 'reopen', id: learning.id })}
+            onClick={() => {
+              dispatch({ type: 'reopen', id: learning.id })
+              onReopened(learning.id)
+            }}
           >
             却下を取り消す
           </button>
