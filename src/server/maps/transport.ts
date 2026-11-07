@@ -16,7 +16,8 @@ export async function postJson(
   request: { url: string; body: unknown; fieldMask: string },
 ): Promise<unknown> {
   const { auth, fetchFn = fetch, timeoutMs = MAPS_TIMEOUT_MS } = deps
-  const authHeaders = await auth.getHeaders()
+  // 認証（ADCのトークン取得）にも期限を設ける。期限切れ後に、遅れて認証が完了しても、Mapsは呼ばない。
+  const authHeaders = await withDeadline(auth.getHeaders(), timeoutMs)
 
   let response: Response
   let text: string
@@ -34,14 +35,13 @@ export async function postJson(
       signal: AbortSignal.timeout(timeoutMs),
     })
     text = await response.text()
-  } catch (cause) {
-    const name = cause instanceof Error ? cause.name : ''
+  } catch (error) {
+    // 外部由来の例外は、名前の判定だけに使い、保持も再送出もしない。
+    const name = error instanceof Error ? error.name : ''
     if (name === 'TimeoutError' || name === 'AbortError') {
-      throw new MapsCallError('timeout', 'Google Maps Platformの応答がタイムアウトしました', {
-        cause,
-      })
+      throw new MapsCallError('timeout', 'Google Maps Platformの応答がタイムアウトしました')
     }
-    throw new MapsCallError('network', 'Google Maps Platformへ接続できませんでした', { cause })
+    throw new MapsCallError('network', 'Google Maps Platformへ接続できませんでした')
   }
 
   if (!response.ok) {
@@ -52,16 +52,32 @@ export async function postJson(
   }
   try {
     return JSON.parse(text)
-  } catch (cause) {
+  } catch {
+    // JSON解析エラーのメッセージには、応答本文の断片が含まれ得るため、保持しない。
     throw new MapsCallError(
       'invalid_response',
       'Google Maps Platformの応答を解釈できませんでした',
       {
         status: response.status,
-        cause,
       },
     )
   }
+}
+
+// 認証など、時間のかかる準備に期限を設ける。期限が切れたら、timeoutとして失敗させる。
+// 元の処理は止められないが、結果は捨てる（期限後に完了しても、呼び出し側は先へ進まない）。
+function withDeadline<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () =>
+        reject(new MapsCallError('timeout', 'Google Maps Platformの認証がタイムアウトしました')),
+      timeoutMs,
+    )
+  })
+  // 期限後に元の処理が失敗しても、未処理の拒否にしない。
+  promise.catch(() => undefined)
+  return Promise.race([promise, deadline]).finally(() => clearTimeout(timer))
 }
 
 // Googleのエラー本文（{"error":{"status":"PERMISSION_DENIED"}}）から、状態名だけを取り出す。

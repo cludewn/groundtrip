@@ -1,6 +1,8 @@
 // Google Maps Platform（Places・Routes）の呼び出し失敗。HTTP 200の「結果なし」は失敗ではなく、
 // 各アダプターが `no_candidates` / `no_route` として返す。ここは「呼び出しそのものの失敗」だけを表す。
 // 原因の区分とHTTPステータス、Googleのエラー状態名だけを運び、リクエスト本文・クエリ・トークンは含めない。
+// 外部由来の例外（認証ライブラリの例外・JSON解析エラーなど）は、`cause`にも保持しない。
+// 例外のメッセージや応答の断片に、トークンや応答本文が含まれ得るため、安全な分類情報だけを公開する。
 export type MapsFailureReason =
   | 'not_configured'
   | 'invalid_request'
@@ -20,9 +22,9 @@ export class MapsCallError extends Error {
   constructor(
     reason: MapsFailureReason,
     message: string,
-    options?: { status?: number; apiStatus?: string; cause?: unknown },
+    options?: { status?: number; apiStatus?: string },
   ) {
-    super(message, options?.cause === undefined ? undefined : { cause: options.cause })
+    super(message)
     this.name = 'MapsCallError'
     this.reason = reason
     this.status = options?.status
