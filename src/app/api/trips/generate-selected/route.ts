@@ -2,7 +2,7 @@ import { z } from 'zod'
 
 import { GenerateTripRequestSchema } from '@/domain'
 import { IdSchema } from '@/domain/primitives'
-import { requireActor } from '@/lib/auth/server'
+import { AuthError, requireActor } from '@/lib/auth/server'
 import { FirestoreLearningStore } from '@/server/persistence/learnings'
 import { createLazyVertexGeminiClient } from '@/server/gemini/client'
 import { LearningSelectionError, resolveSelectedLearnings } from '@/server/learning-reuse/selection'
@@ -37,10 +37,7 @@ const client = createLazyVertexGeminiClient(process.env)
 
 export async function POST(request: Request): Promise<Response> {
   // FirestoreとGeminiの利用条件が整うまで、どちらかのフラグが無効なら何も呼ばない。
-  if (
-    !isTripGenerationEnabled(process.env) ||
-    process.env.PERSISTENCE_ENABLED?.trim() !== 'true'
-  ) {
+  if (!isTripGenerationEnabled(process.env) || process.env.PERSISTENCE_ENABLED?.trim() !== 'true') {
     return error(503, 'service_unavailable', '学びを使った旅程生成は現在利用できません。')
   }
   if (!request.headers.get('content-type')?.toLowerCase().startsWith('application/json')) {
@@ -50,8 +47,10 @@ export async function POST(request: Request): Promise<Response> {
   let actor
   try {
     actor = await requireActor(request)
-  } catch {
-    return error(401, 'auth_required', '本人の認証を確認できませんでした。')
+  } catch (reason) {
+    return reason instanceof AuthError && reason.code === 'auth_unavailable'
+      ? error(503, 'service_unavailable', '認証サービスを利用できません。')
+      : error(401, 'auth_required', '本人の認証を確認できませんでした。')
   }
 
   const body = await readBodyWithLimit(request, MAX_REQUEST_BYTES)

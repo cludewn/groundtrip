@@ -32,10 +32,7 @@ jobs:
       - name: 依存関係をインストール
         run: pnpm install --frozen-lockfile
       - name: フォーマット
-        run: |
-          pnpm exec prettier src/app/api/trips/generate-selected/route.ts src/features/trip-save/trip-save-panel.tsx --write
-          git diff -- src/app/api/trips/generate-selected/route.ts src/features/trip-save/trip-save-panel.tsx
-          pnpm format:check
+        run: pnpm format:check
       - name: Lint
         run: pnpm lint
       - name: 型チェック

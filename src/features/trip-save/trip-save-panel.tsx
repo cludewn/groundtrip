@@ -22,6 +22,8 @@ export function TripSavePanel({ trip }: { trip: Trip }) {
   const [state, setState] = useState<SaveState>({ phase: 'idle' })
   const [knownTrip, setKnownTrip] = useState(trip)
   const busy = useRef(false)
+  const latestTrip = useRef(trip)
+  latestTrip.current = trip
   // 別の旅程や画面上の固定変更では、以前の保存成功を流用しない。
   if (knownTrip !== trip) {
     setKnownTrip(trip)
@@ -36,7 +38,10 @@ export function TripSavePanel({ trip }: { trip: Trip }) {
       await startNewAnonymousSession()
       setState({ phase: 'idle' })
     } catch {
-      setState({ phase: 'error', message: '利用の開始に失敗しました。認証設定を確認してください。' })
+      setState({
+        phase: 'error',
+        message: '利用の開始に失敗しました。認証設定を確認してください。',
+      })
     } finally {
       busy.current = false
     }
@@ -50,8 +55,8 @@ export function TripSavePanel({ trip }: { trip: Trip }) {
         phase: 'error',
         message:
           trip.learningApplications.length > 0
-          ? '学びの適用履歴がある旅程の保存は、サーバーの適用確認に未接続です。'
-          : 'この旅程は保存用の条件を満たしていません。',
+            ? '学びの適用履歴がある旅程の保存は、サーバーの適用確認に未接続です。'
+            : 'この旅程は保存用の条件を満たしていません。',
       })
       return
     }
@@ -87,14 +92,16 @@ export function TripSavePanel({ trip }: { trip: Trip }) {
                 : '保存を確認できませんでした。再操作する前に保存済み一覧を確認してください。',
         )
       }
+      if (latestTrip.current !== trip) return
       setState({ phase: 'saved', tripId: parsed.data.trip.id })
     } catch (error) {
+      if (latestTrip.current !== trip) return
       setState({
         phase: 'error',
         message:
           error instanceof Error
-          ? error.message
-          : '保存結果を確認できませんでした。保存済み一覧で確認してください。',
+            ? error.message
+            : '保存結果を確認できませんでした。保存済み一覧で確認してください。',
       })
     } finally {
       busy.current = false
@@ -152,7 +159,11 @@ export function TripSavePanel({ trip }: { trip: Trip }) {
               </button>
             </div>
           )}
-          {state.phase === 'error' && <p role="alert" className="text-sm">{state.message}</p>}
+          {state.phase === 'error' && (
+            <p role="alert" className="text-sm">
+              {state.message}
+            </p>
+          )}
           <Link className="inline-flex min-h-11 items-center text-sm underline" href="/reflection">
             保存済みの旅程を確認する
           </Link>
