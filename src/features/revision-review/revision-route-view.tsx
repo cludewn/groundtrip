@@ -16,6 +16,8 @@ interface RevisionRouteViewProps {
   mock?: boolean
   generate?: GenerateRevisions
   apply?: ApplyRevision
+  // UI上での固定変更や承認後の更新を、照合側にも通知する（保存は別責務）。
+  onTripChange?: (trip: Trip) => void
 }
 
 export function RevisionRouteView({
@@ -24,6 +26,7 @@ export function RevisionRouteView({
   mock,
   generate,
   apply,
+  onTripChange,
 }: RevisionRouteViewProps) {
   const [local, setLocal] = useState<{
     source: Trip
@@ -89,6 +92,7 @@ export function RevisionRouteView({
         nextMeta[nextStop.id] = { ...nextMeta[nextStop.id], segmentFromPrevious: undefined }
     }
     setLocal({ source: sourceTrip, trip, meta: nextMeta, appliedStopId: target?.id })
+    onTripChange?.(trip)
     leave('承認した候補が旅程に反映されました。', 'success')
   }
 
@@ -157,7 +161,10 @@ export function RevisionRouteView({
             meta={current.meta}
             mock={mock}
             appliedStopId={current.appliedStopId}
-            onTripChange={(trip) => setLocal({ ...current, source: sourceTrip, trip })}
+            onTripChange={(trip) => {
+              setLocal({ ...current, source: sourceTrip, trip })
+              onTripChange?.(trip)
+            }}
             onStartRevision={
               generate
                 ? (stopId) => {

@@ -85,10 +85,25 @@ function Evidence({ stop }: { stop: Stop }) {
   )
 }
 
-function SegmentLabel({ segment }: { segment?: RouteSegmentLabel }) {
+function SegmentLabel({
+  segment,
+  destination,
+}: {
+  segment?: RouteSegmentLabel
+  destination: Stop
+}) {
+  // 分数が構造化されていない照合APIからは、所要時間を推測しない。
+  // ただしRoutes照合の根拠状態は、次の予定に付いたtravel_timeのEvidenceから表示できる。
+  const travelEvidence = destination.evidence.find((item) => item.subject === 'travel_time')
   let text = '次の地点まで：移動時間は未確認'
   if (segment?.status === 'known') {
     text = `次の地点まで：${segment.mode === 'walk' ? '徒歩' : '車'}${segment.minutes}分`
+  } else if (travelEvidence?.status === 'consistent') {
+    text = '次の地点まで：徒歩移動は情報源と整合（所要時間は未表示）'
+  } else if (travelEvidence?.status === 'conflicting') {
+    text = '次の地点まで：徒歩移動の条件に矛盾あり'
+  } else if (travelEvidence?.status === 'unverifiable') {
+    text = '次の地点まで：徒歩移動を確認できません'
   }
   return (
     <p className="mt-2 flex items-center gap-1.5 text-xs text-gt-muted">
@@ -290,7 +305,12 @@ export function RouteMap({
                 selected={selectedStopId === stop.id}
                 onSelect={onSelectStop ? () => onSelectStop(stop.id) : undefined}
               />
-              {showSegment && <SegmentLabel segment={nextMeta?.segmentFromPrevious} />}
+              {showSegment && (
+                <SegmentLabel
+                  segment={nextMeta?.segmentFromPrevious}
+                  destination={trip.stops[index + 1]}
+                />
+              )}
               {branch && (
                 <div
                   key={branch.revisionId}

@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { TripSchema } from '@/domain'
 import { sampleTrip } from '@/domain/samples'
 import type { GenerateTrip } from '@/features/trip-planner/use-trip-generation'
+import type { VerifyTrip } from '@/features/trip-verification/verified-trip-view'
 
 import { HomePlanner } from './home-planner'
 
@@ -20,6 +21,43 @@ const generatedTrip = TripSchema.parse({
 })
 
 describe('HomePlanner: 入力から路線図まで', () => {
+  it('生成した旅程から根拠照合ボタンを使い、Places・Routesの結果を路線図に反映する', async () => {
+    const generate = vi.fn<GenerateTrip>().mockResolvedValue({ ok: true, trip: generatedTrip })
+    const verified = TripSchema.parse({
+      ...generatedTrip,
+      stops: generatedTrip.stops.map((stop) => ({
+        ...stop,
+        placeId: `place-${stop.id}`,
+        evidence: [
+          {
+            id: `evidence-${stop.id}`,
+            subject: 'place_identity' as const,
+            claim: '施設の一致',
+            applicability: '施設の存在',
+            source: { kind: 'places' as const, label: 'Google Places' },
+            checkedAt: '2026-11-08T12:00:00+09:00',
+            status: 'consistent' as const,
+            explanation: '名称と地域が一致しました。',
+          },
+        ],
+      })),
+    })
+    const verify = vi.fn<VerifyTrip>().mockResolvedValue({ ok: true, trip: verified })
+    const user = userEvent.setup()
+    render(<HomePlanner generate={generate} verify={verify} />)
+
+    await user.type(screen.getByLabelText(/旅行先/), '京都市東山エリア')
+    fireEvent.change(screen.getByLabelText(/日付/), { target: { value: '2026-11-14' } })
+    await user.click(screen.getByRole('button', { name: '旅程を作成する' }))
+    expect(verify).not.toHaveBeenCalled()
+    await user.click(await screen.findByRole('button', { name: '根拠を確認する' }))
+    const route = await screen.findByRole('list', { name: '旅程の路線図' })
+    await screen.findByText('情報源と照合しました。', { exact: false })
+    expect(within(route).getAllByRole('listitem')).toHaveLength(3)
+    expect(route.textContent).toContain('情報源と整合')
+    expect(verify).toHaveBeenCalledTimes(1)
+  })
+
   it('生成された旅程を路線図で表示し、未照合であることを示す', async () => {
     const generate = vi.fn<GenerateTrip>().mockResolvedValue({ ok: true, trip: generatedTrip })
     const user = userEvent.setup()
