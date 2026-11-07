@@ -206,10 +206,15 @@ export function RevisionReview({
     applyFailure?.status === 'conflict' || applyFailure?.status === 'uncertain'
   const constraintSatisfied = candidate?.constraintCheck.status === 'satisfied'
   const canApprove = constraintSatisfied && !requiresLatestTrip
-  const approvalNote = !constraintSatisfied
-    ? candidate?.constraintCheck.status === 'violated'
+  const unapprovableNote =
+    candidate?.constraintCheck.status === 'violated'
       ? '旅程の条件に合わないため、この候補は選べません。'
       : '旅程に組み込めるか確認できていないため、この候補は選べません。'
+  // 現地報告では、承認できない具体的な理由を承認欄にも添える（比較欄が画面の外にあっても理由が分かる）。
+  const unapprovableReason =
+    onSiteReport && candidate ? `理由：${candidate.constraintCheck.explanation}` : ''
+  const approvalNote = !constraintSatisfied
+    ? `${unapprovableNote}${unapprovableReason}`
     : requiresLatestTrip
       ? '再操作する前に最新の旅程を確認してください。'
       : !apply
