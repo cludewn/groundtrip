@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from 'next'
+import Link from 'next/link'
 import { Geist, Geist_Mono } from 'next/font/google'
 import './globals.css'
 
@@ -35,6 +36,11 @@ export default function RootLayout({
           <p className="mx-auto w-full max-w-xl font-semibold">GroundTrip</p>
         </header>
         <main className="mx-auto w-full max-w-xl px-4 py-6">{children}</main>
+        <footer className="mx-auto w-full max-w-xl border-t border-gt-rule px-4 py-4 text-sm">
+          <Link href="/terms" className="inline-flex min-h-11 items-center underline">
+            利用規約・プライバシー・Google Mapsについて
+          </Link>
+        </footer>
       </body>
     </html>
   )
