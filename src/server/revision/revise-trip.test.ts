@@ -23,13 +23,18 @@ const mondayOnly: OpeningPeriod[] = [
   { open: { day: 1, hour: 8, minute: 0 }, close: { day: 1, hour: 20, minute: 0 } },
 ]
 
+// 所在地は、旅程の地域（京都）と矛盾しない、日本国内の住所。
+const KYOTO_ADDRESS = '日本、〒605-0862 京都府京都市東山区清水1丁目294'
+
 const found = (
   placeId: string,
   name: string,
   periods: OpeningPeriod[] = sundayAllDay,
 ): PlaceSearchResult => ({
   status: 'found',
-  candidates: [{ placeId, name, openingHours: { status: 'available', periods } }],
+  candidates: [
+    { placeId, name, address: KYOTO_ADDRESS, openingHours: { status: 'available', periods } },
+  ],
 })
 
 type MapsSetup = {
@@ -263,7 +268,12 @@ describe('reviseTrip: 成立しない候補は提案しない', () => {
         昼食店B: {
           status: 'found' as const,
           candidates: [
-            { placeId: 'P4', name: '昼食店B', openingHours: { status: 'unavailable' as const } },
+            {
+              placeId: 'P4',
+              name: '昼食店B',
+              address: KYOTO_ADDRESS,
+              openingHours: { status: 'unavailable' as const },
+            },
           ],
         },
       },
@@ -645,6 +655,20 @@ describe('移動手段の制約（利用者が車を使えるとは限らない�
     })
 
     expect(result.maps.computeRoute.mock.calls.every(([o]) => o.mode === 'WALK')).toBe(true)
+  })
+
+  it('車の経路を確認できず、徒歩では間に合わない候補は、矛盾ではなく「確認できない」（承認できない）', async () => {
+    const maps = { places: basePlaces, routes: route({ WALK: walk(50) }) } // 車は、経路なし
+    const { response } = await run(maps, clientReturning(draft([{ name: '昼食店B' }])), {
+      ...request,
+      travelModes: ['walk', 'drive'],
+    })
+    if (response.status !== 'proposed') throw new Error('提案を期待しました')
+
+    expect(response.revisions[0].constraintCheck.status).toBe('unknown')
+    expect(response.comparisons![0].after.toNext).toMatchObject({
+      segment: { status: 'unknown', reason: 'no_route', mode: 'drive' },
+    })
   })
 
   it('適用前の再検証も、同じ移動手段の制約で判定する（既定は徒歩だけ）', async () => {

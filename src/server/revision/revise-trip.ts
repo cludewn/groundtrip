@@ -17,11 +17,12 @@ import {
   type GeminiJsonClient,
 } from '../gemini/client'
 import type { MapsClient } from '../maps'
-import { normalizeName } from '../verification/name-match'
+import { parseName } from '../verification/name-match'
 import {
   measureSegment,
   normalizeModes,
   segmentEvidenceFields,
+  type SegmentEvidenceFields,
   type SegmentMeasurement,
   type TravelModeSetting,
 } from '../verification/segment'
@@ -151,6 +152,13 @@ const slotOf = (
 ): TravelSegmentSlot =>
   measurement ? { presence: 'segment', segment: measurement.segment } : { presence: 'none', reason }
 
+const evidenceFrom = (
+  stop: Stop,
+  suffix: string,
+  fields: SegmentEvidenceFields | null,
+  checkedAt: string,
+): Evidence | null => (fields ? evidence(stop, suffix, fields, checkedAt) : null)
+
 type Evaluation =
   | { kind: 'maps_failed' }
   | {
@@ -199,9 +207,10 @@ async function evaluateCandidate(
     checkedAt,
   })
 
+  // Routesを照会していない区間は、Routes由来の根拠を付けない（null）。
   const travelBefore =
     previous && sides.fromPrevious
-      ? evidence(
+      ? evidenceFrom(
           candidate,
           'travel',
           segmentEvidenceFields(sides.fromPrevious, {
@@ -213,7 +222,7 @@ async function evaluateCandidate(
       : null
   const travelAfter =
     next && sides.toNext
-      ? evidence(
+      ? evidenceFrom(
           candidate,
           'travel-next',
           segmentEvidenceFields(sides.toNext, {
@@ -361,9 +370,11 @@ export async function reviseTrip(
   }
 
   // 元の予定・他の予定・候補どうしと同じ名称は、差し替えの候補にならない。
-  const taken = new Set(trip.stops.map((stop) => normalizeName(stop.name)))
+  // 括弧書き（支店名など）を除いた名称で比べる：同じ店の別の支店も、同じ名称の候補として除く（保守的）。
+  const nameKey = (name: string): string => parseName(name).base
+  const taken = new Set(trip.stops.map((stop) => nameKey(stop.name)))
   const candidates = draft.candidates.filter((candidate) => {
-    const key = normalizeName(candidate.name)
+    const key = nameKey(candidate.name)
     if (key.length === 0 || taken.has(key)) return false
     taken.add(key)
     return true
