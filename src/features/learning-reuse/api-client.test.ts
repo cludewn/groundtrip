@@ -12,7 +12,7 @@ const payload = (learnings: unknown[] = [{ learning: sampleApprovedLearning, ver
 
 describe('承認済みLearningの取得', () => {
   it('本人トークンを付け、完全な一覧だけを受け付ける', async () => {
-    const fetchFn = vi.fn(async () => Response.json(payload()))
+    const fetchFn = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => Response.json(payload()))
     const result = await loadApprovedLearningOptions({ fetchFn, getHeaders: headers })
     expect(result).toMatchObject({
       ok: true,
