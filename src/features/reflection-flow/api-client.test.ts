@@ -151,6 +151,44 @@ describe('承認済み学びのFirestore保存', () => {
     expect(fetchFn).toHaveBeenCalledTimes(1)
   })
 
+  it('初めて見た既存IDの内容を、本人確認なく上書きしない', async () => {
+    const different = { ...sampleApprovedLearning, content: '別の内容へ更新したい' }
+    const fetchFn = vi.fn().mockResolvedValue(
+      json({
+        learnings: [{ version: 4, learning: sampleApprovedLearning }],
+        listInfo: { ...listInfo, returned: 1 },
+      }),
+    )
+    const result = await createFirestoreLearningStore(undefined, fetchFn).save([different])
+    expect(result.ok).toBe(false)
+    expect(fetchFn).toHaveBeenCalledTimes(1)
+  })
+
+  it('一度確認した版が別端末で変更されたら古い内容で上書きしない', async () => {
+    let remoteVersion = 4
+    const edited = { ...sampleApprovedLearning, content: '休憩を増やしたい' }
+    const fetchFn = vi.fn().mockImplementation(async () =>
+      json({
+        learnings: [
+          {
+            version: remoteVersion,
+            learning:
+              remoteVersion === 4
+                ? sampleApprovedLearning
+                : { ...sampleApprovedLearning, content: '別端末で更新した文章' },
+          },
+        ],
+        listInfo: { ...listInfo, returned: 1 },
+      }),
+    )
+    const store = createFirestoreLearningStore(undefined, fetchFn)
+    expect(await store.save([sampleApprovedLearning])).toEqual({ ok: true })
+    remoteVersion = 5
+    const result = await store.save([edited])
+    expect(result.ok).toBe(false)
+    expect(fetchFn).toHaveBeenCalledTimes(2)
+  })
+
   it('409の競合や503の保存不可を成功と扱わない', async () => {
     for (const status of [409, 503]) {
       const fetchFn = vi
