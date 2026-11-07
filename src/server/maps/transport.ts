@@ -16,8 +16,23 @@ export async function postJson(
   request: { url: string; body: unknown; fieldMask: string },
 ): Promise<unknown> {
   const { auth, fetchFn = fetch, timeoutMs = MAPS_TIMEOUT_MS } = deps
-  // 認証（ADCのトークン取得）にも期限を設ける。期限切れ後に、遅れて認証が完了しても、Mapsは呼ばない。
-  const authHeaders = await withDeadline(auth.getHeaders(), timeoutMs)
+  // 認証（ADCのトークン取得）と、Mapsへの送受信の合計に、1つの期限（timeoutMs）を設ける。
+  // 経過時間は、単調時計（performance.now）で測る。イベントループが遅れて、期限のタイマーが実行されなくても、
+  // 期限を過ぎたあとの認証の成功を、有効として扱わない（Mapsへの送信の直前にも、期限を確認する）。
+  const startedAt = performance.now()
+  const remaining = () => timeoutMs - (performance.now() - startedAt)
+
+  let authHeaders: Record<string, string>
+  try {
+    authHeaders = await withDeadline(auth.getHeaders(), timeoutMs)
+  } catch (error) {
+    if (error instanceof MapsCallError) throw error
+    // 認証の実装が、通常の例外を投げた場合も、元の例外を伝播させず、安全な分類へ変換する。
+    throw new MapsCallError('auth_failed', 'Google Maps Platformの認証に失敗しました')
+  }
+  if (remaining() <= 0) {
+    throw new MapsCallError('timeout', 'Google Maps Platformの認証がタイムアウトしました')
+  }
 
   let response: Response
   let text: string
@@ -32,7 +47,8 @@ export async function postJson(
         'X-Goog-FieldMask': request.fieldMask,
       },
       body: JSON.stringify(request.body),
-      signal: AbortSignal.timeout(timeoutMs),
+      // 認証に使った時間を除いた、残りの時間。
+      signal: AbortSignal.timeout(Math.max(1, Math.floor(remaining()))),
     })
     text = await response.text()
   } catch (error) {
@@ -81,6 +97,27 @@ function withDeadline<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
 }
 
 // Googleのエラー本文（{"error":{"status":"PERMISSION_DENIED"}}）から、状態名だけを取り出す。
+// Googleのエラー状態名は、既知の正規コード（Google APIの共通のエラーコード）だけを保持する。
+// 文字種・長さだけで通すと、エラー本文に含まれる任意の文字列を保持してしまうため、許可リストにする。
+const KNOWN_API_STATUSES: ReadonlySet<string> = new Set([
+  'INVALID_ARGUMENT',
+  'FAILED_PRECONDITION',
+  'OUT_OF_RANGE',
+  'UNAUTHENTICATED',
+  'PERMISSION_DENIED',
+  'NOT_FOUND',
+  'ABORTED',
+  'ALREADY_EXISTS',
+  'RESOURCE_EXHAUSTED',
+  'CANCELLED',
+  'DATA_LOSS',
+  'UNKNOWN',
+  'INTERNAL',
+  'UNIMPLEMENTED',
+  'UNAVAILABLE',
+  'DEADLINE_EXCEEDED',
+])
+
 function extractApiStatus(text: string): string | undefined {
   try {
     const parsed: unknown = JSON.parse(text)
@@ -88,7 +125,7 @@ function extractApiStatus(text: string): string | undefined {
       const error = parsed.error
       if (typeof error === 'object' && error !== null && 'status' in error) {
         const status = error.status
-        if (typeof status === 'string' && /^[A-Z_]{1,40}$/.test(status)) return status
+        if (typeof status === 'string' && KNOWN_API_STATUSES.has(status)) return status
       }
     }
   } catch {
