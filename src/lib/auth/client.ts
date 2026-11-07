@@ -6,6 +6,8 @@ import { getClientAuth } from '../firebase/client'
 import { FirebaseConfigurationError } from '../firebase/config'
 
 export type AuthUser = Readonly<{ uid: string; isAnonymous: boolean }>
+// 同じUserから同時に取ったUIDとIDトークンの組。
+export type AuthSnapshot = Readonly<{ uid: string; token: string }>
 export type AuthState =
   | { status: 'restoring' }
   | { status: 'session_ended'; error: ClientAuthError }
@@ -266,20 +268,35 @@ export function observeAuthState(listener: (state: AuthState) => void): () => vo
   }
 }
 
-export async function getIdToken(forceRefresh = false): Promise<string> {
+// UIDとIDトークンを、同じUserオブジェクトから同じ取得処理で組にして返す。
+// getIdTokenとgetAuthSnapshotの共通実装。セッション検証・エラー変換は従来のgetIdTokenのまま。
+async function fetchAuthSnapshot(forceRefresh: boolean): Promise<AuthSnapshot> {
   let session: Session | undefined
   try {
     session = currentSession(getClientAuth())
     session = await restoreSession(session)
     const user = session.user
     if (!user) throw new ClientAuthError('session_ended')
+    // UIDはトークン取得の待機中に別Userのものへ差し替わらないよう、同じuserから先に読む。
+    const uid = user.uid
     const token = await user.getIdToken(forceRefresh)
+    // 待機中にサインアウト・ユーザー変更があれば、組を返さず失敗にする。
     assertCurrent(session)
-    return token
+    return { uid, token }
   } catch (error) {
     // 失効・失敗時に新しい匿名ユーザーを自動作成してはいけない。
     throw session ? reportError(error, session) : toClientError(error)
   }
+}
+
+export async function getIdToken(forceRefresh = false): Promise<string> {
+  return (await fetchAuthSnapshot(forceRefresh)).token
+}
+
+// 現在のセッションのUIDとIDトークンを、同じ瞬間・同じUserから取った組で返す。
+// 呼び出し側がgetIdTokenと別にUIDを読むと、その間のユーザー切替で食い違うため、組が必要なときはこちらを使う。
+export function getAuthSnapshot(): Promise<AuthSnapshot> {
+  return fetchAuthSnapshot(false)
 }
 
 export async function getAuthHeaders(): Promise<Headers> {
