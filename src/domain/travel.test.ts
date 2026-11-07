@@ -68,6 +68,24 @@ describe('TravelSegment', () => {
     expect(TravelSegmentSchema.safeParse({ ...unknown, mode: 'walk' }).success).toBe(false)
   })
 
+  it.each([
+    ['not_queried', undefined],
+    ['no_route', AT],
+    ['api_error', AT],
+  ])(
+    '未確認：手段がtransitなら、理由は%s にできない（双方向で対応させる）',
+    (reason, checkedAt) => {
+      const invalid = { ...unknown, mode: 'transit', reason, checkedAt }
+      expect(TravelSegmentSchema.safeParse(invalid).success).toBe(false)
+    },
+  )
+
+  it('未確認：個別スキーマは公開せず、検証の入口はTravelSegmentSchemaだけ', async () => {
+    const exported = await import('./travel')
+    expect(Object.keys(exported)).not.toContain('KnownTravelSegmentSchema')
+    expect(Object.keys(exported)).not.toContain('UnknownTravelSegmentSchema')
+  })
+
   it('未確認に、移動時間・出典を持たせられない（失敗を移動時間0に変換できない）', () => {
     expect(TravelSegmentSchema.safeParse({ ...unknown, durationMinutes: 0 }).success).toBe(false)
     expect(
