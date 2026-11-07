@@ -31,6 +31,14 @@ jobs:
           cache: pnpm
       - name: 依存関係をインストール
         run: pnpm install --frozen-lockfile
+      - name: 整形結果の確認（一時的な検証用）
+        run: |
+          echo START_FORMAT_COMPONENT
+          pnpm exec prettier src/features/onsite-flow/onsite-replanning-flow.tsx
+          echo END_FORMAT_COMPONENT
+          echo START_FORMAT_TEST
+          pnpm exec prettier src/features/onsite-flow/onsite-replanning-flow.test.tsx
+          echo END_FORMAT_TEST
       - name: フォーマット
         run: pnpm format:check
       - name: Lint
