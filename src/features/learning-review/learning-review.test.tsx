@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { startTransition, useLayoutEffect, useState } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { ApprovedLearning, Learning, Revision, Trip } from '@/domain'
@@ -186,6 +187,9 @@ describe('LearningReview: 材料の判定（模擬報告）', () => {
         { ...sampleRevision, id: 'revision-pending' },
       ],
     })
+    const items = within(screen.getByRole('heading', { name: '変更の履歴' }).parentElement!)
+    expect(items.getAllByText(/報告の種類：模擬報告/)).toHaveLength(2)
+    expect(items.getAllByText('報告の種類：現地の実際の報告')).toHaveLength(1)
 
     expect(screen.getAllByText('承認済み（学びの材料にします）')).toHaveLength(1)
     expect(
@@ -540,5 +544,115 @@ describe('LearningReview: 候補の取り込み時の検証（差し替えた取
     expect((await screen.findByRole('alert')).textContent).toContain('同じID')
     expect(lastApproved(onApprovedChange)[0].content).toBe(sampleLearning.content)
     expect(screen.queryByDisplayValue('上書きしようとする内容')).toBeNull()
+  })
+})
+
+describe('LearningReview: 再レビューの指摘', () => {
+  it('未承認の模擬報告は、「模擬報告」かつ「未承認」と、独立して示す（通常の未承認報告と区別する）', () => {
+    setup(proposed(sampleLearning), {
+      revisions: [
+        { ...sampleRevision, id: 'revision-sim-pending' },
+        {
+          ...sampleRevision,
+          id: 'revision-act-pending',
+          context: { phase: 'on_site', report: { kind: 'actual', description: '休業だった' } },
+        },
+      ],
+    })
+    const list = screen.getByRole('heading', { name: '変更の履歴' }).parentElement!
+    const [simulated, actual] = within(list).getAllByRole('listitem')
+
+    expect(simulated.textContent).toContain(
+      '報告の種類：模擬報告（デモ用の想定。実際の出来事ではありません）',
+    )
+    expect(simulated.textContent).toContain('承認の状態：未承認')
+    expect(actual.textContent).toContain('報告の種類：現地の実際の報告')
+    expect(actual.textContent).toContain('承認の状態：未承認')
+    expect(actual.textContent).not.toContain('模擬報告')
+  })
+
+  it('同じ旅程IDで地域が変わったら、候補と承認結果をリセットし、旧地域の承認を残さない', async () => {
+    const { onApprovedChange, user, rerender } = setup()
+    await generate(user)
+    await user.click(screen.getByRole('button', { name: '承認する' }))
+    expect(lastApproved(onApprovedChange)).toHaveLength(1)
+
+    rerender({ trip: { ...sampleTrip, region: '別の地域' } })
+
+    expect(screen.queryByRole('heading', { name: /学びの候補（/ })).toBeNull()
+    expect(approvedHeading(0)).toBeTruthy()
+    expect(onApprovedChange).toHaveBeenLastCalledWith([])
+    expect(screen.getByText(/旅程の地域が変わったため/)).toBeTruthy()
+    expect((feedback() as HTMLTextAreaElement).value).toBe('')
+  })
+
+  it('地域が変わったあとに届いた、旧地域の応答は採用しない', async () => {
+    const pending = deferred()
+    const request = vi.fn<RequestCandidates>(() => pending.promise)
+    const { user, rerender } = setup(undefined, { requestCandidates: request })
+    await user.type(feedback(), '感想')
+    await user.click(makeButton())
+
+    rerender({ trip: { ...sampleTrip, region: '別の地域' } })
+    await act(async () => {
+      pending.resolve(proposed(sampleLearning))
+    })
+
+    expect(screen.queryByRole('heading', { name: /学びの候補（/ })).toBeNull()
+  })
+
+  it('ID が "__proto__" の候補でも、描画でき、入力不備の案内を出せる', async () => {
+    const { user } = setup(proposed(learningWith('__proto__')))
+    await generate(user)
+
+    await user.clear(screen.getByLabelText('学びの内容'))
+    await user.click(screen.getByRole('button', { name: '承認する' }))
+
+    expect(screen.getByRole('heading', { name: /学びの候補（1件）/ })).toBeTruthy()
+    const message = screen.getAllByRole('status').find((el) => el.textContent?.includes('入力'))
+    expect(message).toBeTruthy()
+  })
+
+  it('旅程の更新が transition でコミットされた直後（副作用の実行前）に旧応答が届いても、採用しない', async () => {
+    const pending = deferred()
+    const request = vi.fn<RequestCandidates>(() => pending.promise)
+    const updated: Trip = { ...sampleTrip, version: sampleTrip.version + 1 }
+    let setTripRef: (trip: Trip) => void = () => undefined
+
+    // コミット（レイアウト効果）の時点で、旧リクエストの応答を返す。副作用（useEffect）はまだ実行されていない。
+    function Probe({ trip }: { trip: Trip }) {
+      useLayoutEffect(() => {
+        if (trip.version === updated.version) pending.resolve(proposed(sampleLearning))
+      }, [trip])
+      return null
+    }
+    function Harness() {
+      const [trip, setTrip] = useState<Trip>(sampleTrip)
+      setTripRef = setTrip
+      return (
+        <>
+          <LearningReview trip={trip} requestCandidates={request} now={() => NOW} />
+          <Probe trip={trip} />
+        </>
+      )
+    }
+
+    const user = userEvent.setup()
+    render(<Harness />)
+    await user.type(feedback(), '感想')
+    await user.click(makeButton())
+
+    // act の外で実行する（act は副作用を同期的に流すため、この競合を再現できない）。
+    const env = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
+    const previous = env.IS_REACT_ACT_ENVIRONMENT
+    env.IS_REACT_ACT_ENVIRONMENT = false
+    try {
+      startTransition(() => setTripRef(updated))
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    } finally {
+      env.IS_REACT_ACT_ENVIRONMENT = previous
+    }
+
+    expect(screen.queryByRole('heading', { name: /学びの候補（/ })).toBeNull()
   })
 })

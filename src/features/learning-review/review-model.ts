@@ -26,7 +26,8 @@ export interface ReviewItem {
 export interface ReviewState {
   items: ReviewItem[]
   // 学びごとの直近の案内（承認時の入力不備・再承認の案内など）。操作が成功すれば消える。
-  messages: Record<string, string>
+  // IDは任意の文字列を取り得る（"__proto__" など）ため、オブジェクトではなく Map で持つ。
+  messages: ReadonlyMap<string, string>
 }
 
 export type ReviewAction =
@@ -41,7 +42,7 @@ export type ReviewAction =
   // 却下を取り消し、未承認に戻す（承認はしない）。
   | { type: 'reopen'; id: string }
 
-export const initialReviewState: ReviewState = { items: [], messages: {} }
+export const initialReviewState: ReviewState = { items: [], messages: new Map() }
 
 const draftOf = (learning: Learning): Draft => ({
   content: learning.content,
@@ -54,13 +55,13 @@ const scopeOf = (learning: Learning, scopeKind: ScopeKind, region: string): Lear
     : { kind: 'region', region: learning.scope.kind === 'region' ? learning.scope.region : region }
 
 const setMessage = (
-  messages: Record<string, string>,
+  messages: ReadonlyMap<string, string>,
   id: string,
   message?: string,
-): Record<string, string> => {
-  const next = { ...messages }
-  if (message) next[id] = message
-  else delete next[id]
+): ReadonlyMap<string, string> => {
+  const next = new Map(messages)
+  if (message) next.set(id, message)
+  else next.delete(id)
   return next
 }
 

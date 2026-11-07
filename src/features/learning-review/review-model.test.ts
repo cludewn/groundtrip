@@ -59,7 +59,7 @@ describe('reviewReducer: 編集を始めた時点で、承認が取り消され�
 
     expect(learningOf(edited).approval).toEqual({ status: 'pending' })
     expect(approvedOf(edited)).toEqual([])
-    expect(edited.messages[id]).toContain('承認が取り消されました')
+    expect(edited.messages.get(id)).toContain('承認が取り消されました')
   })
 
   it('適用範囲だけを変えた場合も、その時点で再承認待ちになる', () => {
@@ -86,7 +86,7 @@ describe('reviewReducer: 編集を始めた時点で、承認が取り消され�
 
     expect(approvedOf(state)).toEqual([])
     expect(learningOf(state).approval).toEqual({ status: 'pending' })
-    expect(state.messages[id]).toContain('入力')
+    expect(state.messages.get(id)).toContain('入力')
     expect(state.items[0].draft.content).toBe('   ')
   })
 
@@ -94,7 +94,7 @@ describe('reviewReducer: 編集を始めた時点で、承認が取り消され�
     const state = approve(edit(loaded(), 'あ'.repeat(121)))
 
     expect(approvedOf(state)).toEqual([])
-    expect(state.messages[id]).toContain('文字以内')
+    expect(state.messages.get(id)).toContain('文字以内')
   })
 
   it('下書きを直して承認すると、直した内容（前後の空白を除く）が承認される', () => {
@@ -102,7 +102,7 @@ describe('reviewReducer: 編集を始めた時点で、承認が取り消され�
 
     expect(approvedOf(state)[0].content).toBe('昼食の候補は2つ用意したい')
     expect(state.items[0].draft.content).toBe('昼食の候補は2つ用意したい')
-    expect(state.messages[id]).toBeUndefined()
+    expect(state.messages.get(id)).toBeUndefined()
   })
 
   it('適用範囲を「すべての旅行」に変えて承認できる。地域に戻すと、地域つきで承認される', () => {
@@ -119,7 +119,7 @@ describe('reviewReducer: 編集を始めた時点で、承認が取り消され�
   })
 
   it('未承認の候補を編集しても、案内は出ない', () => {
-    expect(edit(loaded(), '別の内容').messages[id]).toBeUndefined()
+    expect(edit(loaded(), '別の内容').messages.get(id)).toBeUndefined()
   })
 })
 
@@ -161,5 +161,44 @@ describe('reviewReducer: 追加（再生成）と、既存の状態の保持', (
     const state = reviewReducer(edit(approve(loaded()), 'x'), { type: 'reset' })
 
     expect(state).toEqual(initialReviewState)
+  })
+})
+
+describe('reviewReducer: 任意のID', () => {
+  it('"__proto__" などのIDでも、案内を保持・消去でき、他の候補に影響しない', () => {
+    const odd = { ...sampleLearning, id: '__proto__' }
+    const other = { ...sampleLearning, id: 'learning-other' }
+    const state = reviewReducer(initialReviewState, { type: 'append', learnings: [odd, other] })
+
+    const blank = reviewReducer(state, {
+      type: 'draft',
+      id: '__proto__',
+      content: '',
+      region: REGION,
+    })
+    const rejected = reviewReducer(blank, {
+      type: 'approve',
+      id: '__proto__',
+      decidedAt: AT,
+      region: REGION,
+    })
+    expect(rejected.messages.get('__proto__')).toContain('入力')
+    expect(rejected.messages.get('learning-other')).toBeUndefined()
+    expect(Object.getPrototypeOf(rejected.messages)).toBe(Map.prototype)
+
+    const fixed = reviewReducer(rejected, {
+      type: 'draft',
+      id: '__proto__',
+      content: '十分な内容です',
+      region: REGION,
+    })
+    const approved = reviewReducer(fixed, {
+      type: 'approve',
+      id: '__proto__',
+      decidedAt: AT,
+      region: REGION,
+    })
+    expect(approved.messages.get('__proto__')).toBeUndefined()
+    expect(approvedOf(approved).map((item) => item.id)).toEqual(['__proto__'])
   })
 })

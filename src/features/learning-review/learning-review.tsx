@@ -1,10 +1,18 @@
 'use client'
 
-import { useEffect, useMemo, useReducer, useRef, useState, type FormEvent } from 'react'
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+  type FormEvent,
+} from 'react'
 
 import type { ApprovedLearning, Learning, Revision, Trip } from '@/domain'
 import { MAX_LEARNING_CONTENT_LENGTH } from '@/lib/learnings/lifecycle'
-import { hasMaterial, revisionMaterialStatus } from '@/lib/learnings/material'
+import { hasMaterial, isSimulated, revisionMaterialStatus } from '@/lib/learnings/material'
 
 import {
   requestLearningCandidates,
@@ -52,6 +60,20 @@ const STATUS_LABEL = {
   rejected: '却下',
 } as const
 
+const APPROVAL_LABEL = {
+  pending: '未承認',
+  approved: '承認済み',
+  rejected: '却下',
+} as const
+
+// 報告の種類と承認状態は、独立して示す（模擬報告を、実際の体験と取り違えない）。
+function revisionKindLabel(revision: Revision): string {
+  if (revision.context.phase !== 'on_site') return '旅行前の修正'
+  return isSimulated(revision)
+    ? '模擬報告（デモ用の想定。実際の出来事ではありません）'
+    : '現地の実際の報告'
+}
+
 const REVISION_MATERIAL_LABEL = {
   usable: '承認済み（学びの材料にします）',
   simulated: '模擬報告（デモ用の想定）のため、学びの材料にしません',
@@ -91,7 +113,9 @@ export function LearningReview({
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' })
   const [review, dispatch] = useReducer(reviewReducer, initialReviewState)
   const [focusApproveId, setFocusApproveId] = useState<string | null>(null)
-  const [lastTripId, setLastTripId] = useState(trip.id)
+  // 学びの候補は、旅程と地域の組に結びつく（承認結果に残る適用範囲が、画面の地域と食い違わないように）。
+  const [lastScope, setLastScope] = useState({ id: trip.id, region: trip.region })
+  const [resetNotice, setResetNotice] = useState('')
 
   const feedbackRef = useRef<HTMLTextAreaElement>(null)
   const resultHeadingRef = useRef<HTMLHeadingElement>(null)
@@ -106,24 +130,31 @@ export function LearningReview({
   const contextKeyRef = useRef(contextKey)
   const reviewRef = useRef(review)
   const tripRef = useRef(trip)
-  useEffect(() => {
+  // 更新のコミットと同時に（描画の反映の直後、ブラウザの描画前に）同期する。
+  // 通常の副作用では、コミットから実行までの間に旧リクエストの応答が届くことがある（startTransition など）。
+  useLayoutEffect(() => {
     contextKeyRef.current = contextKey
     reviewRef.current = review
     tripRef.current = trip
   })
 
-  // 別の旅程に切り替わったら、前の旅程の候補・承認状態・入力を消す（描画中の状態調整）。
-  if (trip.id !== lastTripId) {
-    setLastTripId(trip.id)
+  // 別の旅程、または同じ旅程の別の地域になったら、前の候補・承認状態・入力を消す（描画中の状態調整）。
+  if (trip.id !== lastScope.id || trip.region !== lastScope.region) {
+    setLastScope({ id: trip.id, region: trip.region })
     dispatch({ type: 'reset' })
     setFeedback('')
     setFeedbackError('')
     setPhase({ kind: 'idle' })
     setFocusApproveId(null)
+    setResetNotice(
+      trip.id === lastScope.id
+        ? '旅程の地域が変わったため、確認中の候補と承認結果をリセットしました。'
+        : '',
+    )
   }
 
-  // 旅程・履歴が更新されたら、進行中の取得を中止する（古い応答を採用しない）。
-  useEffect(() => {
+  // 旅程・履歴が更新されたら、進行中の取得を中止する（古い応答を採用しない）。コミットと同時に行う。
+  useLayoutEffect(() => {
     controllerRef.current?.abort()
     controllerRef.current = null
     seqRef.current += 1
@@ -258,6 +289,8 @@ export function LearningReview({
                   <b>{revision.diff.before.name}</b> → <b>{revision.diff.after.name}</b>
                 </p>
                 <p>理由：{revision.reason}</p>
+                <p>報告の種類：{revisionKindLabel(revision)}</p>
+                <p>承認の状態：{APPROVAL_LABEL[revision.approval.status]}</p>
                 <p>{REVISION_MATERIAL_LABEL[revisionMaterialStatus(revision)]}</p>
               </li>
             ))}
@@ -300,6 +333,7 @@ export function LearningReview({
 
       <div role="status" aria-live="polite">
         {generating && <p className="text-sm">AIが候補を考えています。しばらくお待ちください。</p>}
+        {resetNotice && <p className="text-sm font-medium">{resetNotice}</p>}
       </div>
       {phase.kind === 'failed' && (
         <p role="alert" className="rounded border-2 border-current p-3 text-sm">
@@ -329,7 +363,7 @@ export function LearningReview({
                 key={item.learning.id}
                 item={item}
                 region={trip.region}
-                message={review.messages[item.learning.id]}
+                message={review.messages.get(item.learning.id)}
                 decidedAt={() => now().toISOString()}
                 dispatch={dispatch}
                 onReopened={setFocusApproveId}
