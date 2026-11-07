@@ -47,8 +47,9 @@ describe('現地報告から再計画', () => {
 
     await submitReport(user, 'actual')
     expect(screen.getByText('現地の報告内容')).toBeTruthy()
-    expect((screen.getByRole('textbox', { name: '現地の報告内容' }) as HTMLTextAreaElement).readOnly)
-      .toBe(true)
+    expect(
+      (screen.getByRole('textbox', { name: '現地の報告内容' }) as HTMLTextAreaElement).readOnly,
+    ).toBe(true)
     await user.click(screen.getByRole('button', { name: '変更候補を探す' }))
 
     await waitFor(() => expect(generate).toHaveBeenCalledTimes(1))
@@ -63,11 +64,15 @@ describe('現地報告から再計画', () => {
     expect(sampleTrip).toEqual(original)
 
     // 成立する候補がなくても元の旅程を維持し、戻ったときの現在地点は昼食のまま。
-    await waitFor(() => expect(screen.getByText(/条件に合う候補が見つかりませんでした/)).toBeTruthy())
+    await waitFor(() =>
+      expect(screen.getByText(/条件に合う候補が見つかりませんでした/)).toBeTruthy(),
+    )
     await user.click(screen.getByRole('button', { name: 'キャンセル' }))
     await user.click(screen.getByRole('button', { name: '旅行中の画面に戻る' }))
     expect(screen.getByText('旅行中の進行状況')).toBeTruthy()
-    expect(screen.getByText('いまの予定').closest('section')?.textContent).toContain('昼食店A（架空）')
+    expect(screen.getByText('いまの予定').closest('section')?.textContent).toContain(
+      '昼食店A（架空）',
+    )
   })
 
   it('模擬報告は明示し、適用サービスが渡されても旅程の変更は許さない', async () => {
