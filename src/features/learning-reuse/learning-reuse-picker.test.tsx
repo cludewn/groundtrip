@@ -34,7 +34,10 @@ describe('学びの選択UI', () => {
     await user.click(boxes[1])
     expect(onSelectionChange).toHaveBeenLastCalledWith([approvedRegional.id])
     await user.click(boxes[0])
-    expect(onSelectionChange).toHaveBeenLastCalledWith([approvedRegional.id, sampleApprovedLearning.id])
+    expect(onSelectionChange).toHaveBeenLastCalledWith([
+      approvedRegional.id,
+      sampleApprovedLearning.id,
+    ])
     await user.click(boxes[1])
     expect(onSelectionChange).toHaveBeenLastCalledWith([sampleApprovedLearning.id])
   })
@@ -58,10 +61,13 @@ describe('学びの選択UI', () => {
   it('APIが失敗したら選択を持ち越さず、再試行できる', async () => {
     const onSelectionChange = vi.fn()
     const user = userEvent.setup()
-    const load = vi.fn<LoadLearningOptions>()
+    const load = vi
+      .fn<LoadLearningOptions>()
       .mockResolvedValueOnce({ ok: false, kind: 'unavailable', message: '停止中です。' })
       .mockResolvedValueOnce({ ok: true, items: records })
-    render(<LearningReusePicker region="京都市" load={load} onSelectionChange={onSelectionChange} />)
+    render(
+      <LearningReusePicker region="京都市" load={load} onSelectionChange={onSelectionChange} />,
+    )
     expect((await screen.findByRole('alert')).textContent).toContain('停止中です。')
     await user.click(screen.getByRole('button', { name: '再読み込み' }))
     expect(await screen.findByText(approvedRegional.content)).toBeTruthy()

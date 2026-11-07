@@ -2,10 +2,7 @@ import { z } from 'zod'
 
 import { IdSchema } from '@/domain/primitives'
 import type { ApprovedLearning } from '@/domain'
-import {
-  getApplicableLearnings,
-  type LearningStore,
-} from '@/server/learnings/store'
+import { getApplicableLearnings, type LearningStore } from '@/server/learnings/store'
 
 // 認証済みUIDは呼び出し側のサーバーで検証済みActorから渡す。
 // クライアントはLearningの本文やapprovalを送らず、選択したIDだけを渡す。

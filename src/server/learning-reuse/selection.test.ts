@@ -47,18 +47,30 @@ describe('次回旅程に使う学びのサーバー側解決', () => {
 
   it('他人の学び・別地域・撤回・存在しない選択IDを拒否する', async () => {
     const store = await setup()
-    expect(await codeOf(resolveSelectedLearnings(store, 'user-a', region, ['other-user-only']))).toBe('selection_changed')
-    expect(await codeOf(resolveSelectedLearnings(store, 'user-a', region, [anotherRegion.id]))).toBe('selection_changed')
+    expect(
+      await codeOf(resolveSelectedLearnings(store, 'user-a', region, ['other-user-only'])),
+    ).toBe('selection_changed')
+    expect(
+      await codeOf(resolveSelectedLearnings(store, 'user-a', region, [anotherRegion.id])),
+    ).toBe('selection_changed')
     await store.remove('user-a', scoped.id)
-    expect(await codeOf(resolveSelectedLearnings(store, 'user-a', region, [scoped.id]))).toBe('selection_changed')
-    expect(await codeOf(resolveSelectedLearnings(store, 'user-a', region, ['missing']))).toBe('selection_changed')
+    expect(await codeOf(resolveSelectedLearnings(store, 'user-a', region, [scoped.id]))).toBe(
+      'selection_changed',
+    )
+    expect(await codeOf(resolveSelectedLearnings(store, 'user-a', region, ['missing']))).toBe(
+      'selection_changed',
+    )
   })
 
   it('重複ID・不正な所有者・空の地域を拒否する', async () => {
     const store = await setup()
-    expect(await codeOf(resolveSelectedLearnings(store, 'user-a', region, ['x', 'x']))).toBe('invalid_selection')
+    expect(await codeOf(resolveSelectedLearnings(store, 'user-a', region, ['x', 'x']))).toBe(
+      'invalid_selection',
+    )
     expect(await codeOf(resolveSelectedLearnings(store, '', region, []))).toBe('invalid_selection')
-    expect(await codeOf(resolveSelectedLearnings(store, 'user-a', '  ', []))).toBe('invalid_selection')
+    expect(await codeOf(resolveSelectedLearnings(store, 'user-a', '  ', []))).toBe(
+      'invalid_selection',
+    )
   })
 
   it('空選択は何も適用しない', async () => {
@@ -68,7 +80,11 @@ describe('次回旅程に使う学びのサーバー側解決', () => {
 
   it('ストアが未承認を混入させても選択できない', async () => {
     const unapproved = { ...sampleApprovedLearning, approval: { status: 'pending' } }
-    const store = { listApproved: async (): Promise<ApprovedLearning[]> => [unapproved as ApprovedLearning] }
-    expect(await codeOf(resolveSelectedLearnings(store, 'user-a', region, [sampleApprovedLearning.id]))).toBe('selection_changed')
+    const store = {
+      listApproved: async (): Promise<ApprovedLearning[]> => [unapproved as ApprovedLearning],
+    }
+    expect(
+      await codeOf(resolveSelectedLearnings(store, 'user-a', region, [sampleApprovedLearning.id])),
+    ).toBe('selection_changed')
   })
 })

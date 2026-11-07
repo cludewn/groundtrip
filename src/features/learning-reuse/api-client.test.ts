@@ -12,7 +12,9 @@ const payload = (learnings: unknown[] = [{ learning: sampleApprovedLearning, ver
 
 describe('承認済みLearningの取得', () => {
   it('本人トークンを付け、完全な一覧だけを受け付ける', async () => {
-    const fetchFn = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => Response.json(payload()))
+    const fetchFn = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      Response.json(payload()),
+    )
     const result = await loadApprovedLearningOptions({ fetchFn, getHeaders: headers })
     expect(result).toMatchObject({
       ok: true,
@@ -29,7 +31,9 @@ describe('承認済みLearningの取得', () => {
     const fetchFn = vi.fn(async () => Response.json(payload()))
     const result = await loadApprovedLearningOptions({
       fetchFn,
-      getHeaders: async () => { throw new Error('session_ended') },
+      getHeaders: async () => {
+        throw new Error('session_ended')
+      },
     })
     expect(result).toMatchObject({ ok: false, kind: 'session' })
     expect(fetchFn).not.toHaveBeenCalled()
@@ -39,8 +43,13 @@ describe('承認済みLearningの取得', () => {
     const cases = [
       { ...payload(), listInfo: { returned: 1, skippedInvalid: 1, truncated: false } },
       { ...payload(), listInfo: { returned: 1, skippedInvalid: 0, truncated: true } },
-      payload([{ learning: sampleApprovedLearning, version: 1 }, { learning: sampleApprovedLearning, version: 2 }]),
-      payload([{ learning: { ...sampleApprovedLearning, approval: { status: 'pending' } }, version: 1 }]),
+      payload([
+        { learning: sampleApprovedLearning, version: 1 },
+        { learning: sampleApprovedLearning, version: 2 },
+      ]),
+      payload([
+        { learning: { ...sampleApprovedLearning, approval: { status: 'pending' } }, version: 1 },
+      ]),
     ]
     for (const item of cases) {
       const result = await loadApprovedLearningOptions({

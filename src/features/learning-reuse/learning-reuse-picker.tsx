@@ -6,10 +6,7 @@ import type { ApprovedLearning } from '@/domain'
 import { selectApplicableLearnings } from '@/lib/learnings/lifecycle'
 import type { VersionedLearning } from '@/server/persistence/contracts'
 
-import {
-  loadApprovedLearningOptions,
-  type LearningLoadResult,
-} from './api-client'
+import { loadApprovedLearningOptions, type LearningLoadResult } from './api-client'
 
 export type LoadLearningOptions = (signal: AbortSignal) => Promise<LearningLoadResult>
 
@@ -93,8 +90,7 @@ export function LearningReusePicker({
     return () => controller.abort()
   }, [region, load, attempt])
 
-  const visible: PickerState =
-    state.region === region ? state : { region, status: 'loading' }
+  const visible: PickerState = state.region === region ? state : { region, status: 'loading' }
 
   const toggle = (event: ChangeEvent<HTMLInputElement>, id: string) => {
     if (visible.status !== 'ready') return
@@ -106,7 +102,10 @@ export function LearningReusePicker({
   }
 
   return (
-    <section aria-label="次の旅に使う学び" className="space-y-3 rounded-xl border border-current/20 p-4">
+    <section
+      aria-label="次の旅に使う学び"
+      className="space-y-3 rounded-xl border border-current/20 p-4"
+    >
       <div className="space-y-1">
         <h2 className="text-lg font-semibold">前の旅の学びを使う</h2>
         <p className="text-sm text-current/75">
@@ -116,7 +115,9 @@ export function LearningReusePicker({
       </div>
 
       {visible.status === 'loading' && (
-        <p role="status" className="text-sm">保存済みの学びを確認しています…</p>
+        <p role="status" className="text-sm">
+          保存済みの学びを確認しています…
+        </p>
       )}
       {visible.status === 'error' && (
         <div role="alert" className="space-y-2">

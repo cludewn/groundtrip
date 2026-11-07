@@ -1,8 +1,5 @@
 import { getAuthHeaders } from '@/lib/auth/client'
-import {
-  LearningListResponseSchema,
-  type VersionedLearning,
-} from '@/server/persistence/contracts'
+import { LearningListResponseSchema, type VersionedLearning } from '@/server/persistence/contracts'
 
 // 本人の保存済みの学びを取得する。取得失敗や不完全な一覧を空配列として扱わない。
 export type LearningLoadResult =

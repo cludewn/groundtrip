@@ -7,23 +7,22 @@ interface LearningApplicationSummaryProps {
 
 // Tripに残るのは、生成時にAIが申告して契約で検証された「適用先・説明」の記録。
 // 学びが旅程差分を引き起こしたという因果関係や、制約成立を保証する表示ではない。
-export function LearningApplicationSummary({
-  trip,
-  learnings,
-}: LearningApplicationSummaryProps) {
+export function LearningApplicationSummary({ trip, learnings }: LearningApplicationSummaryProps) {
   const byId = new Map(learnings.map((learning) => [learning.id, learning]))
   const stopNames = new Map(trip.stops.map((stop) => [stop.id, stop.name]))
   const visible = trip.learningApplications.flatMap((application) => {
     const learning = byId.get(application.learningId)
     if (!learning) return []
-    return [{
-      id: application.learningId,
-      content: learning.content,
-      explanation: application.explanation,
-      targets: application.targetStopIds
-        .map((id) => stopNames.get(id))
-        .filter((name): name is string => name !== undefined),
-    }]
+    return [
+      {
+        id: application.learningId,
+        content: learning.content,
+        explanation: application.explanation,
+        targets: application.targetStopIds
+          .map((id) => stopNames.get(id))
+          .filter((name): name is string => name !== undefined),
+      },
+    ]
   })
 
   return (
