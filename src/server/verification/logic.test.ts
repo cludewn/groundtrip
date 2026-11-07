@@ -168,6 +168,16 @@ describe('営業時間の照合（通常営業時間）', () => {
   })
 })
 
+describe('営業時間：空配列（欠落とは別）', () => {
+  it('空配列は、営業とも休みとも決めつけず、空であることを理由に「確認できない」とする', () => {
+    const result = checkOpeningHours([], SAT, '10:00', 60)
+
+    expect(result.status).toBe('unverifiable')
+    expect(result.explanation).toContain('空')
+    expect(result.explanation).not.toContain('定休日')
+  })
+})
+
 describe('移動の余裕', () => {
   it('前の予定の終了から次の予定の開始までの時間を求める', () => {
     expect(

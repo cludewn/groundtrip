@@ -47,6 +47,13 @@ export function checkOpeningHours(
   startTime: string,
   durationMinutes: number,
 ): OpeningHoursCheck {
+  // 空配列は、欠落とは別だが、営業とも休みとも解釈できない。「確認できない」とする（休みと決めつけない）。
+  if (periods.length === 0) {
+    return {
+      status: 'unverifiable',
+      explanation: '営業時間の情報が空のため、営業の有無を確認できません。',
+    }
+  }
   // 営業の区間を、週の先頭（日曜0:00）からの分で表す。日付をまたぐ営業は、閉店が開店より小さくなるため1週間足す。
   const intervals: [number, number][] = []
   for (const period of periods) {
