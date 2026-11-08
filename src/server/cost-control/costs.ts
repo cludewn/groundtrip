@@ -16,6 +16,8 @@ const REVISION_REPORT_READS = 2 + REVISION_LIMIT
 
 export const COSTS = {
   generate: { gemini: 1 },
+  // 選んだ学びを保存済みの現行版と照合する分（一覧の読み取り）を加える。
+  generateWithLearnings: { gemini: 1, reads: LEARNING_LIMIT + 1 },
   verify: { places: 4, routes: 3 },
   revise,
   // 保存を有効にしたときの生成。生成の前に本人報告をTripへ記録することがあり、その取引は書き込み権で確定する。
