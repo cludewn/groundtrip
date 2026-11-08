@@ -12,7 +12,8 @@ import {
   type GenerateRevisions,
   type RevisionProposal,
 } from './api-client'
-import { RevisionRouteView } from './revision-route-view'
+import { RevisionRouteView, type LoadLatestTrip } from './revision-route-view'
+import { resetUnresolvedApplies } from './unresolved-apply'
 
 vi.mock('@/lib/auth/client', () => ({
   getAuthHeaders: async () => new Headers({ Authorization: 'Bearer session-token' }),
@@ -20,6 +21,7 @@ vi.mock('@/lib/auth/client', () => ({
 
 afterEach(() => {
   cleanup()
+  resetUnresolvedApplies()
   vi.unstubAllGlobals()
 })
 
@@ -755,6 +757,149 @@ describe('本人承認とサーバー適用', () => {
     expect(screen.queryByRole('table')).toBeNull()
     expect(generate).toHaveBeenCalledTimes(1)
     expect(apply).toHaveBeenCalledTimes(1)
+  })
+
+  describe('結果不明の適用の解禁', () => {
+    const latestOf = (version: number, name?: string) => ({
+      ...trip,
+      version,
+      stops: name ? trip.stops.map((stop, i) => (i === 0 ? { ...stop, name } : stop)) : trip.stops,
+    })
+    // 適用を結果不明にして、比較を閉じた状態まで進める。
+    const reachUnresolved = async (
+      user: ReturnType<typeof userEvent.setup>,
+      props: { apply: ApplyRevision; generate: GenerateRevisions; loadLatestTrip?: LoadLatestTrip },
+    ) => {
+      const view = render(<RevisionRouteView trip={trip} {...props} />)
+      await open(user)
+      await request(user)
+      await screen.findByRole('table')
+      await user.click(approve())
+      await user.click(await screen.findByRole('button', { name: '旅程を確認' }))
+      await user.click(screen.getByRole('button', { name: '比較を閉じる' }))
+      return view
+    }
+    const startButton = () => screen.queryByRole('button', { name: 'この予定だけ変更' })
+    const locked = async (user: ReturnType<typeof userEvent.setup>) => {
+      await user.click(route().getByRole('button', { name: /昼食店A/ }))
+      expect(startButton()).toBeNull()
+      expect(screen.getByRole('alert').textContent).toContain('再操作できません')
+    }
+
+    it('uncertain → 旅程を確認 → 比較を閉じる → 新しい候補生成 → 適用 の順では、2回目のapplyを呼ばない', async () => {
+      const user = userEvent.setup()
+      const apply = vi.fn<ApplyRevision>().mockResolvedValue({ status: 'uncertain' })
+      const generate = vi.fn<GenerateRevisions>().mockResolvedValue(proposal)
+      await reachUnresolved(user, { apply, generate })
+
+      await locked(user)
+      // 開始の入口を使えないので、新しい候補生成にも、承認にも進めない。
+      expect(screen.queryByLabelText('修正理由（必須）')).toBeNull()
+      expect(screen.queryByRole('button', { name: '承認して適用を依頼' })).toBeNull()
+      expect(generate).toHaveBeenCalledTimes(1)
+      expect(apply).toHaveBeenCalledTimes(1)
+    })
+
+    it('画面を作り直しても、同じTripの結果不明は解禁されない', async () => {
+      const user = userEvent.setup()
+      const apply = vi.fn<ApplyRevision>().mockResolvedValue({ status: 'uncertain' })
+      const generate = vi.fn<GenerateRevisions>().mockResolvedValue(proposal)
+      const first = await reachUnresolved(user, { apply, generate })
+      first.unmount()
+
+      render(<RevisionRouteView trip={trip} generate={generate} apply={apply} />)
+      expect(screen.getByRole('alert').textContent).toContain('再操作できません')
+      await locked(user)
+      expect(apply).toHaveBeenCalledTimes(1)
+    })
+
+    it('適用の応答を待つ途中で画面が外れても、同じTripは再操作できない', async () => {
+      const user = userEvent.setup()
+      const pending = Promise.withResolvers<Awaited<ReturnType<ApplyRevision>>>()
+      const apply = vi.fn<ApplyRevision>().mockReturnValue(pending.promise)
+      const generate = vi.fn<GenerateRevisions>().mockResolvedValue(proposal)
+      const view = render(<RevisionRouteView trip={trip} generate={generate} apply={apply} />)
+      await open(user)
+      await request(user)
+      await screen.findByRole('table')
+      await user.click(approve())
+      view.unmount()
+      pending.resolve({ status: 'uncertain' })
+
+      render(<RevisionRouteView trip={trip} generate={generate} apply={apply} />)
+      await locked(user)
+      expect(apply).toHaveBeenCalledTimes(1)
+    })
+
+    it.each([
+      ['取得に失敗（例外）', () => Promise.reject(new TypeError('offline'))],
+      ['取得結果なし', () => Promise.resolve(null)],
+      ['別の旅程', () => Promise.resolve({ ...latestOf(trip.version + 1), id: 'other-trip' })],
+      ['版が古い', () => Promise.resolve(latestOf(trip.version - 1))],
+      ['形式が不正', () => Promise.resolve({ id: trip.id } as never)],
+    ])('サーバーの旅程を照合できなければ解禁しない（%s）', async (_name, load) => {
+      const user = userEvent.setup()
+      const apply = vi.fn<ApplyRevision>().mockResolvedValue({ status: 'uncertain' })
+      const generate = vi.fn<GenerateRevisions>().mockResolvedValue(proposal)
+      const loadLatestTrip = vi.fn<LoadLatestTrip>(load)
+      await reachUnresolved(user, { apply, generate, loadLatestTrip })
+
+      await user.click(screen.getByRole('button', { name: '最新の旅程を取得して確認する' }))
+      await waitFor(() =>
+        expect(screen.getByRole('alert').textContent).toContain('まだ再操作できません'),
+      )
+      expect(loadLatestTrip).toHaveBeenCalledWith(trip.id, expect.any(AbortSignal))
+      await locked(user)
+      expect(generate).toHaveBeenCalledTimes(1)
+      expect(apply).toHaveBeenCalledTimes(1)
+    })
+
+    it('サーバーの版が進んでいれば適用済みとして最新の旅程を採用し、そこから再開できる', async () => {
+      const user = userEvent.setup()
+      const apply = vi.fn<ApplyRevision>().mockResolvedValue({ status: 'uncertain' })
+      const generate = vi.fn<GenerateRevisions>().mockResolvedValue(proposal)
+      const loadLatestTrip = vi
+        .fn<LoadLatestTrip>()
+        .mockResolvedValue(latestOf(trip.version + 1, '更新後の集合'))
+      await reachUnresolved(user, { apply, generate, loadLatestTrip })
+
+      await user.click(screen.getByRole('button', { name: '最新の旅程を取得して確認する' }))
+      expect((await screen.findByRole('status')).textContent).toContain('適用を確認し')
+      expect(route().getByText('更新後の集合')).toBeTruthy()
+      await user.click(route().getByRole('button', { name: /昼食店A/ }))
+      expect(startButton()).not.toBeNull()
+    })
+
+    it('サーバーの版が同じなら未適用と確認でき、解禁される', async () => {
+      const user = userEvent.setup()
+      const apply = vi.fn<ApplyRevision>().mockResolvedValue({ status: 'uncertain' })
+      const generate = vi.fn<GenerateRevisions>().mockResolvedValue(proposal)
+      const loadLatestTrip = vi.fn<LoadLatestTrip>().mockResolvedValue(latestOf(trip.version))
+      await reachUnresolved(user, { apply, generate, loadLatestTrip })
+
+      await user.click(screen.getByRole('button', { name: '最新の旅程を取得して確認する' }))
+      expect((await screen.findByRole('status')).textContent).toContain('適用されていない')
+      await user.click(route().getByRole('button', { name: /昼食店A/ }))
+      await user.click(screen.getByRole('button', { name: 'この予定だけ変更' }))
+      await request(user)
+      await screen.findByRole('table')
+      await user.click(approve())
+      expect(generate).toHaveBeenCalledTimes(2)
+      expect(apply).toHaveBeenCalledTimes(2)
+    })
+
+    it('親が版の進んだ旅程を渡しても、サーバーの照合までは解禁しない', async () => {
+      const user = userEvent.setup()
+      const apply = vi.fn<ApplyRevision>().mockResolvedValue({ status: 'uncertain' })
+      const generate = vi.fn<GenerateRevisions>().mockResolvedValue(proposal)
+      const view = await reachUnresolved(user, { apply, generate })
+
+      view.rerender(
+        <RevisionRouteView trip={latestOf(trip.version + 1)} generate={generate} apply={apply} />,
+      )
+      await locked(user)
+      expect(apply).toHaveBeenCalledTimes(1)
+    })
   })
 
   it.each(['not_checked', 'violated'] as const)('%s の候補は承認できない', async (status) => {

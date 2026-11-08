@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react'
 
 import type { Trip } from '@/domain'
 import type { RouteMeta } from '@/features/trip-map/model'
@@ -10,6 +10,19 @@ import type { ApplyRevisionResult } from '@/server/persistence/contracts'
 
 import type { ApplyRevision, GenerateRevisions } from './api-client'
 import { RevisionReview } from './revision-review'
+import {
+  clearApplyUnresolved,
+  isApplyUnresolved,
+  judgeLatestTrip,
+  markApplyUnresolved,
+  unresolvedBaseVersion,
+} from './unresolved-apply'
+
+// サーバーに保存されている最新の旅程（正本）を取得する。取得できないときは null を返すか例外を投げる。
+export type LoadLatestTrip = (tripId: string, signal: AbortSignal) => Promise<Trip | null>
+
+const unresolvedMessage =
+  '適用結果を確認できませんでした。サーバーの最新の旅程と照合できるまで、この旅程は再操作できません。'
 
 interface RevisionRouteViewProps {
   trip: Trip
@@ -17,6 +30,8 @@ interface RevisionRouteViewProps {
   mock?: boolean
   generate?: GenerateRevisions
   apply?: ApplyRevision
+  // 結果不明の適用を解消するため、サーバーの最新の旅程を取得する。渡さないと、結果不明の旅程は解禁できない。
+  loadLatestTrip?: LoadLatestTrip
   // 固定の切り替え・候補の適用で旅程が変わったとき、画面に採用する旅程を決める（変えなければ受け取った旅程を返す）。
   // 照合結果の取り下げなど、旅程の変更に連動して根拠を戻す用途。予定の名称・時刻・固定は変えないこと。
   adoptTripChange?: (changed: Trip) => Trip
@@ -28,6 +43,7 @@ export function RevisionRouteView({
   mock,
   generate,
   apply,
+  loadLatestTrip,
   adoptTripChange,
 }: RevisionRouteViewProps) {
   const [local, setLocal] = useState<{
@@ -52,8 +68,15 @@ export function RevisionRouteView({
     stopId: string
     applyUnresolved?: boolean
   } | null>(null)
-  // 結果不明の適用は、比較画面を閉じてもサーバー確認なしに再開させない。
-  const [applyUnresolved, setApplyUnresolved] = useState(false)
+  // 結果不明の適用は、比較画面を閉じても・画面を作り直しても、サーバーの最新の旅程と照合するまで再開させない。
+  // 状態はモジュール側に持つので、書き換えたら再描画を促す。
+  const [, refresh] = useReducer((count: number) => count + 1, 0)
+  const applyUnresolved = isApplyUnresolved(sourceTrip.id)
+  const [reconcile, setReconcile] = useState<{
+    status: 'checking' | 'failed'
+  } | null>(null)
+  const reconciling = useRef(false)
+  const reconcileAbort = useRef<AbortController | null>(null)
   const [interruption, setInterruption] = useState<{
     stopId: string
     applyUnresolved?: boolean
@@ -76,6 +99,9 @@ export function RevisionRouteView({
     })
     setSession(null)
   }
+
+  // 取得中の要求は、画面が外れたら捨てる。
+  useEffect(() => () => reconcileAbort.current?.abort(), [])
 
   useLayoutEffect(() => {
     if (interruption && document.activeElement === document.body) {
@@ -100,7 +126,7 @@ export function RevisionRouteView({
 
   const onApplied = (changed: Trip, receipt?: ApplyRevisionResult) => {
     // 確定した適用応答を確認できた場合に限り、未確認の操作禁止を解除する。
-    setApplyUnresolved(false)
+    clearApplyUnresolved(changed.id)
     const trip = adoptTripChange?.(changed) ?? changed
     if (receipt && trip.version > receipt.appliedTripVersion) {
       setLocal({ source: sourceTrip, trip })
@@ -125,6 +151,62 @@ export function RevisionRouteView({
     leave('承認した候補が旅程に反映されました。', 'success')
   }
 
+  // 結果不明のとき、サーバーの最新の旅程と照合して解禁するか判断する。取得に失敗しても解禁しない。
+  const checkLatestTrip = async () => {
+    const baseVersion = unresolvedBaseVersion(sourceTrip.id)
+    if (!loadLatestTrip || baseVersion === undefined || reconciling.current) return
+    reconciling.current = true
+    const abort = new AbortController()
+    reconcileAbort.current = abort
+    setReconcile({ status: 'checking' })
+    let latest: Trip | null = null
+    try {
+      latest = await loadLatestTrip(sourceTrip.id, abort.signal)
+    } catch {
+      latest = null
+    }
+    reconciling.current = false
+    if (abort.signal.aborted || unresolvedBaseVersion(sourceTrip.id) !== baseVersion) return
+    const verdict = judgeLatestTrip(sourceTrip.id, baseVersion, latest)
+    if (verdict.kind === 'unverified') {
+      setReconcile({ status: 'failed' })
+      return
+    }
+    clearApplyUnresolved(sourceTrip.id)
+    setReconcile(null)
+    refresh()
+    if (verdict.kind === 'applied') {
+      // 適用が確定していた（または、その後に更新された）。サーバーの旅程を採用し、古い画面の根拠は引き継がない。
+      setLocal({ source: sourceTrip, trip: adoptTripChange?.(verdict.trip) ?? verdict.trip })
+      leave('サーバーで適用を確認し、最新の旅程を表示しています。', 'success')
+    } else {
+      leave('サーバーで適用されていないことを確認しました。もう一度部分修正を始められます。')
+    }
+  }
+
+  const unresolvedGuide = (
+    <>
+      <p>{unresolvedMessage}</p>
+      {reconcile?.status === 'failed' && (
+        <p>
+          最新の旅程を取得できなかったため、まだ再操作できません。通信を確認して、もう一度お試しください。
+        </p>
+      )}
+      {loadLatestTrip ? (
+        <button
+          className="min-h-11 font-bold underline"
+          type="button"
+          aria-busy={reconcile?.status === 'checking'}
+          onClick={() => void checkLatestTrip()}
+        >
+          {reconcile?.status === 'checking' ? '確認中…' : '最新の旅程を取得して確認する'}
+        </button>
+      ) : (
+        <p>最新の旅程をサーバーから取得し直してください。</p>
+      )}
+    </>
+  )
+
   return (
     <div>
       <p role="status" aria-live="polite" aria-atomic="true" className="text-sm not-empty:mb-2">
@@ -148,7 +230,9 @@ export function RevisionRouteView({
             generate={generate}
             apply={apply}
             onApplyUnresolvedChange={(unresolved) => {
-              setApplyUnresolved(unresolved)
+              if (unresolved) markApplyUnresolved(session.trip.id, session.trip.version)
+              else clearApplyUnresolved(session.trip.id)
+              refresh()
               setSession((active) => active && { ...active, applyUnresolved: unresolved })
             }}
             onCancel={() => {
@@ -172,11 +256,11 @@ export function RevisionRouteView({
               className="gt-notice"
               data-tone="error"
             >
-              <p>
-                {interruption.applyUnresolved || applyUnresolved
-                  ? '適用結果を確認できませんでした。この画面からは再操作できません。最新の旅程をサーバーから取得し直してください。'
-                  : '旅程が更新されたため、候補を取り消しました。最新の旅程を表示しています。'}
-              </p>
+              {applyUnresolved ? (
+                unresolvedGuide
+              ) : (
+                <p>旅程が更新されたため、候補を取り消しました。最新の旅程を表示しています。</p>
+              )}
               <button
                 className="min-h-11 font-bold underline"
                 type="button"
@@ -188,7 +272,7 @@ export function RevisionRouteView({
           )}
           {applyUnresolved && !interruption && (
             <div role="alert" className="gt-notice" data-tone="error">
-              適用結果を確認できませんでした。この画面からは再操作できません。最新の旅程をサーバーから取得し直してください。
+              {unresolvedGuide}
             </div>
           )}
           <TripRouteView
