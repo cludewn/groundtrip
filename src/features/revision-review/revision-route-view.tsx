@@ -36,7 +36,7 @@ interface RevisionRouteViewProps {
   mock?: boolean
   generate?: GenerateRevisions
   apply?: ApplyRevision
-  // 結果不明の適用を解消するため、サーバーの最新の旅程を取得する。渡さないと、結果不明の旅程は解禁できない。
+  // 適用結果不明からの復旧には、最新の旅程と対象Revisionの承認記録の両方が必要。
   loadLatestTrip?: LoadLatestTrip
   loadAppliedRevision?: LoadAppliedRevision
   // 固定の切り替え・候補の適用で旅程が変わったとき、画面に採用する旅程を決める（変えなければ受け取った旅程を返す）。
@@ -201,7 +201,7 @@ export function RevisionRouteView({
       <p>{unresolvedMessage}</p>
       {reconcile?.status === 'failed' && (
         <p>
-          対象の適用を確定できませんでした。承認記録を確認できるまで再操作できません。通信を確認して、もう一度お試しください。
+          対象の適用を確定できませんでした。承認記録を確認できるまで、まだ再操作できません。通信を確認して、もう一度お試しください。
         </p>
       )}
       {loadLatestTrip && loadAppliedRevision ? (
@@ -245,8 +245,7 @@ export function RevisionRouteView({
               if (unresolved) {
                 if (!revisionId) throw new Error('revision ID is required for uncertain apply')
                 markApplyUnresolved(session.trip.id, session.trip.version, revisionId)
-              }
-              else clearApplyUnresolved(session.trip.id)
+              } else clearApplyUnresolved(session.trip.id)
               refresh()
               setSession((active) => active && { ...active, applyUnresolved: unresolved })
             }}

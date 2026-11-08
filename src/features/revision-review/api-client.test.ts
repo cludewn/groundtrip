@@ -11,11 +11,10 @@ import {
 } from './api-client'
 import { checkStopEvidence } from './proposal-checks'
 
-vi.mock('@/lib/auth/client', () => ({
-  getAuthHeaders: async () => new Headers({ Authorization: 'Bearer session-token' }),
-}))
-
 afterEach(() => vi.unstubAllGlobals())
+
+const protectedHeaders = async () =>
+  new Headers({ Authorization: 'Bearer test.id.token', 'X-Firebase-AppCheck': 'test.app.check' })
 
 const request = { ...sampleReviseTripRequest, travelModes: ['walk'] as const }
 const input = { ...request, travelModes: [...request.travelModes] }
@@ -62,16 +61,17 @@ describe('候補生成 API の表示境界', () => {
     const fetchFn = vi.fn<typeof fetch>().mockResolvedValue(Response.json(proposal))
     vi.stubGlobal('fetch', fetchFn)
 
-    const result = await requestRevisions(input, signal)
+    const result = await requestRevisions(input, signal, { getHeaders: protectedHeaders })
     expect(fetchFn).toHaveBeenCalledWith('/api/trips/revise', {
       method: 'POST',
-      headers: new Headers({
-        Authorization: 'Bearer session-token',
-        'Content-Type': 'application/json',
-      }),
+      headers: expect.any(Headers),
       body: JSON.stringify(input),
       signal,
     })
+    const sent = new Headers(fetchFn.mock.calls[0][1]?.headers)
+    expect(sent.get('Authorization')).toBe('Bearer test.id.token')
+    expect(sent.get('X-Firebase-AppCheck')).toBe('test.app.check')
+    expect(sent.get('Content-Type')).toBe('application/json')
     expect(result).toEqual(proposal)
     expect(readRevisionProposal(proposal, input)).toEqual(proposal)
     expect(
@@ -213,12 +213,16 @@ describe('候補生成 API の表示境界', () => {
       'fetch',
       vi.fn<typeof fetch>().mockResolvedValue(Response.json(body, { status: http })),
     )
-    expect((await requestRevisions(input, signal)).status).toBe(status)
+    expect((await requestRevisions(input, signal, { getHeaders: protectedHeaders })).status).toBe(
+      status,
+    )
   })
 
   it('JSONでない成功応答を候補として扱わない', async () => {
     vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(new Response('<html>')))
-    expect(await requestRevisions(input, signal)).toEqual({ status: 'unexpected' })
+    expect(await requestRevisions(input, signal, { getHeaders: protectedHeaders })).toEqual({
+      status: 'unexpected',
+    })
   })
 
   it('本文受信中の切断は通信中断として扱う', async () => {
@@ -228,7 +232,9 @@ describe('候補生成 API の表示境界', () => {
       },
     })
     vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(new Response(stream)))
-    expect(await requestRevisions(input, signal)).toEqual({ status: 'interrupted' })
+    expect(await requestRevisions(input, signal, { getHeaders: protectedHeaders })).toEqual({
+      status: 'interrupted',
+    })
   })
 })
 
@@ -642,4 +648,41 @@ describe('候補の承認に使う前提の検証', () => {
     ).toHaveLength(3)
     expect(readRevisionProposal({ status: 'proposed', revisions }, candidateInput)).toBeNull()
   })
+})
+
+describe('候補生成 API の保護ヘッダーと失敗', () => {
+  it.each([
+    ['AppCheckUnavailableError', 'app_check_unavailable'],
+    ['ClientAuthError', 'auth_required'],
+  ] as const)('%s でヘッダーを用意できなければ送信しない（%s）', async (name, status) => {
+    const fetchFn = vi.fn<typeof fetch>()
+    const getHeaders = vi.fn().mockRejectedValue(Object.assign(new Error('生の詳細'), { name }))
+    const result = await requestRevisions(input, signal, { fetchFn, getHeaders })
+
+    expect(result.status).toBe(status)
+    expect(JSON.stringify(result)).not.toContain('生の詳細')
+    expect(fetchFn).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    [401, 'unauthorized'],
+    [403, 'unauthorized'],
+    [429, 'rate_limited'],
+    [503, 'unavailable'],
+  ] as const)(
+    'HTTP %i は %s として区別し、サーバーの文言を出さず、再送しない',
+    async (http, status) => {
+      const fetchFn = vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(Response.json({ message: '内部の詳細' }, { status: http }))
+      const result = await requestRevisions(input, signal, {
+        fetchFn,
+        getHeaders: protectedHeaders,
+      })
+
+      expect(result.status).toBe(status)
+      expect(JSON.stringify(result)).not.toContain('内部の詳細')
+      expect(fetchFn).toHaveBeenCalledTimes(1)
+    },
+  )
 })

@@ -17,7 +17,12 @@ import {
   type Trip,
 } from '@/domain'
 import { TextSchema } from '@/domain/primitives'
-import { getAuthHeaders } from '@/lib/auth/client'
+import { getProtectedApiHeaders } from '@/lib/auth/protected-api'
+import {
+  classifyProtectedHeaderError,
+  classifyProtectedStatus,
+  PROTECTED_FAILURE_MESSAGES,
+} from '@/lib/auth/protected-api-errors'
 import {
   ApplyRevisionResponseSchema,
   type ApplyRevisionResult,
@@ -36,7 +41,16 @@ export type RevisionResult =
   | RevisionProposal
   | z.infer<typeof ProposalFailureSchema>
   | {
-      status: 'unavailable' | 'interrupted' | 'conflict' | 'invalid_request' | 'unexpected'
+      status:
+        | 'unavailable'
+        | 'interrupted'
+        | 'conflict'
+        | 'invalid_request'
+        | 'unexpected'
+        | 'unauthorized'
+        | 'rate_limited'
+        | 'auth_required'
+        | 'app_check_unavailable'
       message?: string
     }
 
@@ -55,30 +69,49 @@ export type ApplyRevision = (decision: {
   | { status: 'conflict' | 'unavailable' | 'failed' | 'uncertain'; message?: string }
 >
 
-export const requestRevisions: GenerateRevisions = async (request, signal) => {
+// 既定は本人のBearer＋App Check。テストでは通信とヘッダー取得のみ差し替える。
+export interface RevisionRequestDeps {
+  fetchFn?: typeof fetch
+  getHeaders?: () => Promise<Headers>
+}
+
+export const requestRevisions = async (
+  request: RevisionRequest,
+  signal: AbortSignal,
+  {
+    fetchFn = (...args) => fetch(...args),
+    getHeaders = getProtectedApiHeaders,
+  }: RevisionRequestDeps = {},
+): Promise<RevisionResult> => {
   const { travelModes, ...base } = request
   const input = ReviseTripRequestSchema.safeParse(base)
   const modes = travelModesSchema.safeParse(travelModes)
   if (!input.success || !modes.success) return { status: 'invalid_request' }
   const checkedRequest = { ...input.data, travelModes: modes.data }
 
-  let response: Response
-  let bodyText: string
   let headers: Headers
   try {
-    headers = await getAuthHeaders()
-    headers.set('Content-Type', 'application/json')
-  } catch {
-    return { status: 'unavailable' }
+    headers = await getHeaders()
+  } catch (error) {
+    const status = classifyProtectedHeaderError(error)
+    return { status, message: PROTECTED_FAILURE_MESSAGES[status] }
   }
+  headers.set('Content-Type', 'application/json')
+
+  let response: Response
+  let bodyText: string
   try {
-    response = await fetch('/api/trips/revise', {
+    response = await fetchFn('/api/trips/revise', {
       method: 'POST',
       headers,
       body: JSON.stringify(checkedRequest),
       signal,
     })
-    if ([401, 403, 404, 405, 429, 503].includes(response.status)) return { status: 'unavailable' }
+    const protectedFailure = classifyProtectedStatus(response.status)
+    if (protectedFailure) {
+      return { status: protectedFailure, message: PROTECTED_FAILURE_MESSAGES[protectedFailure] }
+    }
+    if ([404, 405, 503].includes(response.status)) return { status: 'unavailable' }
     if (response.status === 409) return { status: 'conflict' }
     if ([400, 413, 415].includes(response.status)) return { status: 'invalid_request' }
     bodyText = await response.text()

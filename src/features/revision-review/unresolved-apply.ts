@@ -5,11 +5,7 @@ import { SavedRevisionSchema } from '@/server/persistence/contracts'
 type UnresolvedApply = Readonly<{ baseVersion: number; revisionId: string }>
 const unresolved = new Map<string, UnresolvedApply>()
 
-export function markApplyUnresolved(
-  tripId: string,
-  baseVersion: number,
-  revisionId: string,
-): void {
+export function markApplyUnresolved(tripId: string, baseVersion: number, revisionId: string): void {
   unresolved.set(tripId, { baseVersion, revisionId })
 }
 
