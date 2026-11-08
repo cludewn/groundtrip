@@ -7,6 +7,12 @@ import {
   type Revision,
   type Trip,
 } from '@/domain'
+import { getProtectedApiHeaders } from '@/lib/auth/protected-api'
+import {
+  classifyProtectedHeaderError,
+  classifyProtectedStatus,
+  PROTECTED_FAILURE_MESSAGES,
+} from '@/lib/auth/protected-api-errors'
 
 // 学びの候補の作成API（POST /api/learnings/candidates）を呼ぶクライアント。
 // 応答は契約で検証する。候補は1〜3件で、すべて未承認でなければ採用しない
@@ -21,6 +27,10 @@ export type CandidatesFailureKind =
   | 'invalid_request'
   | 'payload_too_large'
   | 'service_unavailable'
+  | 'unauthorized'
+  | 'rate_limited'
+  | 'auth_required'
+  | 'app_check_unavailable'
   | 'interrupted'
   | 'unexpected'
 
@@ -41,6 +51,8 @@ export interface CandidatesRequest {
 export interface CandidatesOptions {
   fetchFn?: typeof fetch
   signal?: AbortSignal
+  // 既定は本人のBearer＋App Check。テストでは差し替える。
+  getHeaders?: () => Promise<Headers>
 }
 
 const ProposedSchema = z.strictObject({
@@ -75,14 +87,24 @@ const INTERRUPTED_MESSAGE = '通信が中断されました。接続を確認し
 
 export async function requestLearningCandidates(
   request: CandidatesRequest,
-  { fetchFn = fetch, signal }: CandidatesOptions = {},
+  { fetchFn = fetch, signal, getHeaders = getProtectedApiHeaders }: CandidatesOptions = {},
 ): Promise<CandidatesResult> {
+  // ヘッダーを用意できなければ送信しない（課金APIを呼ばない・再試行しない）。
+  let headers: Headers
+  try {
+    headers = await getHeaders()
+  } catch (error) {
+    const kind = classifyProtectedHeaderError(error)
+    return failure(kind, PROTECTED_FAILURE_MESSAGES[kind])
+  }
+  headers.set('Content-Type', 'application/json')
+
   let response: Response
   let text: string
   try {
     response = await fetchFn(LEARNING_CANDIDATES_ENDPOINT, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(request),
       signal,
     })
@@ -90,6 +112,11 @@ export async function requestLearningCandidates(
   } catch {
     return failure('interrupted', INTERRUPTED_MESSAGE)
   }
+
+  // 認証・利用制限は本文を見ずステータスで判定し、固定の文言を出す。
+  const protectedFailure = classifyProtectedStatus(response.status)
+  if (protectedFailure)
+    return failure(protectedFailure, PROTECTED_FAILURE_MESSAGES[protectedFailure])
 
   let body: unknown
   try {
