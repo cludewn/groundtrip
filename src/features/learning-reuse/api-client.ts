@@ -1,4 +1,5 @@
 import {
+  assertCurrentSessionScope,
   getAuthHeadersForScope,
   SessionChangedError,
   type ScopedValue,
@@ -16,7 +17,7 @@ export type LearningLoadResult =
   | { ok: true; learnings: ScopedValue<VersionedLearning[]> }
   | {
       ok: false
-      // session: 認証状態を確認できない（失効・復元失敗）。session_changed: 取得時のUIDから変わった。
+      // session: 認証状態を確認できない（失効・復元失敗）。session_changed: 取得時のUIDまたは認証世代が変わった。
       kind:
         'session' | 'session_changed' | 'unavailable' | 'interrupted' | 'incomplete' | 'unexpected'
       message: string
@@ -99,5 +100,17 @@ export async function loadApprovedLearningOptions({
   ) {
     return fail('incomplete', '学びの一覧に未取得または不正な項目があります。')
   }
+
+  // 完全な一覧を採用する直前に、要求開始時の認証世代が続いているか確認する。
+  // A→B→AなどUIDが元に戻る切替でも、古い画面の一覧を採用しない。
+  try {
+    await assertCurrentSessionScope(scope)
+  } catch (error) {
+    if (error instanceof SessionChangedError) {
+      return fail('session_changed', '認証状態が変わりました。学びを読み込み直してください。')
+    }
+    return fail('session', '認証状態を確認できません。ログイン状態を確認してください。')
+  }
+
   return { ok: true, learnings: { scope, value: learnings } }
 }

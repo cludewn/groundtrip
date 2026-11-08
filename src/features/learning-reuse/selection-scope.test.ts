@@ -11,8 +11,8 @@ import {
 // session-scope.tsが読み込むFirebase側は使わない。
 vi.mock('@/lib/auth/client', () => ({ getAuthSnapshot: vi.fn() }))
 
-const scopeA = createSessionScope('user-a')
-const scopeB = createSessionScope('user-b')
+const scopeA = createSessionScope('user-a', 0)
+const scopeB = createSessionScope('user-b', 1)
 const chosen = (scope = scopeA, value = [{ id: 'learning-rest', version: 2 }]) =>
   ({ scope, value }) satisfies ScopedLearningSelection
 
@@ -32,10 +32,17 @@ describe('生成リクエストへ選択を取り出す口', () => {
     expect(selection.value).toHaveLength(2)
   })
 
-  it('UIDが同じなら、別に作ったスコープ（トークン更新後など）でも同じセッションとして扱う', () => {
-    expect(resolveSelectionForRequest(chosen(), createSessionScope('user-a'))).toEqual([
+  it('UIDと認証世代が同じなら、再作成したスコープでも同じセッションとして扱う', () => {
+    expect(resolveSelectionForRequest(chosen(), createSessionScope('user-a', 0))).toEqual([
       { id: 'learning-rest', version: 2 },
     ])
+  })
+
+  it('同じUIDでも再認証世代が変わった選択は送信しない', () => {
+    const returnedToA = createSessionScope('user-a', 2)
+    expect(() => resolveSelectionForRequest(chosen(scopeA), returnedToA)).toThrow(
+      SessionChangedError,
+    )
   })
 
   it('UIDが変わっていれば、同じIDと版でも SessionChangedError にする（黙って別人の本文にしない）', () => {

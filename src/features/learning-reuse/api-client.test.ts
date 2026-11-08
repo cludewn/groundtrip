@@ -13,9 +13,14 @@ vi.mock('@/lib/auth/client', () => ({ getAuthSnapshot: mocks.getAuthSnapshot }))
 
 beforeEach(() => {
   mocks.getAuthSnapshot.mockReset()
+  mocks.getAuthSnapshot.mockResolvedValue({
+    uid: 'user-a',
+    token: 'token-of-a',
+    generation: 0,
+  })
 })
 
-const scopeA = createSessionScope('user-a')
+const scopeA = createSessionScope('user-a', 0)
 const headers = async () => new Headers({ Authorization: 'Bearer test-token' })
 const payload = (learnings: unknown[] = [{ learning: sampleApprovedLearning, version: 1 }]) => ({
   learnings,
@@ -210,7 +215,6 @@ describe('取得時の本文の長さ（サーバー採用・表示と同じ上�
 
 describe('認証セッションとの結び付け', () => {
   it('既定では、取得するセッションのUIDと同じときだけ、そのトークンで取得する', async () => {
-    mocks.getAuthSnapshot.mockResolvedValue({ uid: 'user-a', token: 'token-of-a' })
     const fetchFn = vi.fn<typeof fetch>(async () => Response.json(payload()))
     const result = await loadApprovedLearningOptions({ scope: scopeA, fetchFn })
 
@@ -220,12 +224,28 @@ describe('認証セッションとの結び付け', () => {
   })
 
   it('現在のUIDが取得するセッションと違えば、トークンを送らず取得もしない', async () => {
-    mocks.getAuthSnapshot.mockResolvedValue({ uid: 'user-b', token: 'token-of-b' })
+    mocks.getAuthSnapshot.mockResolvedValue({
+      uid: 'user-b',
+      token: 'token-of-b',
+      generation: 1,
+    })
     const fetchFn = vi.fn<typeof fetch>(async () => Response.json(payload()))
     const result = await loadApprovedLearningOptions({ scope: scopeA, fetchFn })
 
     expect(result).toMatchObject({ ok: false, kind: 'session_changed' })
     expect(fetchFn).not.toHaveBeenCalled()
+  })
+
+  it('応答待ちの間に同じUIDへ再認証した場合、前世代の一覧を採用しない', async () => {
+    mocks.getAuthSnapshot
+      .mockResolvedValueOnce({ uid: 'user-a', token: 'token-of-a', generation: 0 })
+      .mockResolvedValueOnce({ uid: 'user-a', token: 'token-of-a-new', generation: 2 })
+    const fetchFn = vi.fn<typeof fetch>(async () => Response.json(payload()))
+
+    const result = await loadApprovedLearningOptions({ scope: scopeA, fetchFn })
+
+    expect(result).toMatchObject({ ok: false, kind: 'session_changed' })
+    expect(fetchFn).toHaveBeenCalledTimes(1)
   })
 
   it('セッションの失効・復元失敗は、UIDの変更とは別の失敗として返し、取得しない', async () => {

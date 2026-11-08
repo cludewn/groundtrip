@@ -49,14 +49,14 @@
 画面で見た内容と違う学びが、黙って生成に使われないようにする（Own the Why）。選択は内容ではなく、
 **画面に表示したときの版**と、**それを取得した認証セッション**に紐づける。
 
-| 場所                                                           | 責務                                                                                                                        |
-| -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `src/features/learning-reuse/api-client.ts`                    | 本人の承認済みの学びを、取得したセッション（`SessionScope`）と組（`ScopedValue`）で取得する。UIDが違えばトークンを送らない  |
-| `src/features/learning-reuse/learning-list.ts`                 | 取得スキーマの本文上限の検証と、表示してよい一覧かの判定（重複ID・上限超過）                                                |
-| `src/features/learning-reuse/learning-reuse-picker.tsx`        | 版つきで表示し、選択を `ScopedValue<{ id, version }[]>` で通知する。UID・世代・地域が変わったら一覧・選択・読み込みを捨てる |
-| `src/features/learning-reuse/selection-scope.ts`               | `resolveSelectionForRequest`。生成リクエストの直前に、選択時と現在のセッションが同じことを確認して選択を取り出す唯一の口    |
-| `src/server/learning-reuse/selection.ts`                       | `resolveSelectedLearnings`。選択を本人の保存済みデータと照合して、採用する学び（検証時点のスナップショット）を確定する      |
-| `src/features/learning-reuse/learning-application-summary.tsx` | 生成後の適用記録（学びID・対象の予定・AIの説明）の表示                                                                      |
+| 場所                                                           | 責務                                                                                                                                               |
+| -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/features/learning-reuse/api-client.ts`                    | 本人の承認済みの学びを、取得したセッション（`SessionScope`）と組（`ScopedValue`）で取得する。要求はUID・世代一致時だけ送信し、応答採用前にも再確認 |
+| `src/features/learning-reuse/learning-list.ts`                 | 取得スキーマの本文上限の検証と、表示してよい一覧かの判定（重複ID・上限超過）                                                                       |
+| `src/features/learning-reuse/learning-reuse-picker.tsx`        | 版つきで表示し、選択を `ScopedValue<{ id, version }[]>` で通知する。UID・認証世代・地域が変わったら一覧・選択・読み込みを捨てる                    |
+| `src/features/learning-reuse/selection-scope.ts`               | `resolveSelectionForRequest`。生成リクエストの直前に、選択時と現在のUID・認証世代が同じことを確認して選択を取り出す唯一の口                        |
+| `src/server/learning-reuse/selection.ts`                       | `resolveSelectedLearnings`。選択を本人の保存済みデータと照合して、採用する学び（検証時点のスナップショット）を確定する                             |
+| `src/features/learning-reuse/learning-application-summary.tsx` | 生成後の適用記録（学びID・対象の予定・AIの説明）の表示                                                                                             |
 
 ### 選択の契約
 
@@ -85,23 +85,23 @@ Aが見ていないBの本文が、黙って採用される。これを防ぐた
 
 - 親は `useSessionScope()` の状態をそのまま `LearningReusePicker` の `session` に渡す。
   Pickerは `loadApprovedLearningOptions({ scope })` で取得し、一覧を `ScopedValue<VersionedLearning[]>` で保持する。
-  取得のトークンは `getAuthHeadersForScope(scope)` で作る。UIDが変わっていればトークンを出さず、`session_changed` で失敗する。
+  取得のトークンは `getAuthHeadersForScope(scope)` で作る。UIDまたは認証世代が変わっていればトークンを出さず、`session_changed` で失敗する。
 - 選択は `ScopedValue<{ id, version }[]>`（`ScopedLearningSelection`）で親へ通知する。
   「どの認証セッションの利用者が、画面で見たどの版を選んだか」の対応を型で残す。
-- UID（または `scopeEpoch`）・地域が変わったとき、再読み込みしたとき、認証の復元中・失効・エラーのとき、
+- UID・認証世代（`scopeEpoch`）・地域が変わったとき、再読み込みしたとき、認証の復元中・失効・エラーのとき、
   Pickerがアンマウントされるときは、進行中の読み込みを `AbortController` で中止し、
   **親へ `null`（選択なし）を通知して**親が持つ古い選択を無効にする。
   選択を解除したことは、画面の状況表示（`role="status"`）で利用者に伝える。
 - 取得を始めたセッションと違うセッションの一覧が返ってきたときは、その一覧を採用しない。
-  中断後に届いた古い応答は、状態にも反映しない。UIDが同じなら（トークン更新などの再通知）読み直さず、選択も保つ。
+  中断後に届いた古い応答は、状態にも反映しない。UIDと認証世代が同じなら（通常のトークン更新などの再通知）読み直さず、選択も保つ。
 - 生成リクエストを送る直前は、必ず `resolveSelectionForRequest(selected, currentScope)` を通す。
-  選択時のセッションが現在のUIDと違えば `SessionChangedError`（選択を空にして続行しない）。
-  送信側のトークンも `getAuthHeadersForScope(scope)` で作る。現在のUIDの `getAuthHeaders()` を作り直して使わない。
+  選択時のセッションと現在のUIDまたは認証世代が違えば `SessionChangedError`（選択を空にして続行しない）。
+  送信側のトークンも `getAuthHeadersForScope(scope)` で作る。現在のUIDだけを見た `getAuthHeaders()` を作り直して使わない。
 
 ```ts
 const scope = await captureSessionScope()
 const selections = resolveSelectionForRequest(selected, scope) // 違えば SessionChangedError
-const headers = await getAuthHeadersForScope(scope) // 送信側のトークンも同じUID
+const headers = await getAuthHeadersForScope(scope) // 送信側のトークンも同じ認証世代
 ```
 
 画面側の保護はUXの安全網であり、所有者の分離はサーバー側（`ownerUid` で引く）が担う。
@@ -119,13 +119,13 @@ const headers = await getAuthHeadersForScope(scope) // 送信側のトークン�
 
 不完全な一覧・認証失効・地域変更・古い応答の扱い。いずれも、空の一覧とは区別して示し、学びを使わずに旅程を作る道を残す。
 
-| 状況                                                     | 画面の扱い                                                                                                 |
-| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| 打ち切り・破損による除外・件数の不一致・ID重複・上限超過 | 一覧ごと使わない（`incomplete`）。再読み込みを案内する                                                     |
-| 401・403・認証の復元失敗・セッション終了                 | 読み込みを始めない、または失敗にする。再読み込みでは直らない状況は案内を出さない。匿名アカウントは作らない |
-| 取得時のUIDが変わっていた（`session_changed`）           | トークンを送らず失敗にする。再読み込みを案内する                                                           |
-| 地域が変わった                                           | 選択を解除し、新しい地域で読み直す。解除したことを伝える                                                   |
-| 中断後・別条件で届いた応答                               | 採用しない                                                                                                 |
+| 状況                                                                     | 画面の扱い                                                                                                 |
+| ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
+| 打ち切り・破損による除外・件数の不一致・ID重複・上限超過                 | 一覧ごと使わない（`incomplete`）。再読み込みを案内する                                                     |
+| 401・403・認証の復元失敗・セッション終了                                 | 読み込みを始めない、または失敗にする。再読み込みでは直らない状況は案内を出さない。匿名アカウントは作らない |
+| 取得前または応答採用前にUID・認証世代が変わっていた（`session_changed`） | 要求前は送信せず、応答後は一覧を採用せず失敗にする。再読み込みを案内する                                   |
+| 地域が変わった                                                           | 選択を解除し、新しい地域で読み直す。解除したことを伝える                                                   |
+| 中断後・別条件で届いた応答                                               | 採用しない                                                                                                 |
 
 ### エラーとHTTP状態
 
@@ -211,7 +211,7 @@ const headers = await getAuthHeadersForScope(scope) // 送信側のトークン�
 **#54で必ず対応する統合条件**
 
 1. Picker → 親 → APIクライアント → 生成Route → resolver を、`{ id, version }` に統一する（IDだけの選択へ戻さない）。
-2. UID・地域が変わったとき、親に保持した古い選択も無効にする（`scopeEpoch` / `scope.uid` の変化、`onSelectionChange(null)`）。
+2. UID・認証世代・地域が変わったとき、親に保持した古い選択も無効にする（`scopeEpoch` / `scope.uid` の変化、`onSelectionChange(null)`）。
    送信の直前に `resolveSelectionForRequest` を通す。
 3. 既存の `POST /api/trips/generate` から、クライアントが申告した学びの本文を承認済みとして信用する経路を閉じる。
 4. 認証・検証済みの学びだけをGeminiへ渡す。

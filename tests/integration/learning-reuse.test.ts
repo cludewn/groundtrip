@@ -305,7 +305,7 @@ describe('破損・上限超過の保存データは、一部だけ採用せず�
     const { loadApprovedLearningOptions } = await import('@/features/learning-reuse/api-client')
     const { createSessionScope } = await import('@/lib/auth/session-scope')
     const loaded = await loadApprovedLearningOptions({
-      scope: createSessionScope(session.uid),
+      scope: createSessionScope(session.uid, 0),
       fetchFn: viaRoute,
       getHeaders: async () => session.headers(),
     })
@@ -332,7 +332,7 @@ describe('破損・上限超過の保存データは、一部だけ採用せず�
     const { loadApprovedLearningOptions } = await import('@/features/learning-reuse/api-client')
     const { createSessionScope } = await import('@/lib/auth/session-scope')
     const loaded = await loadApprovedLearningOptions({
-      scope: createSessionScope(session.uid),
+      scope: createSessionScope(session.uid, 0),
       fetchFn: viaRoute,
       getHeaders: async () => session.headers(),
     })

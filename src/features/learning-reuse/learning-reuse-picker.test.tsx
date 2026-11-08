@@ -34,10 +34,20 @@ const records: VersionedLearning[] = [
   { version: 3, learning: approvedRegional },
 ]
 
-const scopeA = createSessionScope('user-a')
+const scopesBySession = new Map<string, SessionScope>()
+const scopeFor = (uid: string, epoch = 0): SessionScope => {
+  const key = JSON.stringify([uid, epoch])
+  let scope = scopesBySession.get(key)
+  if (!scope) {
+    scope = createSessionScope(uid, epoch)
+    scopesBySession.set(key, scope)
+  }
+  return scope
+}
+const scopeA = scopeFor('user-a')
 const authed = (uid: string, scopeEpoch = 0): SessionScopeState => ({
   status: 'authenticated',
-  scope: createSessionScope(uid),
+  scope: scopeFor(uid, scopeEpoch),
   scopeEpoch,
 })
 const sessionA = authed('user-a')
@@ -98,7 +108,7 @@ describe('学びの選択UI', () => {
     render(<LearningReusePicker region="京都市" session={sessionA} load={load} />)
     await screen.findByText(approvedRegional.content)
     expect(load).toHaveBeenCalledTimes(1)
-    expect(load.mock.calls[0][0]).toEqual(scopeA)
+    expect(load.mock.calls[0][0]).toBe(scopeA)
     expect(load.mock.calls[0][1]).toBeInstanceOf(AbortSignal)
   })
 
@@ -233,7 +243,7 @@ describe('認証セッションとの結び付け', () => {
     expect(screen.getByRole('status').textContent).toContain('選んでいた学びを解除しました')
 
     // 親が古い選択を保持していても、Bのスコープでは取り出せない。
-    expect(() => resolveSelectionForRequest(selectedA, createSessionScope('user-b'))).toThrow(
+    expect(() => resolveSelectionForRequest(selectedA, scopeFor('user-b', 1))).toThrow(
       SessionChangedError,
     )
   })
@@ -319,6 +329,7 @@ describe('認証セッションとの結び付け', () => {
     const view = render(<LearningReusePicker {...props} session={authed('user-a', 0)} />)
     await screen.findByText('user-aだけが見える本文')
     await user.click(screen.getByRole('checkbox'))
+    const selectedFromFirstA = onSelectionChange.mock.lastCall?.[0] as ScopedLearningSelection
 
     view.rerender(<LearningReusePicker {...props} session={authed('user-b', 1)} />)
     await screen.findByText('user-bだけが見える本文')
@@ -328,9 +339,12 @@ describe('認証セッションとの結び付け', () => {
     expect(load).toHaveBeenCalledTimes(3)
     expect((screen.getByRole('checkbox') as HTMLInputElement).checked).toBe(false)
     expect(onSelectionChange).toHaveBeenLastCalledWith(null)
+    expect(() => resolveSelectionForRequest(selectedFromFirstA, scopeFor('user-a', 2))).toThrow(
+      SessionChangedError,
+    )
   })
 
-  it('同じUIDの再通知（新しいスコープ参照、同じ世代）では、読み込み直さず選択も保つ', async () => {
+  it('同じUID・同じ認証世代の再通知では、読み込み直さず選択も保つ', async () => {
     const load = vi.fn<LoadLearningOptions>(perUser)
     const user = userEvent.setup()
     const props = { region: '京都市', load }
@@ -547,6 +561,61 @@ describe('取得・表示する一覧の整合', () => {
     ...sampleApprovedLearning,
     content: 'あ'.repeat(MAX_LEARNING_CONTENT_LENGTH + 1),
   }
+
+  it('セッション終了後に同じUIDへ戻っても、前世代の選択を復活させない', async () => {
+    const load = vi.fn<LoadLearningOptions>(async (scope) =>
+      okFor(scope, [
+        {
+          version: 1,
+          learning: { ...sampleApprovedLearning, content: `${scope.uid}だけが見える本文` },
+        },
+      ]),
+    )
+    const onSelectionChange = vi.fn()
+    const user = userEvent.setup()
+    const view = render(
+      <LearningReusePicker
+        region="京都市"
+        session={authed('user-a', 0)}
+        load={load}
+        onSelectionChange={onSelectionChange}
+      />,
+    )
+    await screen.findByText('user-aだけが見える本文')
+    await user.click(screen.getByRole('checkbox'))
+    const selectedBeforeEnd = onSelectionChange.mock.lastCall?.[0] as ScopedLearningSelection
+
+    view.rerender(
+      <LearningReusePicker
+        region="京都市"
+        session={{
+          status: 'session_ended',
+          error: { code: 'session_ended' } as never,
+          scopeEpoch: 1,
+        }}
+        load={load}
+        onSelectionChange={onSelectionChange}
+      />,
+    )
+    expect((await screen.findByRole('alert')).textContent).toContain('認証状態を確認できません')
+    expect(onSelectionChange).toHaveBeenLastCalledWith(null)
+
+    view.rerender(
+      <LearningReusePicker
+        region="京都市"
+        session={authed('user-a', 2)}
+        load={load}
+        onSelectionChange={onSelectionChange}
+      />,
+    )
+    await screen.findByText('user-aだけが見える本文')
+    expect(load).toHaveBeenCalledTimes(2)
+    expect((screen.getByRole('checkbox') as HTMLInputElement).checked).toBe(false)
+    expect(onSelectionChange).toHaveBeenLastCalledWith(null)
+    expect(() => resolveSelectionForRequest(selectedBeforeEnd, scopeFor('user-a', 2))).toThrow(
+      SessionChangedError,
+    )
+  })
 
   it('上限ちょうどの本文は表示し、上限を超える本文を含む一覧は選べる形で表示しない', async () => {
     const exact: ApprovedLearning = {

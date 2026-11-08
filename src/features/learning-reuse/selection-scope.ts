@@ -5,8 +5,8 @@ import { LearningSelectionSchema, type LearningSelection } from '@/server/persis
 
 // 利用者が選んだ学び。{ id, version } を、選んだ時点の認証セッションと組にして保持する。
 // 「どの認証セッションの利用者が、画面で見たどの版を選んだか」の対応を型で残す。
-// 同じIDとversionでも、UIDが違えば本文が違うことがある。サーバーはトークンのUIDで学びを引くため、
-// 別のUIDのトークンで送ると、その人の同じID・版の本文へ黙って置き換わる。
+// 同じIDとversionでも、UIDまたは認証世代が違えば別の選択として扱う。
+// サーバーはトークンのUIDで学びを引くため、別UIDのトークンで送ると、同じID・版の本文へ置き換わり得る。
 export type ScopedLearningSelection = ScopedValue<LearningSelection[]>
 
 // 選択の形式が不正（版のない旧形式のID、版が0・小数、重複ID、余分な項目）。
@@ -26,7 +26,7 @@ const SelectionsSchema = z
   .refine((items) => new Set(items.map(({ id }) => id)).size === items.length)
 
 // 生成リクエストを送る直前に、選択を取り出す唯一の口。生成APIの呼び出し側は、これを通した値だけを送る。
-// - 選択時と現在の認証セッションが同じ（UID一致）ときだけ、{ id, version }[] を返す。
+// - 選択時と現在の認証セッションが同じ（UIDと認証世代が一致）ときだけ、{ id, version }[] を返す。
 //   違えば SessionChangedError を投げる。選択を捨てて空で続けない（黙って学びを外さない）。
 // - null / undefined は「学びを使わない」。選択UIが選択を取り消した（地域変更・認証変更・再読み込み）状態。
 // 戻り値は複製で、保持している選択を後から書き換えても影響しない。

@@ -3,12 +3,7 @@
 import { useEffect, useRef, useState, type ChangeEvent } from 'react'
 
 import type { ApprovedLearning } from '@/domain'
-import {
-  createSessionScope,
-  isSameScope,
-  type ScopedValue,
-  type SessionScope,
-} from '@/lib/auth/session-scope'
+import { isSameScope, type ScopedValue, type SessionScope } from '@/lib/auth/session-scope'
 import type { SessionScopeState } from '@/lib/auth/use-session-scope'
 import { normalizeLearningRegion, selectApplicableLearnings } from '@/lib/learnings/lifecycle'
 import type { LearningSelection, VersionedLearning } from '@/server/persistence/contracts'
@@ -26,16 +21,16 @@ export type LoadLearningOptions = (
 
 interface LearningReusePickerProps {
   region: string
-  // 親が useSessionScope() で得た認証状態。一覧・選択・進行中の読み込みは、このUID（と世代scopeEpoch）に
+  // 親が useSessionScope() で得た認証状態。一覧・選択・進行中の読み込みは、UIDと認証世代に
   // 結び付ける。親が選択を保持するときも、同じ状態を使って古い選択を捨てる。
   session: SessionScopeState
   // 選んだ学びを、画面に表示した版と、選択時の認証セッションの組で通知する。
-  // 地域・UID・世代が変わった、読み込み中、失敗、アンマウントのときは null（選択なし）を通知する。
+  // 地域・UID・認証世代が変わった、読み込み中、失敗、アンマウントのときは null（選択なし）を通知する。
   // 送信の直前に resolveSelectionForRequest で現在のセッションと照合してから使う。
   // サーバーは版が現行と一致するときだけ採用する。
   onSelectionChange?: (selection: ScopedLearningSelection | null) => void
   // テスト・他の画面での依存性注入に使う。省略時は本人のFirestore保存APIを読む。
-  // 読み込みは地域・UID・世代の変更と「再読み込み」のときだけ行い、この関数の差し替えでは再実行しない。
+  // 読み込みは地域・認証世代・「再読み込み」のときだけ行い、この関数の差し替えでは再実行しない。
   load?: LoadLearningOptions
 }
 
@@ -101,7 +96,10 @@ export function LearningReusePicker({
 }: LearningReusePickerProps) {
   // サーバーと同じ正規化（前後の空白を除く）を、入口で1回だけ行う。
   const normalizedRegion = normalizeLearningRegion(region)
-  const uid = session.status === 'authenticated' ? session.scope.uid : null
+  // useSessionScopeから受け取った世代付きscopeをそのまま使う。
+  // UIDだけでscopeを作り直すと、A→B→A後に古いAの選択が復活してしまう。
+  const scope = session.status === 'authenticated' ? session.scope : null
+  const uid = scope?.uid ?? null
   const epoch = session.scopeEpoch
   const currentKey: ViewKey = { region: normalizedRegion, uid, epoch }
 
@@ -129,13 +127,13 @@ export function LearningReusePicker({
   useEffect(() => {
     const controller = new AbortController()
     const key: ViewKey = { region: normalizedRegion, uid, epoch }
-    // 地域・UID・世代が変わった、または再読み込みした。前の一覧・選択・進行中の読み込みは使わない。
+    // 地域・UID・認証世代が変わった、または再読み込みした。前の一覧・選択・進行中の読み込みは使わない。
     setState({ key, view: { status: 'loading' } })
     setNotice(selectedCountRef.current > 0 ? clearedNotice : '')
     selectedCountRef.current = 0
     changeRef.current?.(null)
     // 認証済みでなければ読み込みを始めない。匿名アカウントも作らない。
-    if (uid === null) return () => controller.abort()
+    if (!scope) return () => controller.abort()
     if (!normalizedRegion) {
       setState({
         key,
@@ -144,7 +142,6 @@ export function LearningReusePicker({
       return () => controller.abort()
     }
 
-    const scope = createSessionScope(uid)
     const fail = (message: string) => setState({ key, view: { status: 'error', message } })
     void loadRef.current(scope, controller.signal).then(
       (result) => {
@@ -182,7 +179,7 @@ export function LearningReusePicker({
       },
     )
     return () => controller.abort()
-  }, [normalizedRegion, uid, epoch, attempt])
+  }, [normalizedRegion, scope, uid, epoch, attempt])
 
   let visible: PickerView
   if (session.status === 'restoring') {
