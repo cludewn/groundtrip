@@ -52,6 +52,8 @@ export function RevisionRouteView({
     stopId: string
     applyUnresolved?: boolean
   } | null>(null)
+  // 結果不明の適用は、比較画面を閉じてもサーバー確認なしに再開させない。
+  const [applyUnresolved, setApplyUnresolved] = useState(false)
   const [interruption, setInterruption] = useState<{
     stopId: string
     applyUnresolved?: boolean
@@ -68,7 +70,7 @@ export function RevisionRouteView({
     session && target && !target.isFixed && session.trip === current.trip && generate
 
   if (session && !hasActiveSession) {
-    setInterruption({ stopId: session.stopId, applyUnresolved: session.applyUnresolved })
+    setInterruption({ stopId: session.stopId, applyUnresolved: session.applyUnresolved || applyUnresolved })
     setSession(null)
   }
 
@@ -94,6 +96,8 @@ export function RevisionRouteView({
   }
 
   const onApplied = (changed: Trip, receipt?: ApplyRevisionResult) => {
+    // 確定した適用応答を確認できた場合に限り、未確認の操作禁止を解除する。
+    setApplyUnresolved(false)
     const trip = adoptTripChange?.(changed) ?? changed
     if (receipt && trip.version > receipt.appliedTripVersion) {
       setLocal({ source: sourceTrip, trip })
@@ -140,11 +144,12 @@ export function RevisionRouteView({
             meta={current.meta}
             generate={generate}
             apply={apply}
-            onApplyUnresolvedChange={(applyUnresolved) => {
-              setSession((active) => active && { ...active, applyUnresolved })
+            onApplyUnresolvedChange={(unresolved) => {
+              setApplyUnresolved(unresolved)
+              setSession((active) => active && { ...active, applyUnresolved: unresolved })
             }}
             onCancel={() => {
-              if (session.applyUnresolved) {
+              if (applyUnresolved || session.applyUnresolved) {
                 setInterruption({ stopId: session.stopId, applyUnresolved: true })
                 setSession(null)
               } else {
@@ -165,8 +170,8 @@ export function RevisionRouteView({
               data-tone="error"
             >
               <p>
-                {interruption.applyUnresolved
-                  ? '適用結果を確認できませんでした。再操作する前に最新の旅程を確認してください。'
+                {interruption.applyUnresolved || applyUnresolved
+                  ? '適用結果を確認できませんでした。この画面からは再操作できません。最新の旅程をサーバーから取得し直してください。'
                   : '旅程が更新されたため、候補を取り消しました。最新の旅程を表示しています。'}
               </p>
               <button
@@ -176,6 +181,11 @@ export function RevisionRouteView({
               >
                 比較を閉じる
               </button>
+            </div>
+          )}
+          {applyUnresolved && !interruption && (
+            <div role="alert" className="gt-notice" data-tone="error">
+              適用結果を確認できませんでした。この画面からは再操作できません。最新の旅程をサーバーから取得し直してください。
             </div>
           )}
           <TripRouteView
@@ -189,7 +199,7 @@ export function RevisionRouteView({
               return trip
             }}
             onStartRevision={
-              generate
+              generate && !applyUnresolved
                 ? (stopId) => {
                     if (current.trip.stops.some((stop) => stop.id === stopId && !stop.isFixed)) {
                       setNotice(null)
