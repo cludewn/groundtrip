@@ -12,7 +12,11 @@ import {
 } from '@/features/revision-review/api-client'
 import { TripSavePanel, type SaveTrip } from '@/features/trip-save/trip-save-panel'
 import { getProtectedApiHeadersForScope } from '@/lib/auth/protected-api'
-import type { SessionScope } from '@/lib/auth/session-scope'
+import {
+  beginSessionScopeOperation,
+  SessionChangedError,
+  type SessionScope,
+} from '@/lib/auth/session-scope'
 
 interface TripJourneyProps {
   // いま画面に出している旅程（固定の切り替えや部分修正を反映済み）。
@@ -26,6 +30,61 @@ interface TripJourneyProps {
   saveTrip?: SaveTrip
   // 学びを保存したとき。次の旅に使う学びの一覧を読み込み直すために使う。
   onLearningsChanged: () => void
+}
+
+// 認証確認中・終了時は、既定の「現在のUID」へフォールバックしない。
+// 生成開始、保護ヘッダー取得、送信直前、応答採用前を同じ認証世代に結び付ける。
+export function createScopedRevisions(
+  scope: SessionScope | null,
+  generateRevisions?: GenerateRevisions,
+): GenerateRevisions {
+  return async (request, signal) => {
+    if (!scope) {
+      return {
+        status: 'auth_required',
+        message: '認証の状態を確認できないため、変更候補を取得しませんでした。',
+      }
+    }
+    if (signal.aborted) return { status: 'interrupted' }
+
+    let operation: ReturnType<typeof beginSessionScopeOperation> | undefined
+    try {
+      operation = beginSessionScopeOperation(scope, signal)
+      operation.signal.throwIfAborted()
+
+      const result = await (generateRevisions
+        ? generateRevisions(request, operation.signal)
+        : requestRevisions(request, operation.signal, {
+            getHeaders: () => getProtectedApiHeadersForScope(scope),
+            fetchFn: (input, init) => {
+              // App CheckやBearer取得を待つ間にUIDが変わっても、旧Tripを送信しない。
+              operation!.assertCurrent()
+              operation!.signal.throwIfAborted()
+              return fetch(input, {
+                ...init,
+                signal: operation!.signal,
+                redirect: 'error',
+              })
+            },
+          }))
+
+      // requestRevisionsは認証エラーを結果として返すため、結果の採用直前にも独立して判定。
+      operation.assertCurrent('unknown')
+      operation.signal.throwIfAborted()
+      return result
+    } catch (error) {
+      if (error instanceof SessionChangedError) {
+        return {
+          status: 'auth_required',
+          message: '認証セッションが変わったため、古い変更候補を表示しませんでした。',
+        }
+      }
+      if (signal.aborted || operation?.signal.aborted) return { status: 'interrupted' }
+      return { status: 'unavailable' }
+    } finally {
+      operation?.dispose()
+    }
+  }
 }
 
 // 生成された旅程の下に続く、旅の通し導線：保存 → 現地での報告と部分修正 → 振り返りと学びの保存。
@@ -44,16 +103,9 @@ export function TripJourney({
   // 保存の結果が不明のとき、保存済みの旅行の一覧を開いて確かめる。
   const [reflectionOpen, setReflectionOpen] = useState(false)
 
-  // 候補の生成も、この旅程を作った認証セッションのトークンで送る（別のUIDのトークンで送らない）。
-  const revisions = useMemo<GenerateRevisions>(
-    () =>
-      generateRevisions ??
-      ((request, signal) =>
-        requestRevisions(
-          request,
-          signal,
-          scope ? { getHeaders: () => getProtectedApiHeadersForScope(scope) } : {},
-        )),
+  // 候補生成の処理は、認証確認中に現在の別UIDのBearerへフォールバックしない。
+  const revisions = useMemo(
+    () => createScopedRevisions(scope, generateRevisions),
     [generateRevisions, scope],
   )
 
