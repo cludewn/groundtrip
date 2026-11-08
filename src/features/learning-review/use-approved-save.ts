@@ -95,13 +95,15 @@ export function useApprovedSave({
     setUnresolvedUnknowns([])
   }
 
-  // 旅程・地域が変わったら、進行中の保存を中止し、古い応答を採用しない（コミットと同時に行う）。
+  // 認証確認中は保存を中断するが、同じ旅程・保存先なら送信済みの結果を受け取る。
+  // 旅程・保存先が変わった場合だけ、古い結果を破棄する（コミットと同時に行う）。
   useLayoutEffect(() => {
     const scopeChanged =
       scopeKey !== operationScopeRef.current.scopeKey || store !== operationScopeRef.current.store
     operationScopeRef.current = { scopeKey, store }
     if (canSave && !scopeChanged) return
     controllerRef.current?.abort()
+    if (!scopeChanged) return
     controllerRef.current = null
     seqRef.current += 1
     inFlightRef.current = false
@@ -181,8 +183,9 @@ export function useApprovedSave({
       result = { ok: false, message: '' }
     }
 
-    // 古い応答（中止された・新しい保存がある・旅程が切り替わった）は、採用しない。
-    if (seq !== seqRef.current || controller.signal.aborted) return
+    // 別の旅程・保存先や、新しい保存の結果は混ぜない。
+    // 同じ認証セッションでの一時中断は、送信済みの保存結果（結果不明を含む）を保持する。
+    if (seq !== seqRef.current) return
     inFlightRef.current = false
     controllerRef.current = null
 

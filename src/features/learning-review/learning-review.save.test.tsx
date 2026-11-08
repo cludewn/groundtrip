@@ -480,7 +480,7 @@ describe('LearningReview: 二重送信と競合', () => {
     await act(async () => pending.resolve({ ok: true }))
   })
 
-  it('保存中に認証が確認できなくなったら操作を止め、保存中の表示も解除する', async () => {
+  it('保存中に認証確認へ戻ったら中断し、結果が届くまでは二重送信を防いで結果を保持する', async () => {
     const pending = deferred<SaveResult>()
     const { saveMock, user, rerender } = setup(() => pending.promise)
     await generateAndApprove(user)
@@ -490,12 +490,15 @@ describe('LearningReview: 二重送信と競合', () => {
     rerender({ canSave: false })
 
     expect(signal?.aborted).toBe(true)
-    expect(statusText()).not.toContain('保存中')
+    expect(statusText()).toContain('保存中')
     expect(
       screen.getByRole('button', { name: '認証を確認中…' }).getAttribute('aria-disabled'),
     ).toBe('true')
+    rerender({ canSave: true })
+    await user.click(saveButton())
+    expect(saveMock).toHaveBeenCalledTimes(1)
     await act(async () => pending.resolve({ ok: true }))
-    expect(statusText()).not.toContain('保存済み')
+    expect(statusText()).toContain('保存済み')
   })
 
   it('保存したあとに承認済みの内容が変わったら、未保存の変更ありに戻る', async () => {

@@ -808,6 +808,43 @@ describe('ReflectionFlow：取得・編集・保存を同じ認証セッショ�
     expect(backend.calls.every((call) => call.uid === A || call.uid === undefined)).toBe(true)
   })
 
+  it('送信後に同じ認証セッションが確認中へ戻っても、中断した保存の結果不明を保持する', async () => {
+    const backend = setupBackend()
+    const user = userEvent.setup()
+    render(<ReflectionFlow />)
+    await prepare(user, /京都市/)
+
+    const gate = deferred()
+    backend.intercept(isApprove(first.id), async ({ proceed }) => {
+      const response = proceed()
+      await gate.promise
+      return response
+    })
+    await user.click(saveButton())
+    await waitFor(() => expect(backend.approveCalls()).toHaveLength(1))
+
+    await act(async () => {
+      fakeAuth.restoring()
+    })
+    await act(async () => {
+      gate.resolve()
+    })
+
+    await waitFor(() => expect(saveStatus()).toContain('1件は結果不明'))
+    expect(itemOf(approvedList(2), first)).toContain('— 結果不明')
+    expect(itemOf(approvedList(2), second)).toContain('— 未保存')
+    expect(backend.account(A).learnings.has(first.id)).toBe(true)
+    expect(backend.approveCalls()).toHaveLength(1)
+
+    await act(async () => {
+      fakeAuth.notifyCurrent()
+    })
+    expect(saveStatus()).toContain('1件は結果不明')
+    expect(
+      screen.getByRole('button', { name: '保存済みか確認して、もう一度、保存する' }),
+    ).toBeTruthy()
+  })
+
   it('セッションが終了したら、表示中の内容では保存を始めず、匿名アカウントも自動作成しない', async () => {
     const backend = twoAccounts()
     const user = userEvent.setup()
