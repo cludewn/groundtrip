@@ -17,6 +17,8 @@ export type GenerationFailureKind =
   | 'invalid_request'
   | 'payload_too_large'
   | 'service_unavailable'
+  | 'unauthorized'
+  | 'rate_limited'
   | 'interrupted'
   | 'unexpected'
 
@@ -73,6 +75,13 @@ export async function requestTripGeneration(
   } catch {
     // 接続できない・途中で切れた・利用者の操作で中止した場合。
     return failure('interrupted', INTERRUPTED_MESSAGE)
+  }
+
+  if (response.status === 401 || response.status === 403) {
+    return failure('unauthorized', '旅程を生成するための利用資格を確認できませんでした。')
+  }
+  if (response.status === 429) {
+    return failure('rate_limited', '旅程生成の利用枠に達しました。')
   }
 
   let body: unknown

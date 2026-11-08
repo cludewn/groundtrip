@@ -28,6 +28,14 @@ export const failureGuidance: Record<GenerationFailureKind, { title: string; act
     action:
       'このサービスでは、旅程の生成を一時的に停止しています。しばらくしてからお試しください。',
   },
+  unauthorized: {
+    title: '旅程を生成するための利用資格を確認できません',
+    action: '利用状態と、招待されたアクセス方法をご確認ください。',
+  },
+  rate_limited: {
+    title: '旅程生成の利用枠に達しました',
+    action: '連続操作を控えてください。期間全体の上限に達した場合は、その期間の利用は終了です。',
+  },
   interrupted: {
     title: '通信が中断されました',
     action: '入力内容はそのままです。接続を確認して、もう一度お試しください。',

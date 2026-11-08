@@ -4,6 +4,8 @@
 
 **一般公開不可。** 課金4ルートと保存11操作に、Firebase本人認証、招待UID、Web App Check、Firestoreの分散利用枠を接続した。機能フラグと本番の共通デモフラグは既定無効。UI接続・実環境検証・拒否トラフィックの費用対策が公開前に残る。Console設定と実Firebase疎通は未実施。 [Issue #29](https://github.com/cludewn/groundtrip/issues/29)
 
+#60は短期間・少人数の審査用。既存App Hostingでこの保護を適用し、公開の判断とは分けて[期間限定の運用条件](DEMO_ACCESS.md#期間限定のapp-hosting運用)を確認する。
+
 ## 調査時点の入口と呼び出し量
 
 基準は `main` の `25c3e0b`。公開HTTPから課金APIへ到達する経路は以下の4つ。数値は現行コードで可能な1リクエスト当たりの上限であり、今回の利用枠の設定値ではない。

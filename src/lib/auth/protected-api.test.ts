@@ -1,11 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { init, getToken, getAuthHeaders, getClientAuth, provider } = vi.hoisted(() => ({
+const {
+  init,
+  getToken,
+  getAuthHeaders,
+  getClientAuth,
+  provider,
+  getAuthSnapshot,
+  isAuthSessionCurrent,
+  registerAuthSessionOperation,
+} = vi.hoisted(() => ({
   init: vi.fn(),
   getToken: vi.fn(),
   getAuthHeaders: vi.fn(),
   getClientAuth: vi.fn(),
   provider: vi.fn(),
+  getAuthSnapshot: vi.fn(),
+  isAuthSessionCurrent: vi.fn(),
+  registerAuthSessionOperation: vi.fn(),
 }))
 
 vi.mock('firebase/app-check', () => ({
@@ -18,13 +30,22 @@ vi.mock('firebase/app-check', () => ({
   },
 }))
 vi.mock('../firebase/client', () => ({ getClientAuth }))
-vi.mock('./client', () => ({ getAuthHeaders }))
+vi.mock('./client', () => ({
+  getAuthHeaders,
+  getAuthSnapshot,
+  isAuthSessionCurrent,
+  registerAuthSessionOperation,
+}))
 
 beforeEach(() => {
   vi.resetModules()
   vi.resetAllMocks()
   vi.stubEnv('NEXT_PUBLIC_RECAPTCHA_ENTERPRISE_SITE_KEY', 'test-site-key')
   getClientAuth.mockReturnValue({ app: {} })
+  isAuthSessionCurrent.mockReturnValue(true)
+  getAuthSnapshot.mockResolvedValue({ uid: 'anonymous', token: 'old.id.token', generation: 0 })
+  registerAuthSessionOperation.mockReturnValue(() => undefined)
+  vi.stubGlobal('window', new EventTarget())
   init.mockReturnValue({})
   getToken.mockResolvedValue({ token: 'test.app.check' })
   getAuthHeaders.mockImplementation(
@@ -32,7 +53,10 @@ beforeEach(() => {
   )
 })
 
-afterEach(() => vi.unstubAllEnvs())
+afterEach(() => {
+  vi.unstubAllEnvs()
+  vi.unstubAllGlobals()
+})
 
 describe('保護API用のWebクライアント', () => {
   it('FirebaseアプリのApp Checkを1回初期化し、2種類のヘッダーを返す', async () => {
@@ -53,5 +77,45 @@ describe('保護API用のWebクライアント', () => {
 
     await expect(getProtectedApiHeaders()).rejects.toThrow()
     expect(getAuthHeaders).not.toHaveBeenCalled()
+  })
+
+  it('App Check取得中にUIDが切り替わると、旧画面の本文を送信しない', async () => {
+    const { runProtectedSession } = await import('./protected-api')
+    const { createSessionScope } = await import('./session-scope')
+    const scope = createSessionScope('anonymous', 0)
+    const pending = Promise.withResolvers<{ token: string }>()
+    getToken.mockReturnValue(pending.promise)
+    const send = vi.fn()
+    vi.stubGlobal('fetch', send)
+
+    const work = runProtectedSession(scope, undefined, (fetchFn) => fetchFn('/api/trips'))
+    getAuthSnapshot.mockResolvedValue({ uid: 'demo', token: 'new.id.token', generation: 1 })
+    pending.resolve({ token: 'test.app.check' })
+    await expect(work).rejects.toMatchObject({ code: 'session_changed' })
+    expect(send).not.toHaveBeenCalled()
+  })
+
+  it('ページを離れると旧UIDの通信を中断し、遅れて届いた応答を採用しない', async () => {
+    const { runProtectedSession } = await import('./protected-api')
+    const { createSessionScope } = await import('./session-scope')
+    const scope = createSessionScope('anonymous', 0)
+    const sent = Promise.withResolvers<RequestInit>()
+    const pending = Promise.withResolvers<Response>()
+    vi.stubGlobal('fetch', (_url: string, init: RequestInit) => {
+      sent.resolve(init)
+      return pending.promise
+    })
+
+    const work = runProtectedSession(scope, undefined, async (fetchFn) => {
+      const response = await fetchFn('/api/trips')
+      return response.json()
+    })
+    const init = await sent.promise
+    expect(new Headers(init.headers).get('Authorization')).toBe('Bearer old.id.token')
+    window.dispatchEvent(new Event('pagehide'))
+    expect(init.signal?.aborted).toBe(true)
+    isAuthSessionCurrent.mockReturnValue(false)
+    pending.resolve(Response.json({ trips: ['old data'] }))
+    await expect(work).rejects.toMatchObject({ code: 'session_changed', outcome: 'unknown' })
   })
 })
