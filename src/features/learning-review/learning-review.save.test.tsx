@@ -70,6 +70,38 @@ const generateAndApprove = async (user: ReturnType<typeof userEvent.setup>) => {
   await user.click(approveButton())
 }
 
+describe('LearningReview: 保存済みの承認は、画面上の編集・却下では取り消されない', () => {
+  it('保存先があるときは、編集・却下が保存済みの承認を取り消さないことと、撤回の操作が無いことを示す', async () => {
+    setup()
+
+    const note = document.getElementById('learning-saved-approval-note')
+    expect(note?.textContent).toContain('画面上の編集・却下は、保存済みの承認を取り消しません')
+    expect(note?.textContent).toContain('撤回する操作は、まだ提供していません')
+  })
+
+  it('保存した後に却下しても、保存先には何も送らず、以前の保存は変わらないと示す', async () => {
+    const { saveMock, user } = setup()
+    await generateAndApprove(user)
+    await user.click(saveButton())
+    await waitFor(() => expect(statusText()).toContain('保存済み'))
+
+    await user.click(screen.getByRole('button', { name: '却下する' }))
+
+    // 却下は画面だけの操作。保存の呼び出しは増えず、状態行も「以前の保存は変わらない」と言う。
+    expect(saveMock).toHaveBeenCalledTimes(1)
+    expect(statusText()).toContain('以前に保存した内容は、まだ変わっていません')
+    expect(document.getElementById('learning-saved-approval-note')?.textContent).toContain(
+      '取り消しません',
+    )
+  })
+
+  it('保存先が無いとき（デモ）は、保存済みの承認の話はしない', () => {
+    setup(null)
+
+    expect(document.getElementById('learning-saved-approval-note')).toBeNull()
+  })
+})
+
 describe('LearningReview: store が無いとき', () => {
   it('これまでどおり、保存されないことを示し、保存ボタンは出さない', async () => {
     const { user } = setup(null)
@@ -228,16 +260,28 @@ describe('LearningReview: 保存先が返す、項目ごとの結果（任意の
         { ...sampleLearning, id: 'learning-b', content: '候補Bの内容' },
       ],
     })
-  const approveBoth = async (user: ReturnType<typeof userEvent.setup>) => {
+  const threeCandidates = () =>
+    vi.fn<RequestCandidates>().mockResolvedValue({
+      ok: true,
+      learnings: [
+        { ...sampleLearning, id: 'learning-a', content: '候補Aの内容' },
+        { ...sampleLearning, id: 'learning-b', content: '候補Bの内容' },
+        { ...sampleLearning, id: 'learning-c', content: '候補Cの内容' },
+      ],
+    })
+  const approveAll = async (user: ReturnType<typeof userEvent.setup>, count: number) => {
     await user.type(screen.getByLabelText(/感想・変更した理由/), '感想')
     await user.click(screen.getByRole('button', { name: /学びの候補を作/ }))
-    await screen.findByRole('heading', { name: /学びの候補（2件）/ })
-    await user.click(screen.getAllByRole('button', { name: '承認する' })[0])
-    await user.click(screen.getAllByRole('button', { name: '承認する' })[0])
+    await screen.findByRole('heading', { name: new RegExp('学びの候補（' + count + '件）') })
+    for (let index = 0; index < count; index += 1) {
+      await user.click(screen.getAllByRole('button', { name: '承認する' })[0])
+    }
   }
-  const approvedItems = () =>
+  const approveBoth = (user: ReturnType<typeof userEvent.setup>) => approveAll(user, 2)
+  const approvedItems = (count = 2) =>
     within(
-      screen.getByRole('heading', { name: /承認済みの学び（2件）/ }).parentElement as HTMLElement,
+      screen.getByRole('heading', { name: new RegExp('承認済みの学び（' + count + '件）') })
+        .parentElement as HTMLElement,
     ).getAllByRole('listitem')
 
   it('保存できた学びのIDが返されたら、状態行と項目ごとに、保存済みと未保存を分けて示す', async () => {
@@ -288,6 +332,120 @@ describe('LearningReview: 保存先が返す、項目ごとの結果（任意の
     await user.type(screen.getAllByLabelText('学びの内容')[0], '（編集）')
     expect(screen.queryByRole('alert')).toBeNull()
     expect(document.body.textContent).not.toMatch(/— (保存済み|未保存)/)
+  })
+
+  it('結果不明の学びは、保存済み・未保存と分けて示し、確認してから保存するよう案内する', async () => {
+    const { user, saveMock } = setup(
+      async () => ({
+        ok: false,
+        message: '1件は保存済みです。通信に失敗しました。',
+        savedIds: ['learning-a'],
+        unknownIds: ['learning-b'],
+      }),
+      { requestCandidates: threeCandidates() },
+    )
+    await approveAll(user, 3)
+    await user.click(saveButton())
+
+    const alert = await screen.findByRole('alert')
+    expect(statusText()).toContain('3件のうち、1件は保存済み、1件は結果不明、1件は未保存です')
+    const [itemA, itemB, itemC] = approvedItems(3)
+    expect(itemA.textContent).toContain('— 保存済み')
+    expect(itemB.textContent).toContain('— 結果不明')
+    expect(itemC.textContent).toContain('— 未保存')
+    // 結果不明の学びは、保存されている場合があるので、自動では再送しないことと、確認の手順を伝える。
+    expect(alert.textContent).toContain('結果不明の学びは、保存されている場合があります')
+    expect(alert.textContent).toContain('自動では再送しません')
+    expect(alert.textContent).not.toContain('もう一度、保存できます')
+    expect(
+      screen.getByRole('button', { name: '保存済みか確認して、もう一度、保存する' }),
+    ).toBeTruthy()
+    // 利用者が押すまで、自動では再送しない。
+    expect(saveMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('保存済みのIDが無く、結果不明だけが返されたときも、項目ごとに示す', async () => {
+    const { user } = setup(
+      async () => ({ ok: false, message: '通信に失敗しました。', unknownIds: ['learning-a'] }),
+      { requestCandidates: twoCandidates() },
+    )
+    await approveBoth(user)
+    await user.click(saveButton())
+
+    await screen.findByRole('alert')
+    expect(statusText()).toContain('2件のうち、1件は結果不明、1件は未保存です')
+    const [itemA, itemB] = approvedItems()
+    expect(itemA.textContent).toContain('— 結果不明')
+    expect(itemB.textContent).toContain('— 未保存')
+  })
+
+  it('全件が結果不明のときの状態行', async () => {
+    const { user } = setup(
+      async () => ({
+        ok: false,
+        message: '通信に失敗しました。',
+        unknownIds: ['learning-a', 'learning-b'],
+      }),
+      { requestCandidates: twoCandidates() },
+    )
+    await approveBoth(user)
+    await user.click(saveButton())
+
+    await screen.findByRole('alert')
+    expect(statusText()).toContain('2件のうち、2件は結果不明です')
+  })
+
+  it('結果不明のあと、保存し直して成功すれば保存済みになる（確認してから、利用者の操作で）', async () => {
+    let calls = 0
+    const { user, saveMock } = setup(
+      async () => {
+        calls += 1
+        return calls === 1
+          ? { ok: false, message: '通信に失敗しました。', unknownIds: ['learning-a'] }
+          : { ok: true }
+      },
+      { requestCandidates: twoCandidates() },
+    )
+    await approveBoth(user)
+    await user.click(saveButton())
+    await screen.findByRole('alert')
+
+    await user.click(screen.getByRole('button', { name: '保存済みか確認して、もう一度、保存する' }))
+
+    await waitFor(() => expect(statusText()).toContain('保存済み（承認済みの学び2件）'))
+    expect(saveMock).toHaveBeenCalledTimes(2)
+    expect(document.body.textContent).not.toContain('結果不明')
+  })
+
+  it('承認済みの内容を変えたら、失敗の時点の結果不明の表示も消える', async () => {
+    const { user } = setup(
+      async () => ({ ok: false, message: '失敗', unknownIds: ['learning-a'] }),
+      { requestCandidates: twoCandidates() },
+    )
+    await approveBoth(user)
+    await user.click(saveButton())
+    await screen.findByRole('alert')
+
+    await user.type(screen.getAllByLabelText('学びの内容')[0], '（編集）')
+    expect(document.body.textContent).not.toMatch(/— (保存済み|結果不明|未保存)/)
+  })
+
+  it('いまの承認済みに無い学びの結果不明は、数えない', async () => {
+    const { user } = setup(
+      async () => ({
+        ok: false,
+        message: '失敗',
+        savedIds: ['learning-a'],
+        unknownIds: ['learning-not-in-view'],
+      }),
+      { requestCandidates: twoCandidates() },
+    )
+    await approveBoth(user)
+    await user.click(saveButton())
+    await screen.findByRole('alert')
+
+    expect(statusText()).toContain('2件のうち、1件は保存済み、1件は未保存です')
+    expect(statusText()).not.toContain('結果不明')
   })
 })
 

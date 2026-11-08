@@ -10,148 +10,207 @@ import {
   initializeAnonymousSession,
   startNewAnonymousSession,
 } from '@/lib/auth/client'
+import { useSessionScope } from '@/lib/auth/use-session-scope'
 import { LearningReview } from '@/features/learning-review/learning-review'
 
 import {
   createFirestoreLearningStore,
+  isCompleteList,
   loadReflectionHistory,
   loadSavedLearnings,
   loadSavedTrips,
   sameLearning,
+  userMessageOf,
   type LearningList,
   type ReflectionHistory,
 } from './api-client'
+import { createRequestGate } from './request-gate'
+import { bind, valueIn, type Bound, type HeldSession } from './session-bound'
 
-type SessionPhase =
-  | { kind: 'loading' }
-  // canStartNew は、利用できる認証状態が無い（session_ended）ときだけ true。
-  // 通信断・保存機能の停止・不正な応答では、新しい利用を始めても直らないため、開始操作を出さない。
-  | { kind: 'error'; message: string; canStartNew: boolean }
-  | { kind: 'ready'; trips: Trip[]; warning: string }
+type TripsPhase =
+  { kind: 'ready'; trips: Trip[]; warning: string } | { kind: 'error'; message: string }
 
-type HistoryPhase =
+type HistoryPhase = { tripId: string } & (
   | { kind: 'loading' }
   | { kind: 'error'; message: string }
   | { kind: 'ready'; history: ReflectionHistory }
+)
 
-function messageOf(error: unknown): string {
-  return error instanceof Error
-    ? error.message
-    : '情報を取得できませんでした。もう一度お試しください。'
-}
+type SavedPhase = { kind: 'ready'; list: LearningList } | { kind: 'error'; message: string }
+
+// 画面の最上部に出す、認証・読み込みの失敗。
+// canStartNew は、利用できる認証状態が無い（session_ended）ときだけ true。
+// 通信断・保存機能の停止・不正な応答では、新しい利用を始めても直らないため、開始操作を出さない。
+type TopError = { message: string; canStartNew: boolean }
 
 const NO_APPROVED: ApprovedLearning[] = []
 
+const SESSION_CHANGED_NOTICE =
+  '認証セッションが変わったため、前のセッションの旅行・学び・入力中の内容を破棄し、進行中の保存を中止しました。' +
+  '保存済み／未保存／結果不明は、必要に応じて再確認してください。'
+
+// 保存済みの一覧が表すもの。画面上の編集・却下では変わらないことを、事実として示す。
+const SAVED_LIST_NOTE =
+  'ここに表示しているのは、保存先で承認が有効な学びです。' +
+  '上の画面で候補を編集・却下しても、この一覧の承認は取り消されません。' +
+  '保存済みの学びを撤回する操作は、まだ提供していません。'
+
 export function ReflectionFlow({ initialTripId }: { initialTripId?: string }) {
-  const [session, setSession] = useState<SessionPhase>({ kind: 'loading' })
+  const auth = useSessionScope()
+  const [bootError, setBootError] = useState<TopError | null>(null)
+  // 直近に認証済みだったセッション。認証の確認中・失敗の間も、UIDが同じなら画面の内容を保つ。
+  // UIDまたは世代が変わったら、新しいセッションに置き換わり、前のセッションの内容は見えなくなる。
+  const [held, setHeld] = useState<HeldSession | null>(null)
+  if (auth.status === 'authenticated' && (held === null || held.scope !== auth.scope)) {
+    setHeld({ scope: auth.scope, epoch: auth.scopeEpoch })
+  }
+  const sessionKey = held ? JSON.stringify([held.epoch, held.scope.uid]) : ''
+
+  const [tripsBound, setTripsBound] = useState<Bound<TripsPhase> | null>(null)
+  const [tripsAttempt, setTripsAttempt] = useState(0)
   const [selectedTripId, setSelectedTripId] = useState<string | null>(null)
   // 未保存の承認があるときに、別の旅行へ切り替える前の確認を待っている切り替え先。
   const [pendingTripId, setPendingTripId] = useState<string | null>(null)
-  const [history, setHistory] = useState<HistoryPhase | null>(null)
+  const [historyBound, setHistoryBound] = useState<Bound<HistoryPhase> | null>(null)
   const [reloadAttempt, setReloadAttempt] = useState(0)
-  const [saved, setSaved] = useState<LearningList | null>(null)
-  const [savedError, setSavedError] = useState('')
-  const sessionRequestRef = useRef(0)
-  const savedRequestRef = useRef(0)
+  const [savedBound, setSavedBound] = useState<Bound<SavedPhase> | null>(null)
+  const [sessionNotice, setSessionNotice] = useState('')
+  const bootRequestRef = useRef(0)
+  // 取得の種類ごとの札。遅れて届いた古い応答や、別のセッションの応答を採用しない。
+  const [tripsGate] = useState(createRequestGate)
+  const [historyGate] = useState(createRequestGate)
+  const [savedGate] = useState(createRequestGate)
   // いま画面で承認済みの学び（LearningReviewから通知される）。未保存かどうかの判定に使う。
   const approvedRef = useRef<ApprovedLearning[]>(NO_APPROVED)
   const confirmRef = useRef<HTMLDivElement>(null)
   const switchTriggerRef = useRef<HTMLElement | null>(null)
 
-  const openSession = useCallback(
-    async (newAccount: boolean) => {
-      const request = ++sessionRequestRef.current
-      setSession({ kind: 'loading' })
-      try {
-        if (newAccount) {
-          // 過去の匿名UIDを復旧できない可能性を説明したボタンからだけ実行する。
-          await startNewAnonymousSession()
-        } else {
-          await initializeAnonymousSession()
-        }
-        const list = await loadSavedTrips()
-        if (request !== sessionRequestRef.current) return
-        const warning =
-          list.listInfo.skippedInvalid || list.listInfo.truncated
-            ? '一部の旅程を表示できません。保存データの状態を確認してください。'
-            : ''
-        setSession({ kind: 'ready', trips: list.trips, warning })
-        if (initialTripId && list.trips.some((trip) => trip.id === initialTripId)) {
-          setSelectedTripId(initialTripId)
-        }
-      } catch (error) {
-        if (request !== sessionRequestRef.current) return
-        setSession({
-          kind: 'error',
-          message: messageOf(error),
-          canStartNew: error instanceof ClientAuthError && error.code === 'session_ended',
-        })
+  // セッションが変わったら、選択・確認待ち・読み直しを捨てる（描画中の状態調整）。
+  // 取得済みの結果は、セッションと組で持つので、ここで消さなくても別のセッションの画面には見えない。
+  const [lastSessionKey, setLastSessionKey] = useState('')
+  if (sessionKey !== lastSessionKey) {
+    setLastSessionKey(sessionKey)
+    setSelectedTripId(null)
+    setPendingTripId(null)
+    setReloadAttempt(0)
+    setSessionNotice(lastSessionKey !== '' && sessionKey !== '' ? SESSION_CHANGED_NOTICE : '')
+    // 認証済みのセッションが得られたので、それまでの認証の失敗は解消した。
+    if (sessionKey !== '') setBootError(null)
+  }
+  useEffect(() => {
+    approvedRef.current = NO_APPROVED
+  }, [sessionKey])
+
+  const openSession = useCallback(async (newAccount: boolean) => {
+    const request = ++bootRequestRef.current
+    setBootError(null)
+    try {
+      if (newAccount) {
+        // 過去の匿名UIDを復旧できない可能性を説明したボタンからだけ実行する。
+        await startNewAnonymousSession()
+      } else {
+        await initializeAnonymousSession()
       }
-    },
-    [initialTripId],
-  )
+    } catch (error) {
+      if (request !== bootRequestRef.current) return
+      setBootError({
+        message: userMessageOf(error),
+        canStartNew: error instanceof ClientAuthError && error.code === 'session_ended',
+      })
+    }
+  }, [])
 
   useEffect(() => {
     void openSession(false)
     return () => {
-      sessionRequestRef.current += 1
+      bootRequestRef.current += 1
     }
   }, [openSession])
 
+  // 保存済みの旅行の取得。認証済みのセッションごとに、そのセッションのトークンで取得する。
   useEffect(() => {
-    if (!selectedTripId || session.kind !== 'ready') {
-      setHistory(null)
-      return
-    }
-    const controller = new AbortController()
-    setHistory({ kind: 'loading' })
-    void loadReflectionHistory(selectedTripId, { signal: controller.signal }).then(
-      (result) => {
-        if (!controller.signal.aborted) setHistory({ kind: 'ready', history: result })
+    if (!held) return
+    const ticket = tripsGate.begin()
+    loadSavedTrips(held.scope, { signal: ticket.signal }).then(
+      (list) => {
+        if (!ticket.isCurrent()) return
+        const warning = isCompleteList(list.listInfo, list.trips.length)
+          ? ''
+          : '一部の旅程を表示できません。保存データの状態を確認してください。'
+        setTripsBound(bind(held, { kind: 'ready', trips: list.trips, warning }))
+        if (initialTripId && list.trips.some((trip) => trip.id === initialTripId)) {
+          setSelectedTripId(initialTripId)
+        }
       },
       (error: unknown) => {
-        if (!controller.signal.aborted) {
-          setHistory({ kind: 'error', message: messageOf(error) })
+        if (!ticket.isCurrent()) return
+        setTripsBound(bind(held, { kind: 'error', message: userMessageOf(error) }))
+      },
+    )
+    return () => tripsGate.cancel()
+  }, [held, tripsAttempt, initialTripId, tripsGate])
+
+  const trips = valueIn(tripsBound, held)
+  const tripsReady = trips?.kind === 'ready'
+
+  // 選んだ旅行と変更履歴の取得。旅行を選び直したときは、古い応答を採用しない。
+  useEffect(() => {
+    if (!held || !selectedTripId || !tripsReady) return
+    const tripId = selectedTripId
+    const ticket = historyGate.begin()
+    setHistoryBound(bind(held, { tripId, kind: 'loading' }))
+    loadReflectionHistory(held.scope, tripId, { signal: ticket.signal }).then(
+      (history) => {
+        if (ticket.isCurrent()) setHistoryBound(bind(held, { tripId, kind: 'ready', history }))
+      },
+      (error: unknown) => {
+        if (ticket.isCurrent()) {
+          setHistoryBound(bind(held, { tripId, kind: 'error', message: userMessageOf(error) }))
         }
       },
     )
-    return () => controller.abort()
-  }, [selectedTripId, session.kind, reloadAttempt])
+    return () => historyGate.cancel()
+  }, [held, selectedTripId, tripsReady, reloadAttempt, historyGate])
+
+  const historyValue = valueIn(historyBound, held)
+  const history = selectedTripId && historyValue?.tripId === selectedTripId ? historyValue : null
 
   // 保存済みの学びの取得。保存直後の再取得と重なっても、古い応答が新しい一覧を上書きしない。
   const refreshSaved = useCallback(async () => {
-    const request = ++savedRequestRef.current
+    if (!held) return
+    const ticket = savedGate.begin()
     try {
-      const result = await loadSavedLearnings()
-      if (request !== savedRequestRef.current) return
-      if (result.listInfo.skippedInvalid || result.listInfo.truncated) {
-        setSavedError('保存済みの学びをすべて確認できませんでした。')
-        setSaved(null)
-        return
-      }
-      setSaved(result)
-      setSavedError('')
+      const result = await loadSavedLearnings(held.scope, { signal: ticket.signal })
+      if (!ticket.isCurrent()) return
+      setSavedBound(
+        bind(
+          held,
+          isCompleteList(result.listInfo, result.learnings.length)
+            ? { kind: 'ready', list: result }
+            : { kind: 'error', message: '保存済みの学びをすべて確認できませんでした。' },
+        ),
+      )
     } catch (error) {
-      if (request !== savedRequestRef.current) return
-      setSaved(null)
-      setSavedError(messageOf(error))
+      if (!ticket.isCurrent()) return
+      setSavedBound(bind(held, { kind: 'error', message: userMessageOf(error) }))
     }
-  }, [])
-  useEffect(
-    () => () => {
-      savedRequestRef.current += 1
-    },
-    [],
-  )
+  }, [held, savedGate])
+  // セッションが変わるとき、画面を閉じるときは、進行中の取得を中止し、結果を採用しない。
+  useEffect(() => () => savedGate.cancel(), [held, savedGate])
 
   const loadedTripId = history?.kind === 'ready' ? history.history.trip.id : null
   useEffect(() => {
     if (loadedTripId) void refreshSaved()
   }, [loadedTripId, refreshSaved])
 
+  const savedValue = valueIn(savedBound, held)
+  const saved = savedValue?.kind === 'ready' ? savedValue.list : null
+  const savedError = savedValue?.kind === 'error' ? savedValue.message : ''
+
+  // 保存の相手は、画面が結び付いているセッション。セッションごとに作り直し、版の記憶も混ぜない。
   const store = useMemo(
-    () => createFirestoreLearningStore(() => void refreshSaved()),
-    [refreshSaved],
+    () => (held ? createFirestoreLearningStore(held.scope, () => void refreshSaved()) : undefined),
+    [held, refreshSaved],
   )
 
   const handleApprovedChange = useCallback((approved: ApprovedLearning[]) => {
@@ -201,7 +260,27 @@ export function ReflectionFlow({ initialTripId }: { initialTripId?: string }) {
     if (event.key === 'Escape') cancelSwitch()
   }
 
-  const sessionTrips = session.kind === 'ready' ? session.trips : []
+  // 認証が使えない（復元の失敗・サービス停止）ときの案内と、保存先の失敗は、別の理由として示す。
+  const authProblem =
+    auth.status === 'session_ended' || auth.status === 'error' ? auth.error : undefined
+  const topError: TopError | null =
+    bootError ??
+    (authProblem
+      ? { message: authProblem.message, canStartNew: authProblem.code === 'session_ended' }
+      : trips?.kind === 'error'
+        ? { message: trips.message, canStartNew: false }
+        : null)
+  const loading = !topError && !tripsReady
+  // 表示中の内容は残したまま、認証を確認し直している間。確認できるまで保存はできない。
+  const authPending = held !== null && auth.status === 'restoring'
+
+  const retry = () => {
+    setTripsBound(null)
+    setTripsAttempt((value) => value + 1)
+    void openSession(false)
+  }
+
+  const sessionTrips = trips?.kind === 'ready' ? trips.trips : []
   const pendingTrip = sessionTrips.find((trip) => trip.id === pendingTripId)
   const sourceTripLabel = (sourceTripId: string): string => {
     const trip = sessionTrips.find((candidate) => candidate.id === sourceTripId)
@@ -217,11 +296,21 @@ export function ReflectionFlow({ initialTripId }: { initialTripId?: string }) {
           学びは本人が確認・承認して保存するまで、次回には使われません。
         </p>
       </header>
-      {session.kind === 'loading' && <p role="status">保存した旅程と認証状態を確認しています…</p>}
-      {session.kind === 'error' && (
+      {sessionNotice && (
+        <p role="alert" className="rounded border-2 border-current p-3 text-sm">
+          {sessionNotice}
+        </p>
+      )}
+      {loading && <p role="status">保存した旅程と認証状態を確認しています…</p>}
+      {authPending && (
+        <p role="status" className="text-sm">
+          認証の状態を確認しています。確認できるまで、保存はできません。
+        </p>
+      )}
+      {topError && (
         <section className="space-y-3 rounded border border-current/40 p-4">
-          <p role="alert">{session.message}</p>
-          {session.canStartNew && (
+          <p role="alert">{topError.message}</p>
+          {topError.canStartNew && (
             <>
               <p className="text-sm">
                 認証に失敗しても、別の匿名アカウントを自動作成しません。
@@ -236,11 +325,11 @@ export function ReflectionFlow({ initialTripId }: { initialTripId?: string }) {
             <button
               type="button"
               className="rounded border border-current/50 px-4 py-3"
-              onClick={() => void openSession(false)}
+              onClick={retry}
             >
               再試行
             </button>
-            {session.canStartNew && (
+            {topError.canStartNew && (
               <button
                 type="button"
                 aria-describedby="new-session-warning"
@@ -253,17 +342,17 @@ export function ReflectionFlow({ initialTripId }: { initialTripId?: string }) {
           </div>
         </section>
       )}
-      {session.kind === 'ready' && (
+      {trips?.kind === 'ready' && (
         <section className="space-y-3" aria-labelledby="saved-trips-heading">
           <h2 id="saved-trips-heading" className="text-lg font-semibold">
             保存済みの旅行
           </h2>
-          {session.warning && (
+          {trips.warning && (
             <p role="alert" className="text-sm">
-              {session.warning}
+              {trips.warning}
             </p>
           )}
-          {session.trips.length === 0 ? (
+          {trips.trips.length === 0 ? (
             <div className="space-y-2 rounded border border-current/30 p-4 text-sm">
               <p>保存された旅行がありません。</p>
               <p>
@@ -275,7 +364,7 @@ export function ReflectionFlow({ initialTripId }: { initialTripId?: string }) {
             </div>
           ) : (
             <ul className="space-y-2">
-              {session.trips.map((trip) => (
+              {trips.trips.map((trip) => (
                 <li key={trip.id}>
                   <button
                     type="button"
@@ -357,6 +446,8 @@ export function ReflectionFlow({ initialTripId }: { initialTripId?: string }) {
             未承認の変更や模擬報告は、実際に起きた出来事として学びにしません。
           </p>
           <LearningReview
+            // 旅行が変わったら、候補・承認・入力・進行中の保存を捨てて作り直す。
+            // セッションが変わったときは、履歴がそのセッションに結び付いていて見えなくなるので、同じく作り直される。
             key={history.history.trip.id}
             trip={history.history.trip}
             revisions={history.history.revisions}
@@ -367,6 +458,9 @@ export function ReflectionFlow({ initialTripId }: { initialTripId?: string }) {
             <h2 id="saved-learnings-heading" className="text-lg font-semibold">
               保存済みの学び
             </h2>
+            <p id="saved-learnings-note" className="text-sm">
+              {SAVED_LIST_NOTE}
+            </p>
             <button
               type="button"
               className="rounded border border-current/50 px-3 py-2 text-sm"

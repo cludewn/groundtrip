@@ -3,37 +3,27 @@ import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { sampleRevision, sampleTrip } from '@/domain/samples'
-import { getAuthHeaders, initializeAnonymousSession } from '@/lib/auth/client'
 
+import { fakeAuth } from '../../../tests/helpers/fake-auth-client'
+import { createFakeBackend } from '../../../tests/helpers/fake-persistence-backend'
 import ReflectionPage from './page'
 
-// 認証（Firebase）だけを差し替える。ページ・ReflectionFlow・LearningReviewは本物を使う。
-vi.mock('@/lib/auth/client', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/lib/auth/client')>()),
-  getAuthHeaders: vi.fn(),
-  initializeAnonymousSession: vi.fn(),
-  startNewAnonymousSession: vi.fn(),
-}))
-
-const info = { returned: 1, skippedInvalid: 0, truncated: false }
-const respond = (body: unknown) => new Response(JSON.stringify(body))
-
-// 保存済みの旅程が1件だけある保存先。
-const fetchFn = vi.fn(async (input: RequestInfo | URL) => {
-  const path = String(input)
-  if (path === '/api/trips') return respond({ trips: [sampleTrip], listInfo: info })
-  if (path.endsWith('/revisions')) {
-    return respond({ revisions: [sampleRevision], listInfo: info })
-  }
-  if (path === '/api/learnings')
-    return respond({ learnings: [], listInfo: { ...info, returned: 0 } })
-  return respond({ trip: sampleTrip })
+// 認証（Firebase）だけを差し替える。ページ・ReflectionFlow・セッションスコープ・LearningReviewは本物を使う。
+vi.mock('@/lib/auth/client', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/client')>()
+  const { fakeAuth: fake } = await import('../../../tests/helpers/fake-auth-client')
+  fake.useErrorClass(actual.ClientAuthError)
+  return { ...actual, ...fake.client }
 })
 
+// 保存済みの旅程が1件だけある保存先。
+let backend: ReturnType<typeof createFakeBackend>
+
 beforeEach(() => {
-  vi.stubGlobal('fetch', fetchFn)
-  vi.mocked(getAuthHeaders).mockImplementation(async () => new Headers({ Authorization: 'x' }))
-  vi.mocked(initializeAnonymousSession).mockResolvedValue({ uid: 'user-1', isAnonymous: true })
+  fakeAuth.reset()
+  fakeAuth.state.restoredUid = 'user-1'
+  backend = createFakeBackend({ 'user-1': { trips: [sampleTrip], revisions: [sampleRevision] } })
+  vi.stubGlobal('fetch', backend.fetchFn)
 })
 afterEach(() => {
   cleanup()
@@ -56,8 +46,9 @@ describe('/reflection のページ', () => {
     expect(screen.queryByRole('button', { name: /保存する/ })).toBeNull()
     expect(document.body.textContent).toContain('承認した内容は、いまはこの画面の中だけにあり')
     // 本人の保存済みの旅程には触れない（認証も通信もしない）。
-    expect(fetchFn).not.toHaveBeenCalled()
-    expect(initializeAnonymousSession).not.toHaveBeenCalled()
+    expect(backend.fetchFn).not.toHaveBeenCalled()
+    expect(fakeAuth.client.initializeAnonymousSession).not.toHaveBeenCalled()
+    expect(fakeAuth.client.observeAuthState).not.toHaveBeenCalled()
     expect(screen.queryByText('保存済みの旅行')).toBeNull()
   })
 
@@ -67,7 +58,7 @@ describe('/reflection のページ', () => {
     expect(await screen.findByRole('button', { name: /振り返る/ })).toBeTruthy()
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('保存した旅行を振り返る')
     expect(screen.queryByRole('note')).toBeNull()
-    expect(fetchFn).toHaveBeenCalledWith('/api/trips', expect.any(Object))
+    expect(backend.fetchFn).toHaveBeenCalledWith('/api/trips', expect.any(Object))
   })
 
   it.each(['0', '', 'true'])('demo=%s はデモにしない（1のときだけデモ）', async (demo) => {

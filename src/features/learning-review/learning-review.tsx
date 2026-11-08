@@ -456,18 +456,23 @@ export function LearningReview({
               <li key={item.id}>
                 {item.content}（
                 {item.scope.kind === 'all_trips' ? 'すべての旅行' : `${item.scope.region}の旅行`}）
-                {/* 保存先が、保存できた学びのIDを返したときだけ、項目ごとの結果を文字で示す。 */}
-                {save.status.kind === 'failed' && save.status.savedIds && (
-                  <b className="ml-1 whitespace-nowrap">
-                    {save.status.savedIds.includes(item.id) ? '— 保存済み' : '— 未保存'}
-                  </b>
-                )}
+                {/* 保存先が、保存できた学び・結果不明の学びのIDを返したときだけ、項目ごとの結果を文字で示す。 */}
+                {save.status.kind === 'failed' &&
+                  (save.status.savedIds || save.status.unknownIds) && (
+                    <b className="ml-1 whitespace-nowrap">{itemSaveLabel(save.status, item.id)}</b>
+                  )}
               </li>
             ))}
           </ul>
         )}
         {store ? (
-          <SavePanel status={save.status} notice={save.notice} onSave={save.save} />
+          <>
+            <SavePanel status={save.status} notice={save.notice} onSave={save.save} />
+            {/* 画面上の編集・却下は、保存済みの承認を取り消さない。撤回の操作は、まだ無い。 */}
+            <p id="learning-saved-approval-note" className="text-xs">
+              {SAVED_APPROVAL_NOTE}
+            </p>
+          </>
         ) : (
           <p className="text-xs">
             承認した内容は、いまはこの画面の中だけにあり、まだ保存されません（保存は、ログインの機能が入ってから使えるようになります）。
@@ -589,6 +594,19 @@ function CandidateCard({
   )
 }
 
+// 保存済みの承認は、この画面の編集・却下では変わらない。実際の状態（サーバー上は承認が有効）を伝える。
+const SAVED_APPROVAL_NOTE =
+  '画面上の編集・却下は、保存済みの承認を取り消しません。保存済みの学びを撤回する操作は、まだ提供していません。'
+
+type FailedStatus = Extract<SaveStatus, { kind: 'failed' }>
+
+// 項目ごとの保存結果。保存済みと結果不明に無い項目は、未保存（送信していない、または拒否された）。
+function itemSaveLabel(status: FailedStatus, id: string): string {
+  if (status.savedIds?.includes(id)) return '— 保存済み'
+  if (status.unknownIds?.includes(id)) return '— 結果不明'
+  return '— 未保存'
+}
+
 function saveStatusText(status: SaveStatus): string {
   switch (status.kind) {
     case 'saving':
@@ -602,15 +620,31 @@ function saveStatusText(status: SaveStatus): string {
     case 'empty':
       return '保存できる承認済みの学びはまだありません'
     case 'failed': {
-      // 保存先が保存できた学びを返したときは、保存済みと未保存を分けて示す。
-      if (status.savedIds && status.savedIds.length > 0) {
-        const saved = status.savedIds.length
-        return `保存に失敗しました（承認済みの学び${status.count}件のうち、${saved}件は保存済み、${status.count - saved}件は未保存です）`
+      // 保存先が保存できた学び・結果不明の学びを返したときは、保存済み・結果不明・未保存を分けて示す。
+      const saved = status.savedIds?.length ?? 0
+      const unknown = status.unknownIds?.length ?? 0
+      const unsaved = status.count - saved - unknown
+      if (unknown > 0) {
+        const parts = [
+          saved > 0 ? `${saved}件は保存済み` : '',
+          `${unknown}件は結果不明`,
+          unsaved > 0 ? `${unsaved}件は未保存` : '',
+        ].filter(Boolean)
+        return `保存に失敗しました（承認済みの学び${status.count}件のうち、${parts.join('、')}です）`
+      }
+      if (saved > 0) {
+        return `保存に失敗しました（承認済みの学び${status.count}件のうち、${saved}件は保存済み、${unsaved}件は未保存です）`
       }
       return `保存に失敗しました（承認済みの学び${status.count}件は未保存です）`
     }
   }
 }
+
+// 結果不明の学びがあるときの案内。自動では再送せず、確認してから利用者の操作で保存する。
+const UNKNOWN_GUIDE =
+  '結果不明の学びは、保存されている場合があります。自動では再送しません。' +
+  '保存済みの学びの一覧を読み込み直して確認してから、もう一度、保存してください' +
+  '（保存済みと確認できた学びは、再送しません）。'
 
 interface SavePanelProps {
   status: SaveStatus
@@ -631,7 +665,9 @@ function SavePanel({ status, notice, onSave }: SavePanelProps) {
         <p role="alert" className={`rounded border-2 border-current p-3 text-sm ${wrapClass}`}>
           保存できませんでした。{status.message}
           承認済みの学びと入力中の内容は、そのまま残っています。
-          {status.retryable && 'もう一度、保存できます。'}
+          {status.unknownIds && status.unknownIds.length > 0
+            ? UNKNOWN_GUIDE
+            : status.retryable && 'もう一度、保存できます。'}
         </p>
       )}
       <button
@@ -645,7 +681,9 @@ function SavePanel({ status, notice, onSave }: SavePanelProps) {
         {saving
           ? '保存しています…'
           : status.kind === 'failed'
-            ? 'もう一度、保存する'
+            ? status.unknownIds && status.unknownIds.length > 0
+              ? '保存済みか確認して、もう一度、保存する'
+              : 'もう一度、保存する'
             : '承認した学びを保存する'}
       </button>
       {notice && (

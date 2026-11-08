@@ -16,12 +16,14 @@ export type SaveStatus =
   // 承認済みが0件で、保存した内容もない。
   | { kind: 'empty' }
   // savedIds は、失敗するまでに保存できた学びのうち、いまの承認済みに含まれるもの（保存先が返したときだけ）。
+  // unknownIds は、保存できたかどうか分からない学びのうち、いまの承認済みに含まれるもの（保存先が返したときだけ）。
   // retryable が false のときは、同じ内容で保存し直しても結果が変わらない。
   | {
       kind: 'failed'
       message: string
       count: number
       savedIds?: readonly string[]
+      unknownIds?: readonly string[]
       retryable: boolean
     }
 
@@ -33,6 +35,7 @@ type SavePhase =
       key: string
       message: string
       savedIds?: readonly string[]
+      unknownIds?: readonly string[]
       retryable: boolean
     }
 
@@ -105,11 +108,15 @@ export function useApprovedSave({ store, approved, approvedKey, scopeKey, announ
       const savedIds = phase.savedIds
         ? approved.map((item) => item.id).filter((id) => phase.savedIds?.includes(id))
         : undefined
+      const unknownIds = phase.unknownIds
+        ? approved.map((item) => item.id).filter((id) => phase.unknownIds?.includes(id))
+        : undefined
       return {
         kind: 'failed',
         message: phase.message,
         count: approved.length,
         savedIds,
+        unknownIds,
         retryable: phase.retryable,
       }
     }
@@ -177,6 +184,7 @@ export function useApprovedSave({ store, approved, approvedKey, scopeKey, announ
       key: submittedKey,
       message: reason,
       savedIds: result.savedIds,
+      unknownIds: result.unknownIds,
       retryable: result.retryable !== false,
     })
   }, [store, approved, approvedKey, announce])
