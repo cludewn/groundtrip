@@ -146,19 +146,37 @@ describe('withdrawStaleVerification: 変更前の「照合前の状態」へは�
     expect(lunch.evidence.every((item) => item.status !== 'consistent')).toBe(true)
   })
 
-  it('根拠が同値でも、新しく付いたPlace IDを、古いものに上書きしない', () => {
+  it.each([
+    ['別のPlace IDに変わった場合', 'place-new-id'],
+    ['Place IDがnullになった場合', null],
+  ] as const)('%sは、以前の施設・営業時間根拠を取り下げる', (_label, placeId) => {
     const before = verified4
-    // 根拠は同じまま、Place IDだけが新しくなった（例：再照合で別の施設に同定された）。
-    const after = edit(before, 'stop-lunch', { placeId: 'place-new-id' })
+    const after = edit(before, 'stop-lunch', { placeId })
 
     const { trip } = withdrawStaleVerification(before, after)
 
-    expect(stopOf(trip, 'stop-lunch').placeId).toBe('place-new-id')
-    // 施設・営業時間の根拠（名称と時刻についての根拠）は同値のまま残る。移動は、次のテストで確かめる。
-    expect(ids(stopOf(trip, 'stop-lunch'))).toEqual([
-      'evidence-stop-lunch-place',
-      'evidence-stop-lunch-hours',
-    ])
+    const lunch = stopOf(trip, 'stop-lunch')
+    expect(lunch.placeId).toBe(placeId)
+    expect(lunch.evidence).toEqual([])
+  })
+
+  it('Place ID変更後に新しく取得した施設・営業時間根拠と本人報告は残す', () => {
+    const before = verified4
+    const lunch = stopOf(before, 'stop-lunch')
+    const checkedAt = '2026-11-08T10:05:00+09:00'
+    const newIdentity = identityEvidence(lunch, 'consistent', checkedAt)
+    const newHours = hoursEvidence(lunch, 'consistent', checkedAt)
+    const report = userReport()
+    const after = edit(before, 'stop-lunch', {
+      placeId: 'place-new-id',
+      evidence: [...lunch.evidence, newIdentity, newHours, report],
+    })
+
+    const { trip } = withdrawStaleVerification(before, after)
+
+    const updated = stopOf(trip, 'stop-lunch')
+    expect(updated.placeId).toBe('place-new-id')
+    expect(updated.evidence).toEqual([newIdentity, newHours, report])
   })
 
   it('Place IDが変わった予定との間の移動の根拠は、取り下げる（Routesは両端のPlace IDで測っているため）', () => {
@@ -169,8 +187,9 @@ describe('withdrawStaleVerification: 変更前の「照合前の状態」へは�
     // 昼食自身の前からの移動、散策の前（昼食から）からの移動は、端のPlace IDが変わったので取り下げ。
     expect(ids(stopOf(trip, 'stop-lunch'))).not.toContain('evidence-stop-lunch-travel')
     expect(ids(stopOf(trip, 'stop-walk'))).not.toContain('evidence-stop-walk-travel')
-    // 昼食自身の施設・営業時間（名称と時刻についての根拠）は残る。
-    expect(ids(stopOf(trip, 'stop-lunch'))).toContain('evidence-stop-lunch-place')
+    // 昼食自身の施設・営業時間も、Place IDの対象が変わったので取り下げる。
+    expect(ids(stopOf(trip, 'stop-lunch'))).not.toContain('evidence-stop-lunch-place')
+    expect(ids(stopOf(trip, 'stop-lunch'))).not.toContain('evidence-stop-lunch-hours')
   })
 
   it('根拠の配列が一部だけ増減しても、有効性は内容で決める（配列の一致・不一致に頼らない）', () => {
