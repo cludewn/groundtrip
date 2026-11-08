@@ -73,6 +73,14 @@ describe('requestTripGeneration: 正常系', () => {
   })
 })
 
+it.each([
+  [401, 'unauthorized'],
+  [403, 'unauthorized'],
+  [429, 'rate_limited'],
+])('保護APIのHTTP %sを専用の案内へ分ける', async (status, kind) => {
+  expect(await failureOf(respond('not JSON', status))).toMatchObject({ kind })
+})
+
 describe('requestTripGeneration: 契約上の失敗', () => {
   it.each([
     ['no_candidates', 422],
