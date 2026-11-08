@@ -70,7 +70,10 @@ export function RevisionRouteView({
     session && target && !target.isFixed && session.trip === current.trip && generate
 
   if (session && !hasActiveSession) {
-    setInterruption({ stopId: session.stopId, applyUnresolved: session.applyUnresolved || applyUnresolved })
+    setInterruption({
+      stopId: session.stopId,
+      applyUnresolved: session.applyUnresolved || applyUnresolved,
+    })
     setSession(null)
   }
 
