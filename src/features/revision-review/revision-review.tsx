@@ -235,7 +235,7 @@ export function RevisionReview({
   const requiresLatestTrip =
     applyUnresolved || applyFailure?.status === 'conflict' || applyFailure?.status === 'uncertain'
   const constraintSatisfied = candidate?.constraintCheck.status === 'satisfied'
-  const canApprove = constraintSatisfied && !requiresLatestTrip
+  const canApprove = generationAvailable && constraintSatisfied && !requiresLatestTrip
   const unapprovableNote =
     candidate?.constraintCheck.status === 'violated'
       ? '旅程の条件に合わないため、この候補は選べません。'

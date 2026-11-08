@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { useLayoutEffect } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { sampleRevision, sampleTrip } from '@/domain/samples'
@@ -853,6 +854,32 @@ describe('現地報告の候補は、暫定ガードで承認可能の判定を�
 })
 
 describe('候補生成サービスが一時的に利用できなくなった場合', () => {
+  it('サービスが外れた描画の直後でも、古い比較から適用を開始しない', async () => {
+    const user = userEvent.setup()
+    const apply = vi.fn<ApplyRevision>().mockResolvedValue({ status: 'failed' })
+    function Flow({ available }: { available: boolean }) {
+      useLayoutEffect(() => {
+        if (!available)
+          screen.getByRole<HTMLButtonElement>('button', { name: '承認して適用を依頼' }).click()
+      }, [available])
+      return (
+        <OnSiteReplanningFlow
+          trip={sampleTrip}
+          generate={available ? propose : undefined}
+          apply={apply}
+        />
+      )
+    }
+    const { rerender } = render(<Flow available />)
+    await openCandidates(user, 'actual')
+
+    rerender(<Flow available={false} />)
+
+    expect(apply).not.toHaveBeenCalled()
+    rerender(<Flow available />)
+    expect(screen.queryByRole('table')).toBeNull()
+  })
+
   it('適用の応答待ちにサービスが外れて戻っても、適用中状態を保ち二重送信しない', async () => {
     const user = userEvent.setup()
     const pending = Promise.withResolvers<Awaited<ReturnType<ApplyRevision>>>()
