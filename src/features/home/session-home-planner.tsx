@@ -59,7 +59,13 @@ export function SessionHomePlanner() {
         generate={(request, options) =>
           scope
             ? runProtectedSession(scope, options?.signal, (fetchFn, signal) =>
-                requestTripGeneration(request, { fetchFn, signal }),
+                requestTripGeneration(request, {
+                  fetchFn,
+                  signal,
+                  // scopedFetchが同一セッションのBearerとApp Checkを付与する。
+                  // #63の既定ヘッダー取得を重ねて実行しない。
+                  getHeaders: async () => new Headers(),
+                }),
               )
             : Promise.resolve({
                 ok: false,

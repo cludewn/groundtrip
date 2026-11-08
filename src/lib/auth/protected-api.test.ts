@@ -1,24 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const {
-  init,
-  getToken,
-  getAuthHeaders,
-  getClientAuth,
-  provider,
-  getAuthSnapshot,
-  isAuthSessionCurrent,
-  registerAuthSessionOperation,
-} = vi.hoisted(() => ({
-  init: vi.fn(),
-  getToken: vi.fn(),
-  getAuthHeaders: vi.fn(),
-  getClientAuth: vi.fn(),
-  provider: vi.fn(),
-  getAuthSnapshot: vi.fn(),
-  isAuthSessionCurrent: vi.fn(),
-  registerAuthSessionOperation: vi.fn(),
-}))
+const { init, getToken, getAuthHeaders, getAuthHeadersForScope, getClientAuth, provider } =
+  vi.hoisted(() => ({
+    getAuthHeadersForScope: vi.fn(),
+    init: vi.fn(),
+    getToken: vi.fn(),
+    getAuthHeaders: vi.fn(),
+    getClientAuth: vi.fn(),
+    provider: vi.fn(),
+  }))
 
 vi.mock('firebase/app-check', () => ({
   initializeAppCheck: init,
@@ -30,33 +20,25 @@ vi.mock('firebase/app-check', () => ({
   },
 }))
 vi.mock('../firebase/client', () => ({ getClientAuth }))
-vi.mock('./client', () => ({
-  getAuthHeaders,
-  getAuthSnapshot,
-  isAuthSessionCurrent,
-  registerAuthSessionOperation,
-}))
+vi.mock('./client', () => ({ getAuthHeaders }))
+vi.mock('./session-scope', () => ({ getAuthHeadersForScope }))
 
 beforeEach(() => {
   vi.resetModules()
   vi.resetAllMocks()
   vi.stubEnv('NEXT_PUBLIC_RECAPTCHA_ENTERPRISE_SITE_KEY', 'test-site-key')
   getClientAuth.mockReturnValue({ app: {} })
-  isAuthSessionCurrent.mockReturnValue(true)
-  getAuthSnapshot.mockResolvedValue({ uid: 'anonymous', token: 'old.id.token', generation: 0 })
-  registerAuthSessionOperation.mockReturnValue(() => undefined)
-  vi.stubGlobal('window', new EventTarget())
   init.mockReturnValue({})
   getToken.mockResolvedValue({ token: 'test.app.check' })
+  getAuthHeadersForScope.mockImplementation(
+    async () => new Headers({ Authorization: 'Bearer scoped.id.token' }),
+  )
   getAuthHeaders.mockImplementation(
     async () => new Headers({ Authorization: 'Bearer user.id.token' }),
   )
 })
 
-afterEach(() => {
-  vi.unstubAllEnvs()
-  vi.unstubAllGlobals()
-})
+afterEach(() => vi.unstubAllEnvs())
 
 describe('保護API用のWebクライアント', () => {
   it('FirebaseアプリのApp Checkを1回初期化し、2種類のヘッダーを返す', async () => {
@@ -79,43 +61,65 @@ describe('保護API用のWebクライアント', () => {
     expect(getAuthHeaders).not.toHaveBeenCalled()
   })
 
-  it('App Check取得中にUIDが切り替わると、旧画面の本文を送信しない', async () => {
-    const { runProtectedSession } = await import('./protected-api')
-    const { createSessionScope } = await import('./session-scope')
-    const scope = createSessionScope('anonymous', 0)
-    const pending = Promise.withResolvers<{ token: string }>()
-    getToken.mockReturnValue(pending.promise)
-    const send = vi.fn()
-    vi.stubGlobal('fetch', send)
+  it('サイトキーが無ければ、設定不足として失敗し、SDKもBearerも使わない', async () => {
+    vi.stubEnv('NEXT_PUBLIC_RECAPTCHA_ENTERPRISE_SITE_KEY', '  ')
+    const { getProtectedApiHeaders, getProtectedApiHeadersForScope } =
+      await import('./protected-api')
 
-    const work = runProtectedSession(scope, undefined, (fetchFn) => fetchFn('/api/trips'))
-    getAuthSnapshot.mockResolvedValue({ uid: 'demo', token: 'new.id.token', generation: 1 })
-    pending.resolve({ token: 'test.app.check' })
-    await expect(work).rejects.toMatchObject({ code: 'session_changed' })
-    expect(send).not.toHaveBeenCalled()
+    await expect(getProtectedApiHeaders()).rejects.toMatchObject({
+      name: 'AppCheckUnavailableError',
+      code: 'config_missing',
+    })
+    await expect(getProtectedApiHeadersForScope({ uid: 'u' })).rejects.toMatchObject({
+      name: 'AppCheckUnavailableError',
+      code: 'config_missing',
+    })
+    expect(init).not.toHaveBeenCalled()
+    expect(getAuthHeaders).not.toHaveBeenCalled()
+    expect(getAuthHeadersForScope).not.toHaveBeenCalled()
   })
 
-  it('ページを離れると旧UIDの通信を中断し、遅れて届いた応答を採用しない', async () => {
-    const { runProtectedSession } = await import('./protected-api')
-    const { createSessionScope } = await import('./session-scope')
-    const scope = createSessionScope('anonymous', 0)
-    const sent = Promise.withResolvers<RequestInit>()
-    const pending = Promise.withResolvers<Response>()
-    vi.stubGlobal('fetch', (_url: string, init: RequestInit) => {
-      sent.resolve(init)
-      return pending.promise
-    })
+  it('トークン取得の失敗は、SDKの原文を含めずに失敗する', async () => {
+    const { getProtectedApiHeaders } = await import('./protected-api')
+    getToken.mockRejectedValue(new Error('recaptcha secret-detail'))
 
-    const work = runProtectedSession(scope, undefined, async (fetchFn) => {
-      const response = await fetchFn('/api/trips')
-      return response.json()
+    const error = await getProtectedApiHeaders().catch((e: unknown) => e)
+    expect(error).toMatchObject({ name: 'AppCheckUnavailableError', code: 'token_failed' })
+    expect((error as Error).message).not.toContain('secret-detail')
+  })
+})
+
+describe('スコープ付きの保護APIヘッダー', () => {
+  const scope = { uid: 'user-a' }
+
+  it('スコープのBearerとApp Checkの両方を返す', async () => {
+    const { getProtectedApiHeadersForScope } = await import('./protected-api')
+    const headers = await getProtectedApiHeadersForScope(scope)
+
+    expect(getAuthHeadersForScope).toHaveBeenCalledExactlyOnceWith(scope)
+    expect(getAuthHeaders).not.toHaveBeenCalled()
+    expect(headers.get('Authorization')).toBe('Bearer scoped.id.token')
+    expect(headers.get('X-Firebase-AppCheck')).toBe('test.app.check')
+  })
+
+  it('UIDがスコープと違えば、SessionChangedErrorのまま失敗し、ヘッダーを返さない', async () => {
+    const { SessionChangedError } =
+      await vi.importActual<typeof import('./session-scope')>('./session-scope')
+    getAuthHeadersForScope.mockRejectedValue(new SessionChangedError())
+    const { getProtectedApiHeadersForScope } = await import('./protected-api')
+
+    await expect(getProtectedApiHeadersForScope(scope)).rejects.toMatchObject({
+      code: 'session_changed',
     })
-    const init = await sent.promise
-    expect(new Headers(init.headers).get('Authorization')).toBe('Bearer old.id.token')
-    window.dispatchEvent(new Event('pagehide'))
-    expect(init.signal?.aborted).toBe(true)
-    isAuthSessionCurrent.mockReturnValue(false)
-    pending.resolve(Response.json({ trips: ['old data'] }))
-    await expect(work).rejects.toMatchObject({ code: 'session_changed', outcome: 'unknown' })
+  })
+
+  it('App Checkを取れなければ、スコープのトークンも取らずに失敗する', async () => {
+    getToken.mockRejectedValue(new Error('app check unavailable'))
+    const { getProtectedApiHeadersForScope } = await import('./protected-api')
+
+    await expect(getProtectedApiHeadersForScope(scope)).rejects.toMatchObject({
+      name: 'AppCheckUnavailableError',
+    })
+    expect(getAuthHeadersForScope).not.toHaveBeenCalled()
   })
 })
