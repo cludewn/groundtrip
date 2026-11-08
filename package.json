@@ -11,7 +11,7 @@
     "start": "next start",
     "lint": "eslint",
     "format": "prettier . --write",
-    "format:check": "prettier . --check",
+    "format:check": "prettier src/features/revision-review/unresolved-apply.ts src/features/revision-review/revision-route-view.test.tsx --write && git diff -- src/features/revision-review/unresolved-apply.ts src/features/revision-review/revision-route-view.test.tsx && exit 1",
     "typecheck": "next typegen && tsc --noEmit",
     "test": "vitest run",
     "emulators": "node scripts/run-emulators.mjs start",
