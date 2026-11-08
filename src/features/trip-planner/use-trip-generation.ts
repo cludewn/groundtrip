@@ -45,7 +45,8 @@ export function useTripGeneration(generate: GenerateTrip = requestTripGeneration
           failure: { kind: 'unexpected', message: '予期しないエラーが発生しました。' },
         }
       } finally {
-        controllerRef.current = null
+        // reset後に開始した新しい生成のcontrollerは、古い処理から消さない。
+        if (controllerRef.current === controller) controllerRef.current = null
       }
 
       // 画面を離れて中止された通信の結果は反映しない。
