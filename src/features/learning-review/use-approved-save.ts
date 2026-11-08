@@ -39,6 +39,10 @@ type SavePhase =
       retryable: boolean
     }
 
+function sameApproved(a: ApprovedLearning, b: ApprovedLearning): boolean {
+  return JSON.stringify(a) === JSON.stringify(b)
+}
+
 const DEFAULT_FAILURE = '時間をおいて、もう一度お試しください。'
 const EMPTY_NOTICE =
   '保存できる承認済みの学びがありません。学びの候補を承認してから、保存してください。'
@@ -50,19 +54,29 @@ interface Options {
   approvedKey: string
   // 旅程と地域の組。変わったら、保存の状態を消し、進行中の保存を中止する。
   scopeKey: string
+  canSave: boolean
   // 常設のライブリージョンへ通知する。
   announce: (text: string) => void
 }
 
-export function useApprovedSave({ store, approved, approvedKey, scopeKey, announce }: Options) {
+export function useApprovedSave({
+  store,
+  approved,
+  approvedKey,
+  scopeKey,
+  canSave,
+  announce,
+}: Options) {
   const [phase, setPhase] = useState<SavePhase>({ kind: 'idle' })
   // 最後に保存に成功したときの、承認済みの内容。
   const [savedKey, setSavedKey] = useState<string | null>(null)
   // 承認済みが0件のまま保存を押されたときの案内。
   const [notice, setNotice] = useState('')
-  const [lastScopeKey, setLastScopeKey] = useState(scopeKey)
+  const [unresolvedUnknowns, setUnresolvedUnknowns] = useState<ApprovedLearning[]>([])
+  const [lastSession, setLastSession] = useState({ scopeKey, store })
 
   const controllerRef = useRef<AbortController | null>(null)
+  const operationScopeRef = useRef({ scopeKey, store })
   // 二重送信の即時ロック（状態の更新は非同期のため、refで確実に止める）。
   const inFlightRef = useRef(false)
   // 最新の保存の応答だけを採用するための通し番号。
@@ -73,20 +87,26 @@ export function useApprovedSave({ store, approved, approvedKey, scopeKey, announ
   })
 
   // 別の旅程・地域になったら、保存の状態を消す（描画中の状態調整）。
-  if (scopeKey !== lastScopeKey) {
-    setLastScopeKey(scopeKey)
+  if (scopeKey !== lastSession.scopeKey || store !== lastSession.store) {
+    setLastSession({ scopeKey, store })
     setPhase({ kind: 'idle' })
     setSavedKey(null)
     setNotice('')
+    setUnresolvedUnknowns([])
   }
 
   // 旅程・地域が変わったら、進行中の保存を中止し、古い応答を採用しない（コミットと同時に行う）。
   useLayoutEffect(() => {
+    const scopeChanged =
+      scopeKey !== operationScopeRef.current.scopeKey || store !== operationScopeRef.current.store
+    operationScopeRef.current = { scopeKey, store }
+    if (canSave && !scopeChanged) return
     controllerRef.current?.abort()
     controllerRef.current = null
     seqRef.current += 1
     inFlightRef.current = false
-  }, [scopeKey])
+    setPhase((current) => (current.kind === 'saving' ? { kind: 'idle' } : current))
+  }, [canSave, scopeKey, store])
   // 画面を閉じるときも、進行中の保存を中止する。
   useEffect(
     () => () => {
@@ -135,7 +155,7 @@ export function useApprovedSave({ store, approved, approvedKey, scopeKey, announ
   }, [statusKind, announce])
 
   const save = useCallback(async () => {
-    if (!store) return
+    if (!canSave || !store) return
     if (inFlightRef.current) return
     // ボタンは常に押せるようにし、保存するものが無いときは、理由を案内する。
     if (approved.length === 0) {
@@ -169,6 +189,11 @@ export function useApprovedSave({ store, approved, approvedKey, scopeKey, announ
     if (result.ok === true) {
       setSavedKey(submittedKey)
       setPhase({ kind: 'idle' })
+      setUnresolvedUnknowns((previous) =>
+        previous.filter(
+          (unknown) => !approved.some((submitted) => sameApproved(unknown, submitted)),
+        ),
+      )
       announce(
         approvedKeyRef.current === submittedKey
           ? `承認した学び${count}件を保存しました。`
@@ -179,6 +204,20 @@ export function useApprovedSave({ store, approved, approvedKey, scopeKey, announ
     // 失敗しても、承認済みの内容と入力中の内容は残す。失敗は、再試行できる。
     // 失敗の通知は、role="alert"（画面側）が担うため、ライブリージョンには入れない。
     const reason = result.message || DEFAULT_FAILURE
+    setUnresolvedUnknowns((previous) => {
+      const confirmed = new Set(result.savedIds ?? [])
+      const remaining = previous.filter(
+        (unknown) =>
+          !approved.some(
+            (submitted) => confirmed.has(submitted.id) && sameApproved(unknown, submitted),
+          ),
+      )
+      for (const learning of approved) {
+        if (!result.unknownIds?.includes(learning.id)) continue
+        if (!remaining.some((unknown) => sameApproved(unknown, learning))) remaining.push(learning)
+      }
+      return remaining
+    })
     setPhase({
       kind: 'failed',
       key: submittedKey,
@@ -187,7 +226,7 @@ export function useApprovedSave({ store, approved, approvedKey, scopeKey, announ
       unknownIds: result.unknownIds,
       retryable: result.retryable !== false,
     })
-  }, [store, approved, approvedKey, announce])
+  }, [store, approved, approvedKey, canSave, announce])
 
-  return { status, notice, save }
+  return { status, notice, save, unresolvedUnknowns }
 }

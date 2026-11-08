@@ -417,7 +417,7 @@ describe('LearningReview: 保存先が返す、項目ごとの結果（任意の
     expect(document.body.textContent).not.toContain('結果不明')
   })
 
-  it('承認済みの内容を変えたら、失敗の時点の結果不明の表示も消える', async () => {
+  it('結果不明の後に承認済み内容を編集しても、前回の結果不明を確認できる', async () => {
     const { user } = setup(
       async () => ({ ok: false, message: '失敗', unknownIds: ['learning-a'] }),
       { requestCandidates: twoCandidates() },
@@ -427,7 +427,23 @@ describe('LearningReview: 保存先が返す、項目ごとの結果（任意の
     await screen.findByRole('alert')
 
     await user.type(screen.getAllByLabelText('学びの内容')[0], '（編集）')
-    expect(document.body.textContent).not.toMatch(/— (保存済み|結果不明|未保存)/)
+    const alert = screen.getByRole('alert')
+    expect(alert.textContent).toContain('前回の保存結果が未確認の学びが1件あります')
+    expect(alert.textContent).toContain('候補Aの内容')
+    expect(document.body.textContent).not.toContain('— 結果不明')
+  })
+
+  it('認証状態を確認できない間は保存ボタンを無効にし、保存処理も始めない', async () => {
+    const { user, saveMock } = setup(async () => ({ ok: true }), {
+      canSave: false,
+      requestCandidates: twoCandidates(),
+    })
+    await approveBoth(user)
+
+    const button = screen.getByRole('button', { name: '認証を確認中…' })
+    expect(button.getAttribute('aria-disabled')).toBe('true')
+    await user.click(button)
+    expect(saveMock).not.toHaveBeenCalled()
   })
 
   it('いまの承認済みに無い学びの結果不明は、数えない', async () => {
@@ -462,6 +478,24 @@ describe('LearningReview: 二重送信と競合', () => {
 
     expect(saveMock).toHaveBeenCalledTimes(1)
     await act(async () => pending.resolve({ ok: true }))
+  })
+
+  it('保存中に認証が確認できなくなったら操作を止め、保存中の表示も解除する', async () => {
+    const pending = deferred<SaveResult>()
+    const { saveMock, user, rerender } = setup(() => pending.promise)
+    await generateAndApprove(user)
+    await user.click(saveButton())
+    const signal = saveMock.mock.calls[0][1]?.signal
+
+    rerender({ canSave: false })
+
+    expect(signal?.aborted).toBe(true)
+    expect(statusText()).not.toContain('保存中')
+    expect(
+      screen.getByRole('button', { name: '認証を確認中…' }).getAttribute('aria-disabled'),
+    ).toBe('true')
+    await act(async () => pending.resolve({ ok: true }))
+    expect(statusText()).not.toContain('保存済み')
   })
 
   it('保存したあとに承認済みの内容が変わったら、未保存の変更ありに戻る', async () => {

@@ -53,6 +53,9 @@ interface LearningReviewProps {
   // 承認済みの学びの保存先。省略時は保存せず、承認した内容がこの画面の中だけにあることを示す。
   // 保存の状態（未保存・保存中・保存済み・失敗）は、承認とは別に示し、承認しただけでは保存済みと表示しない。
   store?: LearningStore
+  // 認証状態を確認できない間は、見えている保存先があっても保存操作を受け付けない。
+  canSave?: boolean
+  saveDisabledLabel?: string
 }
 
 const CATEGORY_LABEL: Record<Learning['category'], string> = {
@@ -114,6 +117,8 @@ export function LearningReview({
   now = () => new Date(),
   onApprovedChange,
   store,
+  canSave = true,
+  saveDisabledLabel = '認証を確認中…',
 }: LearningReviewProps) {
   const [feedback, setFeedback] = useState('')
   const [feedbackError, setFeedbackError] = useState('')
@@ -212,6 +217,7 @@ export function LearningReview({
     approved,
     approvedKey,
     scopeKey: JSON.stringify([trip.id, trip.region]),
+    canSave,
     announce,
   })
 
@@ -467,7 +473,15 @@ export function LearningReview({
         )}
         {store ? (
           <>
-            <SavePanel status={save.status} notice={save.notice} onSave={save.save} />
+            <SavePanel
+              status={save.status}
+              notice={save.notice}
+              onSave={save.save}
+              approved={approved}
+              unresolvedUnknowns={save.unresolvedUnknowns}
+              canSave={canSave}
+              disabledLabel={saveDisabledLabel}
+            />
             {/* 画面上の編集・却下は、保存済みの承認を取り消さない。撤回の操作は、まだ無い。 */}
             <p id="learning-saved-approval-note" className="text-xs">
               {SAVED_APPROVAL_NOTE}
@@ -650,11 +664,34 @@ interface SavePanelProps {
   status: SaveStatus
   notice: string
   onSave: () => void
+  approved: ApprovedLearning[]
+  unresolvedUnknowns: ApprovedLearning[]
+  canSave: boolean
+  disabledLabel: string
 }
 
-// 承認済みの学びの保存。承認とは別の操作・別の状態として示す（ボタンは常に押せる）。
-function SavePanel({ status, notice, onSave }: SavePanelProps) {
+function sameApprovedContent(a: ApprovedLearning, b: ApprovedLearning): boolean {
+  return JSON.stringify(a) === JSON.stringify(b)
+}
+
+// 承認済みの学びの保存。承認とは別の操作・別の状態として示す。
+function SavePanel({
+  status,
+  notice,
+  onSave,
+  approved,
+  unresolvedUnknowns,
+  canSave,
+  disabledLabel,
+}: SavePanelProps) {
   const saving = status.kind === 'saving'
+  const currentUnknowns =
+    status.kind === 'failed'
+      ? approved.filter((learning) => status.unknownIds?.includes(learning.id))
+      : []
+  const previousUnknowns = unresolvedUnknowns.filter(
+    (unknown) => !currentUnknowns.some((current) => sameApprovedContent(current, unknown)),
+  )
   return (
     <div className="space-y-2">
       <p className="text-sm">
@@ -670,21 +707,35 @@ function SavePanel({ status, notice, onSave }: SavePanelProps) {
             : status.retryable && 'もう一度、保存できます。'}
         </p>
       )}
+      {previousUnknowns.length > 0 && (
+        <div role="alert" className={`rounded border-2 border-current p-3 text-sm ${wrapClass}`}>
+          前回の保存結果が未確認の学びが{previousUnknowns.length}
+          件あります。保存済み一覧を読み込み直して、状態を確認してください。
+          {UNKNOWN_GUIDE}
+          <ul className="mt-2 list-disc pl-5">
+            {previousUnknowns.map((learning, index) => (
+              <li key={`${learning.id}-${index}`}>{learning.content}</li>
+            ))}
+          </ul>
+        </div>
+      )}
       <button
         type="button"
         id="learning-save"
         className={buttonClass}
-        aria-disabled={saving || undefined}
+        aria-disabled={saving || !canSave || undefined}
         aria-describedby={notice ? 'learning-save-notice' : undefined}
         onClick={onSave}
       >
-        {saving
-          ? '保存しています…'
-          : status.kind === 'failed'
-            ? status.unknownIds && status.unknownIds.length > 0
-              ? '保存済みか確認して、もう一度、保存する'
-              : 'もう一度、保存する'
-            : '承認した学びを保存する'}
+        {!canSave
+          ? disabledLabel
+          : saving
+            ? '保存しています…'
+            : status.kind === 'failed'
+              ? status.unknownIds && status.unknownIds.length > 0
+                ? '保存済みか確認して、もう一度、保存する'
+                : 'もう一度、保存する'
+              : '承認した学びを保存する'}
       </button>
       {notice && (
         <p id="learning-save-notice" className="text-sm font-medium">

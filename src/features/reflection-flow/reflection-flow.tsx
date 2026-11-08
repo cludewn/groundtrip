@@ -460,6 +460,10 @@ export function ReflectionFlow({ initialTripId }: { initialTripId?: string }) {
             trip={history.history.trip}
             revisions={history.history.revisions}
             store={store}
+            canSave={auth.status === 'authenticated' && auth.scope === visibleHeld?.scope}
+            saveDisabledLabel={
+              auth.status === 'restoring' ? '認証を確認中…' : '認証を確認できません'
+            }
             onApprovedChange={handleApprovedChange}
           />
           <section aria-labelledby="saved-learnings-heading" className="space-y-2">

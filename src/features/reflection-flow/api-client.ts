@@ -11,6 +11,7 @@ import {
 import { ClientAuthError } from '@/lib/auth/client'
 import {
   assertCurrentSessionScope,
+  assertCurrentSessionScopeSync,
   beginSessionScopeOperation,
   getAuthHeadersForScope,
   SessionChangedError,
@@ -82,46 +83,71 @@ const GENERIC_MESSAGE = '保存データを取得・更新できませんでし�
 // 利用者に見せてよい、既知のエラーコードの定型文言。
 // サーバーのエラー本文はそのまま見せない（未知の本文に、内部の情報が含まれうるため）。
 // outcome は、そのコードの応答が「何も変更せずに拒否した」ものか、「処理後の失敗かもしれない」ものか。
-const KNOWN_FAILURES: Readonly<Record<string, { message: string; outcome: DeliveryOutcome }>> = {
+const KNOWN_FAILURES: Readonly<
+  Record<string, { status: number; message: string; outcome: DeliveryOutcome }>
+> = {
   // 認証。サーバーは、保存先に触れる前に拒否する。
-  unauthenticated: { message: AUTH_MESSAGE, outcome: 'rejected' },
-  invalid_token: { message: AUTH_MESSAGE, outcome: 'rejected' },
-  token_expired: { message: AUTH_MESSAGE, outcome: 'rejected' },
-  session_revoked: { message: '認証を継続できません。再認証が必要です', outcome: 'rejected' },
+  unauthenticated: { status: 401, message: AUTH_MESSAGE, outcome: 'rejected' },
+  invalid_token: { status: 401, message: AUTH_MESSAGE, outcome: 'rejected' },
+  token_expired: { status: 401, message: AUTH_MESSAGE, outcome: 'rejected' },
+  session_revoked: {
+    status: 401,
+    message: '認証を継続できません。再認証が必要です',
+    outcome: 'rejected',
+  },
   // 認証基盤（サーバー側）の障害。端末側の認証復元の失敗とは別。
   auth_unavailable: {
+    status: 503,
     message: '認証サービスを利用できません。時間をおいて、もう一度お試しください。',
     outcome: 'rejected',
   },
   persistence_disabled: {
+    status: 503,
     message: '保存機能は現在利用できません。時間をおいて、もう一度お試しください。',
     outcome: 'rejected',
   },
-  not_found: { message: '対象が見つかりません。', outcome: 'rejected' },
-  invalid_request: { message: '入力の形式または内容が正しくありません。', outcome: 'rejected' },
-  payload_too_large: { message: '入力データが大きすぎます。', outcome: 'rejected' },
-  unsupported_media_type: { message: '送信の形式が正しくありません。', outcome: 'rejected' },
+  not_found: { status: 404, message: '対象が見つかりません。', outcome: 'rejected' },
+  invalid_request: {
+    status: 400,
+    message: '入力の形式または内容が正しくありません。',
+    outcome: 'rejected',
+  },
+  payload_too_large: { status: 413, message: '入力データが大きすぎます。', outcome: 'rejected' },
+  unsupported_media_type: {
+    status: 415,
+    message: '送信の形式が正しくありません。',
+    outcome: 'rejected',
+  },
   version_conflict: {
+    status: 409,
     message: '保存した内容がほかの操作で更新されました。最新の内容を確認してください。',
     outcome: 'rejected',
   },
-  already_exists: { message: '同じIDの保存データが存在します。', outcome: 'rejected' },
+  already_exists: { status: 409, message: '同じIDの保存データが存在します。', outcome: 'rejected' },
   revision_mismatch: {
+    status: 409,
     message: '現在の旅程と変更候補の対象が一致しません。',
     outcome: 'rejected',
   },
-  storage_limit_reached: { message: '保存できる件数の上限に達しました。', outcome: 'rejected' },
-  learning_revoked: { message: '撤回済みの学びです。', outcome: 'rejected' },
+  storage_limit_reached: {
+    status: 409,
+    message: '保存できる件数の上限に達しました。',
+    outcome: 'rejected',
+  },
+  learning_revoked: { status: 409, message: '撤回済みの学びです。', outcome: 'rejected' },
   // 保存先の障害や内部エラーは、書き込みの後に起きた可能性がある。結果は確定しない。
   storage_unavailable: {
+    status: 503,
     message: '保存サービスを利用できません。時間をおいて、もう一度お試しください。',
     outcome: 'unknown',
   },
   internal_error: {
+    status: 500,
     message: '保存処理中に予期しないエラーが発生しました。',
     outcome: 'unknown',
   },
   invalid_stored_data: {
+    status: 500,
     message: '保存データの形式を確認できませんでした。',
     outcome: 'unknown',
   },
@@ -232,12 +258,14 @@ async function authorizedJson<T>(
     // 本文がJSONかどうかより先にステータスを見る。プロキシが返すHTMLの502/503でも、状況に合う案内を使う。
     if (!response.ok) {
       const error = ErrorSchema.safeParse(json)
-      const known = own(KNOWN_FAILURES, error.success ? error.data.error.code : undefined)
+      const responseCode = error.success ? error.data.error.code : undefined
+      const knownFailure = own(KNOWN_FAILURES, responseCode)
+      const known = knownFailure?.status === response.status ? knownFailure : undefined
       // 既知のコードだけ、定型文言と確定の有無を使う。未知の本文は、利用者に見せない。
       throw new ReflectionApiError(
         known?.message ?? fallbackMessage(response.status),
         response.status,
-        error.success ? error.data.error.code : undefined,
+        known ? responseCode : undefined,
         known?.outcome ?? 'unknown',
       )
     }
@@ -477,7 +505,14 @@ function unverified(error: unknown): unknown {
 }
 
 function indexById(entries: readonly VersionedLearning[]): Map<string, VersionedLearning> {
-  return new Map(entries.map((entry) => [entry.learning.id, entry]))
+  const indexed = new Map<string, VersionedLearning>()
+  for (const entry of entries) {
+    if (indexed.has(entry.learning.id)) {
+      throw new ReflectionApiError(PARTIAL_LIST_MESSAGE, undefined, undefined, 'not_sent')
+    }
+    indexed.set(entry.learning.id, entry)
+  }
+  return indexed
 }
 
 // LearningReviewが要求する全件保存ポート。各候補の成功を確認するまで保存完了としない。
@@ -636,11 +671,32 @@ export function createFirestoreLearningStore(
         const allSaved =
           ledger.unknownIds.length === 0 &&
           approved.every((learning) => ledger.savedIds.includes(learning.id))
-        if (allSaved) return { ok: true }
+        if (allSaved) {
+          try {
+            // 最後のGETが返った後にもセッション世代を確認する。A→B→Aは同じUIDでも別セッション。
+            assertCurrentSessionScopeSync(scope, 'unknown')
+            return { ok: true }
+          } catch (error) {
+            failure ??= error
+            for (const id of ledger.savedIds) {
+              if (!ledger.unknownIds.includes(id)) ledger.unknownIds.push(id)
+            }
+            ledger.savedIds.length = 0
+          }
+        }
         return describeSaveFailure(failure ?? new ReflectionApiError(UNVERIFIED_MESSAGE), ledger)
       } finally {
         running = false
-        if (ledger.fromList.size > 0 || ledger.mayHaveWritten) onSaved?.()
+        if (ledger.fromList.size > 0 || ledger.mayHaveWritten) {
+          let sessionIsCurrent = true
+          try {
+            assertCurrentSessionScopeSync(scope)
+          } catch {
+            sessionIsCurrent = false
+            // 古いセッションの保存結果で、現在の画面の一覧更新を始めない。
+          }
+          if (sessionIsCurrent) onSaved?.()
+        }
       }
     },
   }

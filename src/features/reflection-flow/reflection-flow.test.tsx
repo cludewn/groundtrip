@@ -791,6 +791,11 @@ describe('ReflectionFlow：取得・編集・保存を同じ認証セッショ�
     })
     expect(screen.getByRole('heading', { name: /承認済みの学び（2件）/ })).toBeTruthy()
     expect(screen.getByText(/確認できるまで、保存はできません/)).toBeTruthy()
+    const savesBefore = backend.approveCalls().length
+    const saveButton = screen.getByRole('button', { name: '認証を確認中…' })
+    expect(saveButton.getAttribute('aria-disabled')).toBe('true')
+    await user.click(saveButton)
+    expect(backend.approveCalls()).toHaveLength(savesBefore)
 
     await act(async () => {
       fakeAuth.notifyCurrent()

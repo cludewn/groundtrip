@@ -872,6 +872,23 @@ describe('承認済み学びのFirestore保存', () => {
       expect(backend.approveCalls()).toHaveLength(0)
     })
 
+    it('保存済み一覧に同じIDが複数あるときは、内容が一致しても保存済みと判定しない', async () => {
+      const backend = backendWith(entry(first, 1))
+      backend.intercept(isListLearnings, () =>
+        json({
+          learnings: [entry(first, 1), entry(first, 1)],
+          listInfo: { returned: 2, skippedInvalid: 0, truncated: false },
+        }),
+      )
+
+      const result = await createFirestoreLearningStore(scope, undefined, backend.fetchFn).save([
+        first,
+      ])
+
+      expect(result).toMatchObject({ ok: false })
+      expect(backend.approveCalls()).toHaveLength(0)
+    })
+
     it('保存後の一覧の件数が食い違うときは、確認できたことにしない', async () => {
       const backend = backendWith(entry(first, 2))
       let lists = 0
@@ -972,7 +989,32 @@ describe('承認済み学びのFirestore保存', () => {
       expect(backend.calls.some((call) => call.uid === B)).toBe(false)
       expect(backend.account(B).learnings.size).toBe(0)
       expect(backend.account(A).learnings.has(first.id)).toBe(true)
-      expect(onSaved).toHaveBeenCalledTimes(1)
+      expect(onSaved).not.toHaveBeenCalled()
+    })
+
+    it('保存後の一覧取得中にA→B→Aへ切り替わったら成功にせず、一覧更新通知もしない', async () => {
+      const backend = backendWith()
+      let lists = 0
+      backend.intercept(
+        (call) => isListLearnings(call) && ++lists === 2,
+        ({ proceed }) => {
+          const response = proceed()
+          fakeAuth.switchSilently(B)
+          fakeAuth.signInAs(A)
+          return response
+        },
+        { always: true },
+      )
+      const onSaved = vi.fn()
+
+      const result = await createFirestoreLearningStore(scope, onSaved, backend.fetchFn).save([
+        first,
+      ])
+
+      expect(result).toMatchObject({ ok: false, savedIds: [], unknownIds: [first.id] })
+      if (!result.ok) expect(result.message).toContain('結果不明')
+      expect(backend.account(A).learnings.has(first.id)).toBe(true)
+      expect(onSaved).not.toHaveBeenCalled()
     })
 
     it('最初の取得の前にUIDが変わっていたら、何も送らない', async () => {
@@ -1037,6 +1079,21 @@ describe('承認済み学びのFirestore保存', () => {
       if (!result.ok) {
         expect(result.message).toContain('再読み込み')
         expect(result.message).toContain('消えます')
+      }
+    })
+
+    it('HTTP 502とversion_conflictの不整合応答は、確定拒否にせず結果不明にする', async () => {
+      const result = await failWith('version_conflict', '版が一致しません', 502)
+
+      expect(result).toMatchObject({
+        ok: false,
+        savedIds: [],
+        unknownIds: [first.id],
+        retryable: true,
+      })
+      if (!result.ok) {
+        expect(result.message).toContain('保存サービスに接続できませんでした')
+        expect(result.message).not.toContain('版が一致しません')
       }
     })
 
