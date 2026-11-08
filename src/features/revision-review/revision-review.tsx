@@ -2,10 +2,11 @@
 
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react'
 
-import type { Stop, Trip } from '@/domain'
+import { MAX_REVISION_REASON_LENGTH, RevisionReasonSchema, type Stop, type Trip } from '@/domain'
 import { StatusBadge } from '@/features/trip-map/evidence-badge'
 import type { RouteMeta } from '@/features/trip-map/model'
 import { RouteMap } from '@/features/trip-map/route-map'
+import type { ApplyRevisionResult } from '@/server/persistence/contracts'
 
 import {
   confirmedTrip,
@@ -60,7 +61,7 @@ interface RevisionReviewProps {
   generate: GenerateRevisions
   apply?: ApplyRevision
   onCancel: () => void
-  onApplied: (trip: Trip) => void
+  onApplied: (trip: Trip, receipt?: ApplyRevisionResult) => void
   onApplyUnresolvedChange: (unresolved: boolean) => void
 }
 
@@ -82,7 +83,7 @@ export function RevisionReview({
   const [reason, setReason] = useState('')
   const [preferences, setPreferences] = useState('')
   const [canDrive, setCanDrive] = useState(false)
-  const [invalidReason, setInvalidReason] = useState(false)
+  const [invalidReason, setInvalidReason] = useState<'required' | 'length' | false>(false)
   const [generationFailure, setGenerationFailure] = useState<Exclude<
     RevisionResult,
     RevisionProposal
@@ -131,7 +132,7 @@ export function RevisionReview({
     event.preventDefault()
     if (activeGeneration.current || generationFailure?.status === 'conflict') return
     if (!reason.trim()) {
-      setInvalidReason(true)
+      setInvalidReason('required')
       reasonField.current?.focus()
       return
     }
@@ -144,6 +145,11 @@ export function RevisionReview({
         .join('\n'),
       context: { phase: 'planning' },
       travelModes: canDrive ? ['walk', 'drive'] : ['walk'],
+    }
+    if (!RevisionReasonSchema.safeParse(request.reason).success) {
+      setInvalidReason('length')
+      reasonField.current?.focus()
+      return
     }
     const controller = new AbortController()
     activeGeneration.current = controller
@@ -179,16 +185,24 @@ export function RevisionReview({
   const requiresLatestTrip =
     applyFailure?.status === 'conflict' || applyFailure?.status === 'uncertain'
   const constraintSatisfied = candidate?.constraintCheck.status === 'satisfied'
-  const canApprove = constraintSatisfied && !requiresLatestTrip
-  const approvalNote = !constraintSatisfied
-    ? candidate?.constraintCheck.status === 'violated'
-      ? '旅程の条件に合わないため、この候補は選べません。'
-      : '旅程に組み込めるか確認できていないため、この候補は選べません。'
-    : requiresLatestTrip
-      ? '再操作する前に最新の旅程を確認してください。'
-      : !apply
-        ? '承認・適用サービスは未接続です。'
-        : null
+  const simulated =
+    candidate?.context.phase === 'on_site' && candidate.context.report.kind === 'simulated'
+  const proposalToken = candidate && review?.proposal.proposalTokens?.[candidate.id]
+  const canApprove =
+    constraintSatisfied && !requiresLatestTrip && !simulated && Boolean(proposalToken)
+  const approvalNote = simulated
+    ? '模擬報告のため適用できません。'
+    : !constraintSatisfied
+      ? candidate?.constraintCheck.status === 'violated'
+        ? '旅程の条件に合わないため、この候補は選べません。'
+        : '旅程に組み込めるか確認できていないため、この候補は選べません。'
+      : requiresLatestTrip
+        ? '再操作する前に最新の旅程を確認してください。'
+        : !apply
+          ? '承認・適用サービスは未接続です。'
+          : !proposalToken
+            ? '候補の来歴を確認できません。保存した旅程から候補を作り直してください。'
+            : null
   const approvalStatus = isApplying
     ? '承認操作済み・適用結果を確認中'
     : applyFailure?.status === 'uncertain'
@@ -198,10 +212,23 @@ export function RevisionReview({
         : '未承認・未適用'
 
   const approve = async () => {
-    if (!review || !candidate || !canApprove || !apply || isApplying || activeApply.current) return
+    if (
+      !review ||
+      !candidate ||
+      !proposalToken ||
+      !canApprove ||
+      !apply ||
+      isApplying ||
+      activeApply.current
+    )
+      return
     // 表示時の候補と、本人が承認した時点のTripを検証用に確保する。
     // コールバックには別のコピーだけを渡し、検証用のデータを変更できないようにする。
-    const decision = structuredClone({ request: { ...review.request, trip }, revision: candidate })
+    const decision = structuredClone({
+      request: { ...review.request, trip },
+      revision: candidate,
+      proposalToken,
+    })
     if (!sameTrip(decision.request.trip, review.request.trip)) {
       setApplyFailure({ status: 'conflict' })
       return
@@ -215,9 +242,14 @@ export function RevisionReview({
       const result = await apply(structuredClone(decision))
       if (activeApply.current !== attempt) return
       if (result.status === 'applied') {
-        const nextTrip = confirmedTrip(decision.request.trip, decision.revision, result.trip)
+        const nextTrip = confirmedTrip(
+          decision.request.trip,
+          decision.revision,
+          result.trip,
+          result.receipt,
+        )
         if (nextTrip) {
-          onApplied(nextTrip)
+          onApplied(nextTrip, result.receipt)
         } else {
           setApplyFailure({ status: 'uncertain' })
         }
@@ -292,7 +324,7 @@ export function RevisionReview({
                 maxLength={500}
                 className={inputClass}
                 value={reason}
-                aria-invalid={invalidReason}
+                aria-invalid={Boolean(invalidReason)}
                 aria-describedby={invalidReason ? 'revision-reason-error' : undefined}
                 onChange={(event) => {
                   setReason(event.target.value)
@@ -302,7 +334,9 @@ export function RevisionReview({
             </label>
             {invalidReason && (
               <p id="revision-reason-error" role="alert" className="text-sm text-gt-warn">
-                修正理由を入力してください。
+                {invalidReason === 'length'
+                  ? `修正理由と希望条件を合わせて${MAX_REVISION_REASON_LENGTH}文字以内にしてください。`
+                  : '修正理由を入力してください。'}
               </p>
             )}
             <label className="block space-y-1 text-sm font-semibold">
@@ -312,7 +346,10 @@ export function RevisionReview({
                 maxLength={500}
                 className={inputClass}
                 value={preferences}
-                onChange={(event) => setPreferences(event.target.value)}
+                onChange={(event) => {
+                  setPreferences(event.target.value)
+                  setInvalidReason(false)
+                }}
               />
             </label>
             <label className="flex min-h-11 items-center gap-2 text-sm">

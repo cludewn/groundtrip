@@ -3,47 +3,34 @@ import { z } from 'zod'
 import {
   KnownTravelModeSchema,
   ProposalFailureSchema,
+  RevisionContextSchema,
   ReviseTripRequestSchema,
   ReviseTripResponseSchema,
   StopSchema,
-  TravelSegmentSchema,
   TripSchema,
   type KnownTravelSegment,
   type ReviseTripRequest,
   type ReviseTripResponse,
   type Revision,
   type Stop,
+  type TravelSegmentSlot,
   type Trip,
 } from '@/domain'
-import { IdSchema } from '@/domain/primitives'
+import { TextSchema } from '@/domain/primitives'
+import { getAuthHeaders } from '@/lib/auth/client'
+import {
+  ApplyRevisionResponseSchema,
+  type ApplyRevisionResult,
+} from '@/server/persistence/contracts'
 
 import { checkCandidate, retainsApprovedEvidence } from './proposal-checks'
 
 export type RevisionRequest = ReviseTripRequest & { travelModes?: KnownTravelSegment['mode'][] }
 
 const travelModesSchema = z.array(KnownTravelModeSchema).min(1).max(2).optional()
-// 比較の外枠のみ。区間の検証は共通契約を使う。
-const slotSchema = z.discriminatedUnion('presence', [
-  z.strictObject({ presence: z.literal('none'), reason: z.enum(['first_stop', 'last_stop']) }),
-  z.strictObject({ presence: z.literal('segment'), segment: TravelSegmentSchema }),
-])
-const comparisonSideSchema = z.strictObject({ fromPrevious: slotSchema, toNext: slotSchema })
-const comparisonSchema = z.strictObject({
-  revisionId: IdSchema,
-  before: comparisonSideSchema,
-  after: comparisonSideSchema,
-})
-const proposalEnvelopeSchema = z.strictObject({
-  status: z.literal('proposed'),
-  revisions: z.array(z.unknown()).max(3),
-  comparisons: z.array(comparisonSchema).max(3).optional(),
-})
 
-export type TravelComparison = z.infer<typeof comparisonSchema>
-export type TravelSlot = z.infer<typeof slotSchema>
-export type RevisionProposal = Extract<ReviseTripResponse, { status: 'proposed' }> & {
-  comparisons?: TravelComparison[]
-}
+export type { TravelComparison, TravelSegmentSlot as TravelSlot } from '@/domain'
+export type RevisionProposal = Extract<ReviseTripResponse, { status: 'proposed' }>
 
 export type RevisionResult =
   | RevisionProposal
@@ -62,8 +49,9 @@ export type GenerateRevisions = (
 export type ApplyRevision = (decision: {
   request: RevisionRequest
   revision: Revision
+  proposalToken: string
 }) => Promise<
-  | { status: 'applied'; trip: Trip }
+  | { status: 'applied'; trip: Trip; receipt?: ApplyRevisionResult }
   | { status: 'conflict' | 'unavailable' | 'failed' | 'uncertain'; message?: string }
 >
 
@@ -76,14 +64,21 @@ export const requestRevisions: GenerateRevisions = async (request, signal) => {
 
   let response: Response
   let bodyText: string
+  let headers: Headers
+  try {
+    headers = await getAuthHeaders()
+    headers.set('Content-Type', 'application/json')
+  } catch {
+    return { status: 'unavailable' }
+  }
   try {
     response = await fetch('/api/trips/revise', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(checkedRequest),
       signal,
     })
-    if ([404, 405, 503].includes(response.status)) return { status: 'unavailable' }
+    if ([401, 403, 404, 405, 429, 503].includes(response.status)) return { status: 'unavailable' }
     if (response.status === 409) return { status: 'conflict' }
     if ([400, 413, 415].includes(response.status)) return { status: 'invalid_request' }
     bodyText = await response.text()
@@ -97,14 +92,14 @@ export const requestRevisions: GenerateRevisions = async (request, signal) => {
   } catch {
     return { status: 'unexpected' }
   }
-  if (response.status === 200) {
-    return readRevisionProposal(body, checkedRequest) ?? { status: 'unexpected' }
-  }
-
   const failure = ProposalFailureSchema.safeParse(body)
   if (failure.success) {
     const expected = failure.data.status === 'external_service_error' ? 502 : 422
-    if (response.status === expected) return failure.data
+    if (response.status === expected || (response.status === 200 && expected === 422))
+      return failure.data
+  }
+  if (response.status === 200) {
+    return readRevisionProposal(body, checkedRequest) ?? { status: 'unexpected' }
   }
   return { status: 'unexpected' }
 }
@@ -140,25 +135,36 @@ export function readRevisionProposal(
   value: unknown,
   request: RevisionRequest,
 ): RevisionProposal | null {
-  const envelope = proposalEnvelopeSchema.safeParse(value)
-  if (!envelope.success) return null
-  const { comparisons, ...core } = envelope.data
-  const checked = ReviseTripResponseSchema.safeParse(core)
+  const checked = ReviseTripResponseSchema.safeParse(value)
   if (!checked.success || checked.data.status !== 'proposed') return null
-  const { revisions } = checked.data
+  const { revisions, comparisons } = checked.data
   const { trip, targetStopId } = request
   const index = trip.stops.findIndex((stop) => stop.id === targetStopId)
   const target = trip.stops[index]
   const modes = travelModesSchema.safeParse(request.travelModes)
   if (
     !target ||
+    revisions.length > 3 ||
     !modes.success ||
     !revisions.every((revision) => matchesRevisionTarget(revision, trip, target))
   )
     return null
 
+  const reason = TextSchema.safeParse(request.reason)
+  const context = RevisionContextSchema.safeParse(request.context)
+  if (
+    !reason.success ||
+    !context.success ||
+    !revisions.every(
+      (revision) =>
+        revision.reason === reason.data &&
+        JSON.stringify(revision.context) === JSON.stringify(context.data),
+    )
+  )
+    return null
+
   const requestedModes = modes.data ?? ['walk']
-  const matchesMode = (slot: TravelSlot) => {
+  const matchesMode = (slot: TravelSegmentSlot) => {
     if (slot.presence === 'none') return true
     const { mode } = slot.segment
     // 未対応の公共交通は、区間に数値を持たない旨の表示にだけ使える。
@@ -167,37 +173,33 @@ export function readRevisionProposal(
 
   const previous = trip.stops[index - 1]
   const next = trip.stops[index + 1]
-  const ids = new Set(revisions.map((revision) => revision.id))
-  const comparisonsMatch =
-    !comparisons ||
-    (new Set(comparisons.map((comparison) => comparison.revisionId)).size === comparisons.length &&
-      comparisons.every(
-        ({ revisionId, before, after }) =>
-          ids.has(revisionId) &&
-          [before, after].every(({ fromPrevious, toNext }) => {
-            const fromMatches = previous
-              ? fromPrevious.presence === 'segment' &&
-                fromPrevious.segment.fromStopId === previous.id &&
-                fromPrevious.segment.toStopId === targetStopId
-              : fromPrevious.presence === 'none' && fromPrevious.reason === 'first_stop'
-            const toMatches = next
-              ? toNext.presence === 'segment' &&
-                toNext.segment.fromStopId === targetStopId &&
-                toNext.segment.toStopId === next.id
-              : toNext.presence === 'none' && toNext.reason === 'last_stop'
-            return fromMatches && toMatches && matchesMode(fromPrevious) && matchesMode(toNext)
-          }),
-      ))
-  if (!comparisonsMatch) return null
+  const comparisonsMatch = comparisons?.every(({ before, after }) =>
+    [before, after].every(({ fromPrevious, toNext }) => {
+      const fromMatches = previous
+        ? fromPrevious.presence === 'segment' &&
+          fromPrevious.segment.fromStopId === previous.id &&
+          fromPrevious.segment.toStopId === targetStopId
+        : fromPrevious.presence === 'none' && fromPrevious.reason === 'first_stop'
+      const toMatches = next
+        ? toNext.presence === 'segment' &&
+          toNext.segment.fromStopId === targetStopId &&
+          toNext.segment.toStopId === next.id
+        : toNext.presence === 'none' && toNext.reason === 'last_stop'
+      return fromMatches && toMatches && matchesMode(fromPrevious) && matchesMode(toNext)
+    }),
+  )
+  if (comparisonsMatch === false) return null
 
   // 応答の申告を引き上げず、裏付けのない satisfied だけを承認不可にする。
   return {
     ...checked.data,
-    ...(comparisons && { comparisons }),
     revisions: revisions.map((revision) => {
       if (revision.constraintCheck.status !== 'satisfied') return revision
       const comparison = comparisons?.find(({ revisionId }) => revisionId === revision.id)
-      const check = checkCandidate(revision.diff.after, previous, next, comparison)
+      const check = checkCandidate(revision.diff.after, previous, next, comparison, {
+        original: target,
+        context: context.data,
+      })
       return check.status === 'satisfied'
         ? revision
         : { ...revision, constraintCheck: check, impactSummary: 'この予定だけが変更対象です。' }
@@ -205,7 +207,12 @@ export function readRevisionProposal(
   }
 }
 
-export function confirmedTrip(base: Trip, revision: Revision, result: Trip): Trip | null {
+export function confirmedTrip(
+  base: Trip,
+  revision: Revision,
+  result: Trip,
+  receipt?: ApplyRevisionResult,
+): Trip | null {
   const checked = TripSchema.safeParse(result)
   if (!checked.success) return null
   const trip = checked.data
@@ -214,21 +221,70 @@ export function confirmedTrip(base: Trip, revision: Revision, result: Trip): Tri
   const applied = trip.stops[index]
   if (
     !target ||
-    !applied ||
+    trip.id !== base.id ||
     trip.version <= base.version ||
+    (revision.context.phase === 'on_site' && revision.context.report.kind === 'simulated') ||
     revision.constraintCheck.status !== 'satisfied' ||
     !matchesRevisionTarget(revision, base, target)
   )
     return null
 
+  const withoutEvidence = (stop: Stop) => ({ ...stop, evidence: [] })
+  let recheckUnavailable = false
+  if (receipt !== undefined) {
+    const parsed = ApplyRevisionResponseSchema.safeParse(receipt)
+    if (!parsed.success) return null
+    const record = parsed.data.revision
+    if (
+      parsed.data.appliedTripVersion !== base.version + 1 ||
+      !sameTrip(parsed.data.trip, trip) ||
+      record.id !== revision.id ||
+      record.tripId !== revision.tripId ||
+      record.baseTripVersion !== revision.baseTripVersion ||
+      record.targetStopId !== revision.targetStopId ||
+      record.reason !== revision.reason ||
+      JSON.stringify(record.context) !== JSON.stringify(revision.context) ||
+      !sameStop(withoutEvidence(record.diff.before), withoutEvidence(revision.diff.before)) ||
+      !sameStop(withoutEvidence(record.diff.after), withoutEvidence(revision.diff.after))
+    )
+      return null
+    recheckUnavailable =
+      parsed.data.status === 'already_applied' && parsed.data.verification === 'not_available'
+    // 適用版の確定を確認できた。さらに後の旅程には、古い画面の根拠を移さない。
+    if (trip.version > parsed.data.appliedTripVersion) return recheckUnavailable ? trip : null
+  }
+  if (!applied || trip.version !== base.version + 1) return null
+
   // 再照合で根拠は更新され得る。承認した予定の内容と、対象外の旅程は一致する必要がある。
   const expected = { ...revision.diff.after, evidence: applied.evidence }
-  if (!sameStop(applied, expected) || !retainsApprovedEvidence(revision.diff.after, applied))
+  if (
+    (!recheckUnavailable && applied.evidence.length === 0) ||
+    !sameStop(applied, expected) ||
+    (receipt === undefined && !retainsApprovedEvidence(revision.diff.after, applied))
+  )
     return null
+  // 保存DTOでは照合データを持たない。対象外の予定は中身を照合した後、表示中の根拠を引き継ぐ。
+  const stops = trip.stops.map((stop, position) =>
+    position !== index && stop.evidence.length === 0 && base.stops[position]
+      ? { ...stop, evidence: structuredClone(base.stops[position].evidence) }
+      : stop,
+  )
   const withoutChange = {
     ...trip,
     version: base.version,
-    stops: trip.stops.map((stop, position) => (position === index ? target : stop)),
+    stops: stops.with(index, target),
   }
-  return sameTrip(withoutChange, base) ? trip : null
+  return sameTrip(withoutChange, base) ? { ...trip, stops } : null
+}
+
+export function readRevisionApplyResponse(
+  value: unknown,
+  request: RevisionRequest,
+  revision: Revision,
+): Awaited<ReturnType<ApplyRevision>> {
+  const result = ApplyRevisionResponseSchema.safeParse(value)
+  if (!result.success || !confirmedTrip(request.trip, revision, result.data.trip, result.data)) {
+    return { status: 'uncertain' }
+  }
+  return { status: 'applied', trip: result.data.trip, receipt: result.data }
 }

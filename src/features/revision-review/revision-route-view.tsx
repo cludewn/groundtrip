@@ -6,6 +6,7 @@ import type { Trip } from '@/domain'
 import type { RouteMeta } from '@/features/trip-map/model'
 import { ROUTE_LIST_ID, stopButtonId } from '@/features/trip-map/route-map'
 import { TripRouteView } from '@/features/trip-map/trip-route-view'
+import type { ApplyRevisionResult } from '@/server/persistence/contracts'
 
 import type { ApplyRevision, GenerateRevisions } from './api-client'
 import { RevisionReview } from './revision-review'
@@ -29,10 +30,19 @@ export function RevisionRouteView({
     source: Trip
     trip: Trip
     meta?: RouteMeta
-    appliedStopId?: string
+    applied?: { stopId: string; placeId: string | null; version: number }
   } | null>(null)
   const current =
-    local?.source === sourceTrip ? local : { trip: sourceTrip, meta, appliedStopId: undefined }
+    local?.source === sourceTrip ? local : { trip: sourceTrip, meta, applied: undefined }
+  const applied = current.applied
+  const appliedStopId =
+    applied &&
+    current.trip.version === applied.version &&
+    current.trip.stops.some(
+      ({ id, placeId }) => id === applied.stopId && placeId === applied.placeId,
+    )
+      ? applied.stopId
+      : undefined
   const [session, setSession] = useState<{
     trip: Trip
     stopId: string
@@ -79,7 +89,12 @@ export function RevisionRouteView({
     setSession(null)
   }
 
-  const onApplied = (trip: Trip) => {
+  const onApplied = (trip: Trip, receipt?: ApplyRevisionResult) => {
+    if (receipt && trip.version > receipt.appliedTripVersion) {
+      setLocal({ source: sourceTrip, trip })
+      leave('候補の適用を確認し、その後に更新された最新の旅程を表示しています。', 'success')
+      return
+    }
     let nextMeta = current.meta
     if (nextMeta && target) {
       const nextStop = trip.stops[trip.stops.findIndex((stop) => stop.id === target.id) + 1]
@@ -88,7 +103,13 @@ export function RevisionRouteView({
       if (nextStop)
         nextMeta[nextStop.id] = { ...nextMeta[nextStop.id], segmentFromPrevious: undefined }
     }
-    setLocal({ source: sourceTrip, trip, meta: nextMeta, appliedStopId: target?.id })
+    const stop = trip.stops.find(({ id }) => id === target?.id)
+    setLocal({
+      source: sourceTrip,
+      trip,
+      meta: nextMeta,
+      applied: stop ? { stopId: stop.id, placeId: stop.placeId, version: trip.version } : undefined,
+    })
     leave('承認した候補が旅程に反映されました。', 'success')
   }
 
@@ -156,7 +177,7 @@ export function RevisionRouteView({
             trip={current.trip}
             meta={current.meta}
             mock={mock}
-            appliedStopId={current.appliedStopId}
+            appliedStopId={appliedStopId}
             onTripChange={(trip) => setLocal({ ...current, source: sourceTrip, trip })}
             onStartRevision={
               generate

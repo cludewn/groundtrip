@@ -1,4 +1,10 @@
-import { RevisionContextSchema, type RevisionContext, type Stop, type Trip } from '@/domain'
+import {
+  RevisionContextSchema,
+  type OnSiteReportCategory,
+  type RevisionContext,
+  type Stop,
+  type Trip,
+} from '@/domain'
 
 // 現地の状況の報告フォームの、純粋なロジック（表示を持たない）。
 // 保存・API呼び出し・再計画の処理は持たない。出力は OnSiteReportSubmission として親へ渡す。
@@ -13,7 +19,7 @@ export const REPORT_PRESETS = [
   { id: 'other', label: 'その他' },
 ] as const
 
-export type PresetId = (typeof REPORT_PRESETS)[number]['id']
+export type PresetId = OnSiteReportCategory
 
 // 実際の現地報告と、デモ用の模擬報告。共通契約（RevisionContext）の kind とそのまま対応する。
 export type ReportKind = 'actual' | 'simulated'
@@ -124,7 +130,12 @@ export function buildSubmission(trip: Trip, values: ReportFormValues): BuildResu
   // 送信するデータは、共通契約を通ったものだけにする（通らない場合は送らない）。
   const parsed = RevisionContextSchema.safeParse({
     phase: 'on_site',
-    report: { kind: values.kind, description },
+    report: {
+      kind: values.kind,
+      description,
+      category: values.preset,
+      targetStopId: values.targetStopId,
+    },
   })
   if (!parsed.success || parsed.data.phase !== 'on_site') {
     return { ok: false, errors: { preset: '報告の内容を作れませんでした。選び直してください。' } }

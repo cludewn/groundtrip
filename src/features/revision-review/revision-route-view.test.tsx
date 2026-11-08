@@ -14,6 +14,10 @@ import {
 } from './api-client'
 import { RevisionRouteView } from './revision-route-view'
 
+vi.mock('@/lib/auth/client', () => ({
+  getAuthHeaders: async () => new Headers({ Authorization: 'Bearer session-token' }),
+}))
+
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
@@ -34,6 +38,8 @@ const after = {
 }
 const first = {
   ...sampleRevision,
+  reason: '店が休み',
+  context: { phase: 'planning' },
   diff: { before: target, after },
   constraintCheck: { status: 'satisfied', explanation: '固定展示に間に合う' },
 } satisfies RevisionProposal['revisions'][number]
@@ -48,6 +54,7 @@ function routes(minutes: number): RevisionProposal['comparisons'] {
   return [
     {
       revisionId: first.id,
+      originalPlaceId: 'test-original-place',
       before: {
         fromPrevious: leg(trip.stops[0].id, target.id, 10),
         toNext: leg(target.id, trip.stops[2].id, 10),
@@ -80,6 +87,7 @@ const proposal: RevisionProposal = {
   status: 'proposed',
   revisions: [first, second],
   comparisons: routes(8),
+  proposalTokens: { [first.id]: `v2.1794132000000.e30.${'A'.repeat(43)}` },
 }
 
 const open = async (user: ReturnType<typeof userEvent.setup>) => {
@@ -97,7 +105,10 @@ const approvalDisabled = () => approve().getAttribute('aria-disabled') === 'true
 describe('部分修正の候補比較', () => {
   it('選択したStopだけを徒歩で生成し、分岐、固定予定、構造化比較を切り替える', async () => {
     const user = userEvent.setup()
-    const generate = vi.fn<GenerateRevisions>().mockResolvedValue(proposal)
+    const generate = vi.fn<GenerateRevisions>().mockImplementation(async ({ reason }) => ({
+      ...proposal,
+      revisions: proposal.revisions.map((revision) => ({ ...revision, reason })),
+    }))
     const apply = vi.fn<ApplyRevision>()
     const original = structuredClone(trip)
     render(<RevisionRouteView trip={trip} meta={meta} generate={generate} apply={apply} />)
@@ -428,6 +439,63 @@ describe('部分修正の候補比較', () => {
 })
 
 describe('本人承認とサーバー適用', () => {
+  it('署名がない候補は理由を示し、適用コールバックを呼ばない', async () => {
+    const user = userEvent.setup()
+    const apply = vi.fn<ApplyRevision>().mockResolvedValue({ status: 'failed' })
+    render(
+      <RevisionRouteView
+        trip={trip}
+        generate={async () => ({ ...proposal, proposalTokens: {} })}
+        apply={apply}
+      />,
+    )
+    await open(user)
+    await request(user)
+    await screen.findByRole('table')
+    await user.click(approve())
+    expect(approvalDisabled()).toBe(true)
+    expect(screen.getByText(/候補の来歴を確認できません/)).toBeTruthy()
+    expect(apply).not.toHaveBeenCalled()
+  })
+
+  it('確定後に別施設へ変更された最新版では反映済みラベルを出さない', async () => {
+    const user = userEvent.setup()
+    const latest = {
+      ...trip,
+      version: 2,
+      stops: trip.stops
+        .with(1, {
+          ...after,
+          name: 'その後の施設',
+          placeId: 'later-place',
+          evidence: [],
+        })
+        .map((stop) => ({ ...stop, evidence: [] })),
+    }
+    const apply: ApplyRevision = async () => ({
+      status: 'applied',
+      trip: latest,
+      receipt: {
+        status: 'already_applied',
+        verification: 'not_available',
+        appliedTripVersion: 1,
+        trip: latest,
+        revision: {
+          ...first,
+          constraintCheck: { status: 'not_checked', explanation: '再確認が必要' },
+          approval: { status: 'approved', decidedAt: '2026-11-08T11:47:00+09:00' },
+        },
+      },
+    })
+    render(<RevisionRouteView trip={trip} generate={async () => proposal} apply={apply} />)
+    await open(user)
+    await request(user)
+    await screen.findByRole('table')
+    await user.click(approve())
+    expect(await screen.findByText('その後の施設')).toBeTruthy()
+    expect(route().queryByText('変更を反映済み')).toBeNull()
+  })
+
   it('適用中は元の旅程を保持し、サーバー成功後にだけ置き換える', async () => {
     const user = userEvent.setup()
     const generate = vi.fn<GenerateRevisions>().mockResolvedValue(proposal)
@@ -552,6 +620,7 @@ describe('本人承認とサーバー適用', () => {
             status: 'proposed',
             revisions: [{ ...first, baseTripVersion: source.version }],
             comparisons: routes(8),
+            proposalTokens: proposal.proposalTokens,
           })}
           apply={apply}
         />,

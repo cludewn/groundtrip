@@ -1,3 +1,7 @@
+import { authErrorResponse, requireActor, type Actor } from '@/lib/auth/server'
+import { issueRevisionProposalTokens } from '@/server/persistence/revision-provenance'
+import { FirestoreTripStore } from '@/server/persistence/trips'
+
 import { createLazyVertexGeminiClient } from '../../../../server/gemini/client'
 import { createLazyMapsClient } from '../../../../server/maps'
 import { handleReviseTripRequest, isTripRevisionEnabled } from '../../../../server/revision/handler'
@@ -15,8 +19,32 @@ const logFailure = (event: RevisionFailureEvent) => {
 }
 
 export async function POST(request: Request): Promise<Response> {
+  const enabled = isTripRevisionEnabled(process.env)
+  let actor: Actor | undefined
+  if (enabled) {
+    try {
+      actor = await requireActor(request)
+    } catch (error) {
+      return authErrorResponse(error)
+    }
+  }
   return handleReviseTripRequest(request, {
-    isEnabled: () => isTripRevisionEnabled(process.env),
-    revise: (tripRequest) => reviseTrip(tripRequest, { client, maps, report: logFailure }),
+    isEnabled: () => enabled,
+    revise: async (tripRequest) => {
+      const report =
+        actor && process.env.PERSISTENCE_ENABLED?.trim() === 'true'
+          ? await new FirestoreTripStore().prepareRevisionGeneration(actor, tripRequest)
+          : undefined
+      if (report?.blocked && !report.reported) {
+        return {
+          status: 'insufficient_information',
+          message: '未解消の本人報告があります。報告の状態を確認してください。',
+        }
+      }
+      const result = await reviseTrip(tripRequest, { client, maps, report: logFailure })
+      return actor && report
+        ? issueRevisionProposalTokens(actor, tripRequest, result, report.reportVersion)
+        : result
+    },
   })
 }

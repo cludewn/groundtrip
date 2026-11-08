@@ -2,6 +2,7 @@ import { ReviseTripRequestSchema, ReviseTripResponseSchema } from '../../domain'
 import type { ReviseTripRequest, ReviseTripResponse } from '../../domain'
 import { errorResponse, noStoreHeaders, readBodyWithLimit } from '../http'
 import { hasTimeConflict } from '../verification/travel'
+import { PersistenceError } from '../persistence/errors'
 
 // POST /api/trips/revise のHTTP処理。1地点の部分修正の候補（未承認のRevision）を返す。
 // 元の旅程は更新しない。承認・適用はこのAPIでは行わない。
@@ -94,6 +95,12 @@ export async function handleReviseTripRequest(
   try {
     result = await deps.revise(parsed.data)
   } catch (error) {
+    if (error instanceof PersistenceError) {
+      return Response.json(
+        { status: error.code, message: error.message },
+        { status: error.status, headers: noStoreHeaders },
+      )
+    }
     console.error('[trip-revision] 想定外のエラー', error instanceof Error ? error.name : error)
     return errorResponse(500, {
       status: 'internal_error',
