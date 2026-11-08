@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 import type { Trip } from '@/domain'
 import type { RouteMeta } from '@/features/trip-map/model'
@@ -12,10 +12,11 @@ import type { ApplyRevision, GenerateRevisions } from './api-client'
 import { RevisionReview } from './revision-review'
 import {
   clearApplyUnresolved,
-  isApplyUnresolved,
   judgeLatestTrip,
   markApplyUnresolved,
-  unresolvedApply,
+  readUnresolvedApply,
+  unresolvedApplyStorageKey,
+  type UnresolvedApplyState,
 } from './unresolved-apply'
 
 // サーバーに保存されている最新の旅程（正本）を取得する。取得できないときは null を返すか例外を投げる。
@@ -32,6 +33,9 @@ const unresolvedMessage =
 
 interface RevisionRouteViewProps {
   trip: Trip
+  // 保存されたTripの所有者。applyを接続する際は、認証済みUIDを必ず渡す。
+  // 未指定・認証未確認時は、状態を復元できないため適用を許可しない。
+  ownerUid?: string | null
   meta?: RouteMeta
   mock?: boolean
   generate?: GenerateRevisions
@@ -46,6 +50,7 @@ interface RevisionRouteViewProps {
 
 export function RevisionRouteView({
   trip: sourceTrip,
+  ownerUid,
   meta,
   mock,
   generate,
@@ -76,10 +81,35 @@ export function RevisionRouteView({
     stopId: string
     applyUnresolved?: boolean
   } | null>(null)
-  // 結果不明の適用は、比較画面を閉じても・画面を作り直しても、サーバーの最新の旅程と照合するまで再開させない。
-  // 状態はモジュール側に持つので、書き換えたら再描画を促す。
-  const [, refresh] = useReducer((count: number) => count + 1, 0)
-  const applyUnresolved = isApplyUnresolved(sourceTrip.id)
+  // 最初の描画では永続ロックの復元が未完了。確認前に操作を開始してはならない。
+  // UIDとTripの組が変わった瞬間にも前の組の解除状態を使わない。
+  const lockKey = JSON.stringify([ownerUid, sourceTrip.id])
+  const [restored, setRestored] = useState<{
+    key: string
+    state: UnresolvedApplyState
+  } | null>(null)
+  const lockState: UnresolvedApplyState =
+    restored?.key === lockKey ? restored.state : { status: 'unavailable' }
+  const operationBlocked = Boolean(apply) && lockState.status !== 'clear'
+
+  const updateStoredLock = useCallback(
+    () => setRestored({ key: lockKey, state: readUnresolvedApply(ownerUid, sourceTrip.id) }),
+    [lockKey, ownerUid, sourceTrip.id],
+  )
+
+  useEffect(() => {
+    updateStoredLock()
+    // 別タブからの書き込み／解除も、そのタブの表示に反映する。
+    const key = ownerUid ? unresolvedApplyStorageKey(ownerUid, sourceTrip.id) : null
+    const onStorage = (event: StorageEvent) => {
+      if (event.storageArea === window.localStorage && (event.key === key || event.key === null)) {
+        updateStoredLock()
+      }
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [lockKey, ownerUid, sourceTrip.id, updateStoredLock])
+
   const [reconcile, setReconcile] = useState<{
     status: 'checking' | 'failed'
   } | null>(null)
@@ -103,13 +133,13 @@ export function RevisionRouteView({
   if (session && !hasActiveSession) {
     setInterruption({
       stopId: session.stopId,
-      applyUnresolved: session.applyUnresolved || applyUnresolved,
+      applyUnresolved: session.applyUnresolved || operationBlocked,
     })
     setSession(null)
   }
 
   // 取得中の要求は、画面が外れたら捨てる。
-  useEffect(() => () => reconcileAbort.current?.abort(), [])
+  useEffect(() => () => reconcileAbort.current?.abort(), [lockKey])
 
   useLayoutEffect(() => {
     if (interruption && document.activeElement === document.body) {
@@ -132,10 +162,23 @@ export function RevisionRouteView({
     setSession(null)
   }
 
-  const onApplied = (changed: Trip, receipt?: ApplyRevisionResult) => {
-    // 確定した適用応答を確認できた場合に限り、未確認の操作禁止を解除する。
-    clearApplyUnresolved(changed.id)
+  const onApplied = (changed: Trip, receipt?: ApplyRevisionResult, revisionId?: string) => {
+    // 成功した対象Revisionだけ解除する。永続ストレージが失敗したら閉じたままにする。
+    let cleared = false
+    try {
+      if (!ownerUid || !revisionId) throw new Error('missing apply ownership context')
+      clearApplyUnresolved(ownerUid, changed.id, revisionId)
+      cleared = true
+    } catch {
+      setReconcile({ status: 'failed' })
+    }
+    updateStoredLock()
     const trip = adoptTripChange?.(changed) ?? changed
+    if (!cleared) {
+      setLocal({ source: sourceTrip, trip })
+      leave('適用結果は確認しましたが、端末の再操作禁止を解除できません。', 'neutral')
+      return
+    }
     if (receipt && trip.version > receipt.appliedTripVersion) {
       setLocal({ source: sourceTrip, trip })
       leave('候補の適用を確認し、その後に更新された最新の旅程を表示しています。', 'success')
@@ -161,8 +204,17 @@ export function RevisionRouteView({
 
   // 結果不明のとき、サーバーの最新の旅程と照合して解禁するか判断する。取得に失敗しても解禁しない。
   const checkLatestTrip = async () => {
-    const pending = unresolvedApply(sourceTrip.id)
-    if (!loadLatestTrip || !loadAppliedRevision || !pending || reconciling.current) return
+    const read = readUnresolvedApply(ownerUid, sourceTrip.id)
+    if (
+      !loadLatestTrip ||
+      !loadAppliedRevision ||
+      read.status !== 'pending' ||
+      reconciling.current
+    ) {
+      updateStoredLock()
+      return
+    }
+    const pending = read.value
     reconciling.current = true
     const abort = new AbortController()
     reconcileAbort.current = abort
@@ -176,7 +228,16 @@ export function RevisionRouteView({
       latest = null
     }
     reconciling.current = false
-    if (abort.signal.aborted || unresolvedApply(sourceTrip.id) !== pending) return
+    if (abort.signal.aborted) return
+    const currentLock = readUnresolvedApply(ownerUid, sourceTrip.id)
+    if (
+      currentLock.status !== 'pending' ||
+      currentLock.value.baseVersion !== pending.baseVersion ||
+      currentLock.value.revisionId !== pending.revisionId
+    ) {
+      updateStoredLock()
+      return
+    }
     const verdict = judgeLatestTrip(
       sourceTrip.id,
       pending.baseVersion,
@@ -188,9 +249,16 @@ export function RevisionRouteView({
       setReconcile({ status: 'failed' })
       return
     }
-    clearApplyUnresolved(sourceTrip.id)
+    try {
+      if (!ownerUid) throw new Error('missing owner')
+      clearApplyUnresolved(ownerUid, sourceTrip.id, pending.revisionId)
+    } catch {
+      updateStoredLock()
+      setReconcile({ status: 'failed' })
+      return
+    }
+    updateStoredLock()
     setReconcile(null)
-    refresh()
     // 対象Revisionの承認が確定した場合だけ、取得した旅程を採用する。
     setLocal({ source: sourceTrip, trip: adoptTripChange?.(verdict.trip) ?? verdict.trip })
     leave('サーバーで適用を確認し、最新の旅程を表示しています。', 'success')
@@ -198,13 +266,17 @@ export function RevisionRouteView({
 
   const unresolvedGuide = (
     <>
-      <p>{unresolvedMessage}</p>
+      <p>
+        {lockState.status === 'pending'
+          ? unresolvedMessage
+          : '認証または端末に保存した適用状態を確認できません。確認できるまで、この旅程は再操作できません。'}
+      </p>
       {reconcile?.status === 'failed' && (
         <p>
           対象の適用を確定できませんでした。承認記録を確認できるまで、まだ再操作できません。通信を確認して、もう一度お試しください。
         </p>
       )}
-      {loadLatestTrip && loadAppliedRevision ? (
+      {lockState.status === 'pending' && loadLatestTrip && loadAppliedRevision ? (
         <button
           className="min-h-11 font-bold underline"
           type="button"
@@ -213,9 +285,9 @@ export function RevisionRouteView({
         >
           {reconcile?.status === 'checking' ? '確認中…' : '最新の旅程を取得して確認する'}
         </button>
-      ) : (
+      ) : lockState.status === 'pending' ? (
         <p>最新の旅程と対象Revisionの承認記録をサーバーから取得し直してください。</p>
-      )}
+      ) : null}
     </>
   )
 
@@ -240,17 +312,23 @@ export function RevisionRouteView({
             target={target}
             meta={current.meta}
             generate={generate}
-            apply={apply}
+            apply={operationBlocked && !session.applyUnresolved ? undefined : apply}
+            applyUnresolved={operationBlocked && !session.applyUnresolved}
             onApplyUnresolvedChange={(unresolved, revisionId) => {
-              if (unresolved) {
-                if (!revisionId) throw new Error('revision ID is required for uncertain apply')
-                markApplyUnresolved(session.trip.id, session.trip.version, revisionId)
-              } else clearApplyUnresolved(session.trip.id)
-              refresh()
+              if (!ownerUid || !revisionId) throw new Error('認証状態を確認できません。')
+              try {
+                if (unresolved) {
+                  markApplyUnresolved(ownerUid, session.trip.id, session.trip.version, revisionId)
+                } else {
+                  clearApplyUnresolved(ownerUid, session.trip.id, revisionId)
+                }
+              } finally {
+                updateStoredLock()
+              }
               setSession((active) => active && { ...active, applyUnresolved: unresolved })
             }}
             onCancel={() => {
-              if (applyUnresolved || session.applyUnresolved) {
+              if (operationBlocked || session.applyUnresolved) {
                 setInterruption({ stopId: session.stopId, applyUnresolved: true })
                 setSession(null)
               } else {
@@ -270,7 +348,7 @@ export function RevisionRouteView({
               className="gt-notice"
               data-tone="error"
             >
-              {applyUnresolved ? (
+              {operationBlocked ? (
                 unresolvedGuide
               ) : (
                 <p>旅程が更新されたため、候補を取り消しました。最新の旅程を表示しています。</p>
@@ -284,7 +362,7 @@ export function RevisionRouteView({
               </button>
             </div>
           )}
-          {applyUnresolved && !interruption && (
+          {operationBlocked && !interruption && (
             <div role="alert" className="gt-notice" data-tone="error">
               {unresolvedGuide}
             </div>
@@ -300,7 +378,7 @@ export function RevisionRouteView({
               return trip
             }}
             onStartRevision={
-              generate && !applyUnresolved
+              generate && !operationBlocked
                 ? (stopId) => {
                     if (current.trip.stops.some((stop) => stop.id === stopId && !stop.isFixed)) {
                       setNotice(null)

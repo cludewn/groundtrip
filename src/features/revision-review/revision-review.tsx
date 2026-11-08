@@ -82,7 +82,7 @@ interface RevisionReviewProps {
   // 適用できない理由。applyが無いときの承認ボタンの説明に使う（省略時は「未接続」）。
   applyUnavailableReason?: string
   onCancel: () => void
-  onApplied: (trip: Trip, receipt?: ApplyRevisionResult) => void
+  onApplied: (trip: Trip, receipt?: ApplyRevisionResult, revisionId?: string) => void
   onApplyUnresolvedChange: (unresolved: boolean, revisionId?: string) => void
   // 現地報告は修正理由と文脈をまとめて受け取り、旅行前と同じ修正エンジンで扱う。
   onSiteReport?: {
@@ -311,7 +311,18 @@ export function RevisionReview({
     activeApply.current = attempt
     setApplyFailure(null)
     setIsApplying(true)
-    onApplyUnresolvedChange(true, decision.revision.id)
+    try {
+      // 永続ロックの記録に失敗したらHTTP送信を開始しない。
+      onApplyUnresolvedChange(true, decision.revision.id)
+    } catch (error) {
+      activeApply.current = null
+      setIsApplying(false)
+      setApplyFailure({
+        status: 'unavailable',
+        message: error instanceof Error ? error.message : '未確認状態を保存できません。',
+      })
+      return
+    }
     try {
       const result = await apply(structuredClone(decision))
       if (activeApply.current !== attempt) return
@@ -323,12 +334,12 @@ export function RevisionReview({
           result.receipt,
         )
         if (nextTrip) {
-          onApplied(nextTrip, result.receipt)
+          onApplied(nextTrip, result.receipt, decision.revision.id)
         } else {
           setApplyFailure({ status: 'uncertain' })
         }
       } else {
-        if (result.status !== 'uncertain') onApplyUnresolvedChange(false)
+        if (result.status !== 'uncertain') onApplyUnresolvedChange(false, decision.revision.id)
         setApplyFailure({ ...result })
       }
     } catch {

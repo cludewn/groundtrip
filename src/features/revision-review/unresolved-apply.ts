@@ -1,28 +1,86 @@
+import { z } from 'zod'
+
 import { TripSchema, type Trip } from '@/domain'
 import { SavedRevisionSchema } from '@/server/persistence/contracts'
 
-// 結果不明の適用を、対象Revisionと元のTrip版の組として保持する。
-type UnresolvedApply = Readonly<{ baseVersion: number; revisionId: string }>
-const unresolved = new Map<string, UnresolvedApply>()
+// 未確認の適用を本人UID・Trip ID別に端末へ保存する。通信前に記録できないなら適用を始めない。
+// in-memory Mapではブラウザのフルリロードでロックが失われるため、永続記録を正本にする。
+const STORAGE_PREFIX = 'groundtrip:unresolved-apply:v1:'
+const PendingSchema = z.strictObject({
+  baseVersion: z.int().nonnegative(),
+  revisionId: z.string().min(1).max(256),
+})
 
-export function markApplyUnresolved(tripId: string, baseVersion: number, revisionId: string): void {
-  unresolved.set(tripId, { baseVersion, revisionId })
+export type UnresolvedApply = Readonly<z.infer<typeof PendingSchema>>
+export type UnresolvedApplyState =
+  | { status: 'clear' }
+  | { status: 'pending'; value: UnresolvedApply }
+  | { status: 'unavailable' }
+
+export function unresolvedApplyStorageKey(ownerUid: string, tripId: string): string {
+  return STORAGE_PREFIX + encodeURIComponent(ownerUid) + ':' + encodeURIComponent(tripId)
 }
 
-export function clearApplyUnresolved(tripId: string): void {
-  unresolved.delete(tripId)
+// 保存先の読取失敗・破損・認証UID不明は「記録なし」ではない。再操作を許可しない。
+export function readUnresolvedApply(
+  ownerUid: string | null | undefined,
+  tripId: string,
+): UnresolvedApplyState {
+  if (!ownerUid?.trim() || !tripId.trim() || typeof window === 'undefined') {
+    return { status: 'unavailable' }
+  }
+  try {
+    const raw = window.localStorage.getItem(unresolvedApplyStorageKey(ownerUid, tripId))
+    if (raw === null) return { status: 'clear' }
+    const parsed = PendingSchema.safeParse(JSON.parse(raw))
+    return parsed.success
+      ? { status: 'pending', value: parsed.data }
+      : { status: 'unavailable' }
+  } catch {
+    return { status: 'unavailable' }
+  }
 }
 
-export function isApplyUnresolved(tripId: string): boolean {
-  return unresolved.has(tripId)
+// applyのHTTP送信より前に同期的に書き込む。書込失敗を握りつぶして送信してはならない。
+export function markApplyUnresolved(
+  ownerUid: string,
+  tripId: string,
+  baseVersion: number,
+  revisionId: string,
+): UnresolvedApply {
+  const pending = PendingSchema.parse({ baseVersion, revisionId })
+  if (readUnresolvedApply(ownerUid, tripId).status !== 'clear') {
+    throw new Error('未確認の適用状態を確認できないため、再操作できません。')
+  }
+  const serialized = JSON.stringify(pending)
+  try {
+    const key = unresolvedApplyStorageKey(ownerUid, tripId)
+    window.localStorage.setItem(key, serialized)
+    if (window.localStorage.getItem(key) !== serialized) throw new Error('write not persisted')
+  } catch {
+    throw new Error('未確認の適用状態を保存できないため、適用を開始しませんでした。')
+  }
+  return pending
 }
 
-export function unresolvedApply(tripId: string): UnresolvedApply | undefined {
-  return unresolved.get(tripId)
-}
-
-export function resetUnresolvedApplies(): void {
-  unresolved.clear()
+// 対象Revisionの確定結果が得られた場合だけ削除する。別の候補の記録は消さない。
+export function clearApplyUnresolved(ownerUid: string, tripId: string, revisionId: string): void {
+  const current = readUnresolvedApply(ownerUid, tripId)
+  if (current.status === 'unavailable') {
+    throw new Error('未確認状態を読み取れません。再操作はできません。')
+  }
+  if (current.status === 'clear') return
+  if (current.value.revisionId !== revisionId) {
+    throw new Error('別の候補の未確認状態は解除できません。')
+  }
+  try {
+    window.localStorage.removeItem(unresolvedApplyStorageKey(ownerUid, tripId))
+  } catch {
+    throw new Error('未確認状態を解除できませんでした。')
+  }
+  if (readUnresolvedApply(ownerUid, tripId).status !== 'clear') {
+    throw new Error('未確認状態の解除を確認できませんでした。')
+  }
 }
 
 export type LatestTripVerdict = { kind: 'applied'; trip: Trip } | { kind: 'unverified' }
