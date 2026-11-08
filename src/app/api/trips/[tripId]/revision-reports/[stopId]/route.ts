@@ -32,6 +32,7 @@ export function POST(request: Request, context: Context) {
         stopId,
         input,
         operation.write,
+        operation.assertActive,
       ),
     )
   })

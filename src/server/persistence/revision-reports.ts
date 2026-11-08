@@ -52,9 +52,12 @@ export async function readReportStates(
   actor: Actor,
   snapshot: DocumentSnapshot,
   trip: { id: string; stops: Stop[] },
+  assertActive: () => void,
 ): Promise<States> {
   const stored = storedReportStates(snapshot)
   if (stored) return stored
+  // 先行するTrip読取後に期限が切れた場合、旧文書の復元クエリを開始しない。
+  assertActive()
   const revisions = await transaction.get(
     snapshot.ref.collection('revisions').limit(REVISION_LIMIT + 1),
   )

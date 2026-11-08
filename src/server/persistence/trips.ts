@@ -109,6 +109,7 @@ export class FirestoreTripStore {
     actor: Actor,
     request: ReviseTripRequest,
     write: WriteTransaction,
+    assertActive: () => void,
   ) {
     const ref = this.trip(actor, request.trip.id)
     return write(async (transaction) => {
@@ -121,7 +122,7 @@ export class FirestoreTripStore {
       }
       const target = request.trip.stops.find(({ id }) => id === request.targetStopId)
       if (!target || target.isFixed) throw new PersistenceError('revision_mismatch')
-      let states = await readReportStates(transaction, actor, snapshot, trip)
+      let states = await readReportStates(transaction, actor, snapshot, trip, assertActive)
       const reported = hasUnresolvedReport(request.context, target)
       if (reported) states = changeReportState(states, target.id, true)
       if (reported || !storedReportStates(snapshot))
@@ -136,7 +137,7 @@ export class FirestoreTripStore {
     const targetId = parseInput(RecordIdSchema, stopId)
     assertActive()
     return this.db.runTransaction(
-      (transaction) => this.reportTransaction(actor, ref, targetId, transaction),
+      (transaction) => this.reportTransaction(actor, ref, targetId, transaction, assertActive),
       { readOnly: true },
     )
   }
@@ -148,10 +149,13 @@ export class FirestoreTripStore {
     stopId: string,
     input: z.infer<typeof ResolveRevisionReportSchema>,
     write: WriteTransaction,
+    assertActive: () => void,
   ) {
     const ref = this.trip(actor, parseInput(TripIdSchema, tripId))
     const targetId = parseInput(RecordIdSchema, stopId)
-    return write((transaction) => this.reportTransaction(actor, ref, targetId, transaction, input))
+    return write((transaction) =>
+      this.reportTransaction(actor, ref, targetId, transaction, assertActive, input),
+    )
   }
 
   private async reportTransaction(
@@ -159,12 +163,13 @@ export class FirestoreTripStore {
     ref: DocumentReference,
     targetId: string,
     transaction: Transaction,
+    assertActive: () => void,
     input?: z.infer<typeof ResolveRevisionReportSchema>,
   ) {
     const snapshot = await transaction.get(ref)
     const trip = found(readOwned(actor, snapshot, fromTripDocument))
     found(trip.stops.find(({ id }) => id === targetId))
-    let states = await readReportStates(transaction, actor, snapshot, trip)
+    let states = await readReportStates(transaction, actor, snapshot, trip, assertActive)
     if (input) {
       if (trip.version !== input.expectedVersion) throw new PersistenceError('version_conflict')
       const state = reportState(states, targetId)
@@ -183,6 +188,7 @@ export class FirestoreTripStore {
     tripId: string,
     input: SaveRevisionBody,
     write: WriteTransaction,
+    assertActive: () => void,
   ): Promise<PendingRevision> {
     const { travelModes, proposalToken, ...candidate } = parseInput(SaveRevisionBodySchema, input)
     const document = toRevisionDocument(actor, candidate, normalizeModes(travelModes))
@@ -215,7 +221,7 @@ export class FirestoreTripStore {
       const proof = proposalToken
         ? verifyRevisionProposal(actor, trip, document, proposalToken)
         : undefined
-      let states = await readReportStates(transaction, actor, snapshot, trip)
+      let states = await readReportStates(transaction, actor, snapshot, trip, assertActive)
       const state = reportState(states, revision.targetStopId)
       const reported = hasUnresolvedReport(
         revision.context,

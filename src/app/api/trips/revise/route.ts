@@ -36,6 +36,7 @@ export async function POST(request: Request): Promise<Response> {
             actor,
             tripRequest,
             operation.write,
+            operation.assertActive,
           )
         : undefined
       if (report?.blocked && !report.reported) {

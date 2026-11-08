@@ -34,6 +34,7 @@ export function POST(request: Request, context: Context): Promise<Response> {
       tripId,
       input,
       operation.write,
+      operation.assertActive,
     )
     return dataResponse(PendingRevisionResponseSchema, { revision }, 201)
   })
