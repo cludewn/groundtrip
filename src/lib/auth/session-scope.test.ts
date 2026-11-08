@@ -69,6 +69,7 @@ describe('getAuthSnapshot（UIDとトークンを同じUserから取る）', () 
     await expect(getAuthSnapshot()).resolves.toEqual({
       uid: 'user-a',
       token: 'test-only-token-of-user-a',
+      generation: 0,
     })
     expect(user.getIdToken).toHaveBeenCalledExactlyOnceWith(false)
   })
@@ -80,6 +81,7 @@ describe('getAuthSnapshot（UIDとトークンを同じUserから取る）', () 
     await expect(getAuthSnapshot()).resolves.toEqual({
       uid: 'user-b',
       token: 'test-only-token-of-user-b',
+      generation: 1,
     })
   })
 
@@ -170,12 +172,81 @@ describe('getAuthHeadersForScope（スコープが違えば閉じて失敗する
     expect(Array.from(headers.keys())).toEqual(['authorization'])
   })
 
-  it('UIDが同じなら別のUserオブジェクトでも同じスコープとして扱う', async () => {
+  it('同じUserのトークン更新では同じスコープを維持する', async () => {
     const { captureSessionScope, getAuthHeadersForScope } = await import('./session-scope')
     const scope = await captureSessionScope()
-    mocks.auth.currentUser = userWith('user-a')
+    const user = mocks.auth.currentUser as FakeUser
+    user.getIdToken.mockResolvedValueOnce('refreshed-token-of-user-a')
     const headers = await getAuthHeadersForScope(scope)
-    expect(headers.get('authorization')).toBe('Bearer test-only-token-of-user-a')
+    expect(headers.get('authorization')).toBe('Bearer refreshed-token-of-user-a')
+  })
+
+  it.each([
+    [
+      'A→B→A',
+      () => {
+        mocks.auth.currentUser = userWith('user-b')
+        mocks.auth.currentUser = userWith('user-a')
+      },
+    ],
+    [
+      'A→終了→A',
+      () => {
+        mocks.auth.currentUser = null
+        mocks.auth.currentUser = userWith('user-a')
+      },
+    ],
+  ])('%sでも、先のAスコープからヘッダーを作らない', async (_name, switchBack) => {
+    const { captureSessionScope, getAuthHeadersForScope } = await import('./session-scope')
+    const scope = await captureSessionScope()
+    switchBack()
+    await expect(getAuthHeadersForScope(scope)).rejects.toMatchObject({ code: 'session_changed' })
+  })
+
+  it('取得中にA→B→Aへ戻った遅延応答を採用しない', async () => {
+    const { captureSessionScope, getAuthHeadersForScope, assertCurrentSessionScope } =
+      await import('./session-scope')
+    const scope = await captureSessionScope()
+    const response = Promise.withResolvers<{ ok: true }>()
+    const begun = Promise.withResolvers<void>()
+    mocks.fetch.mockImplementationOnce(async () => {
+      begun.resolve()
+      return response.promise
+    })
+    const loading = (async () => {
+      const headers = await getAuthHeadersForScope(scope)
+      await mocks.fetch('/api/trips', { method: 'GET', headers })
+      await assertCurrentSessionScope(scope)
+    })()
+    await begun.promise
+    mocks.auth.currentUser = userWith('user-b')
+    mocks.auth.currentUser = userWith('user-a')
+    response.resolve({ ok: true })
+    await expect(loading).rejects.toMatchObject({ code: 'session_changed' })
+  })
+
+  it('POST応答後にセッションが変わった場合、結果不明として拒否する', async () => {
+    const { captureSessionScope, getAuthHeadersForScope, assertCurrentSessionScope } =
+      await import('./session-scope')
+    const scope = await captureSessionScope()
+    const response = Promise.withResolvers<{ ok: true }>()
+    const begun = Promise.withResolvers<void>()
+    mocks.fetch.mockImplementationOnce(async () => {
+      begun.resolve()
+      return response.promise
+    })
+    const saving = (async () => {
+      const headers = await getAuthHeadersForScope(scope)
+      await mocks.fetch('/api/save', { method: 'POST', headers })
+      await assertCurrentSessionScope(scope, 'unknown')
+    })()
+    await begun.promise
+    mocks.auth.currentUser = userWith('user-b')
+    response.resolve({ ok: true })
+    await expect(saving).rejects.toMatchObject({
+      code: 'session_changed',
+      outcome: 'unknown',
+    })
   })
 
   it('UIDが変わったらSessionChangedErrorで失敗し、新しいUIDのトークンを送らない', async () => {

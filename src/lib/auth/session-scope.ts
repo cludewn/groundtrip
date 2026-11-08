@@ -2,6 +2,9 @@
 
 import { getAuthSnapshot } from './client'
 
+export type SessionDeliveryOutcome = 'not_sent' | 'unknown'
+const sessionGenerationByScope = new WeakMap<SessionScope, number>()
+
 // データを取得・表示・編集した時点の認証セッションを表す不変の値。
 // 取得した画面は、この値を結果と一緒に保持し、保存・生成の送信前に現在のセッションと照合する。
 // Firebaseのトークンやユーザーオブジェクトは持たない。UIDだけで識別する。
@@ -16,7 +19,7 @@ export type ScopedValue<T> = Readonly<{ scope: SessionScope; value: T }>
 export class SessionChangedError extends Error {
   readonly code = 'session_changed' as const
 
-  constructor() {
+  constructor(readonly outcome: SessionDeliveryOutcome = 'not_sent') {
     super(
       '認証セッションが変わりました。前のセッションのデータは使えません。読み込み直してください',
     )
@@ -25,18 +28,24 @@ export class SessionChangedError extends Error {
 }
 
 // UIDからスコープを作る。作成後は変更できない。
-export function createSessionScope(uid: string): SessionScope {
-  return Object.freeze({ uid })
+export function createSessionScope(uid: string, generation: number): SessionScope {
+  const scope = Object.freeze({ uid })
+  sessionGenerationByScope.set(scope, generation)
+  return scope
 }
 
 // 現在のセッションのスコープを取る。復元失敗・セッション終了では匿名アカウントを作らず、ClientAuthErrorで失敗する。
 export async function captureSessionScope(): Promise<SessionScope> {
-  const { uid } = await getAuthSnapshot()
-  return createSessionScope(uid)
+  const { uid, generation } = await getAuthSnapshot()
+  return createSessionScope(uid, generation)
 }
 
 export function isSameScope(a: SessionScope, b: SessionScope): boolean {
-  return a.uid === b.uid
+  if (a.uid !== b.uid) return false
+  const aGeneration = sessionGenerationByScope.get(a)
+  const bGeneration = sessionGenerationByScope.get(b)
+  // 未束縛のUID-only値は、取得時に世代を束縛したscopeとは一致しない。
+  return aGeneration === bGeneration
 }
 
 // 取得時のスコープが現在のスコープと同じであることを確認する。違えばSessionChangedErrorを投げる。
@@ -44,12 +53,44 @@ export function assertSameScope<T>(scoped: ScopedValue<T>, current: SessionScope
   if (!isSameScope(scoped.scope, current)) throw new SessionChangedError()
 }
 
+function assertSnapshotMatchesScope(
+  scope: SessionScope,
+  snapshot: Awaited<ReturnType<typeof getAuthSnapshot>>,
+  outcome: SessionDeliveryOutcome,
+): void {
+  const expectedGeneration = sessionGenerationByScope.get(scope)
+  if (
+    snapshot.uid !== scope.uid ||
+    expectedGeneration === undefined ||
+    snapshot.generation !== expectedGeneration
+  ) {
+    throw new SessionChangedError(outcome)
+  }
+}
+
+// 応答を画面へ反映する直前にも、取得時点のUser世代を確認する。
+// POST後に呼ぶ場合は、世代変更を「結果不明」として扱う（サーバーで保存済みの可能性がある）。
+export async function assertCurrentSessionScope(
+  scope: SessionScope,
+  outcome: SessionDeliveryOutcome = 'not_sent',
+): Promise<void> {
+  let snapshot: Awaited<ReturnType<typeof getAuthSnapshot>>
+  try {
+    snapshot = await getAuthSnapshot()
+  } catch (error) {
+    // GET後の認証復元失敗は元の認証エラーとして示す。POST後は保存済みの可能性があるため結果不明にする。
+    if (outcome === 'unknown') throw new SessionChangedError('unknown')
+    throw error
+  }
+  assertSnapshotMatchesScope(scope, snapshot, outcome)
+}
+
 // 取得時のスコープと同じセッションのときだけ、認証ヘッダーを返す（失敗時は閉じる）。
 // UIDとトークンは同じUserから同時に取るため、UIDの確認とトークンが食い違わない。
 // UIDが違えばSessionChangedErrorを投げ、新しいUIDのトークンを呼び出し側へ渡さない。
 // セッション終了・取得失敗はClientAuthErrorのまま伝え、匿名アカウントの再作成も再送もしない。
 export async function getAuthHeadersForScope(scope: SessionScope): Promise<Headers> {
-  const { uid, token } = await getAuthSnapshot()
-  if (uid !== scope.uid) throw new SessionChangedError()
-  return new Headers({ Authorization: `Bearer ${token}` })
+  const snapshot = await getAuthSnapshot()
+  assertSnapshotMatchesScope(scope, snapshot, 'not_sent')
+  return new Headers({ Authorization: `Bearer ${snapshot.token}` })
 }
