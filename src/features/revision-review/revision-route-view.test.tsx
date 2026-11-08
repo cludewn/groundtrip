@@ -732,6 +732,31 @@ describe('本人承認とサーバー適用', () => {
     expect(route().getByText(target.name)).toBeTruthy()
   })
 
+  it('結果不明の比較を閉じても同じTripへの新しい部分修正を始めず、再操作を解禁しない', async () => {
+    const user = userEvent.setup()
+    const apply = vi.fn<ApplyRevision>().mockResolvedValue({ status: 'uncertain' })
+    const generate = vi.fn<GenerateRevisions>().mockResolvedValue(proposal)
+    render(<RevisionRouteView trip={trip} generate={generate} apply={apply} />)
+
+    await open(user)
+    await request(user)
+    await screen.findByRole('table')
+    await user.click(approve())
+    expect(apply).toHaveBeenCalledTimes(1)
+
+    await user.click(await screen.findByRole('button', { name: '旅程を確認' }))
+    expect(screen.getByRole('alert').textContent).toContain('適用結果を確認できませんでした')
+    await user.click(screen.getByRole('button', { name: '比較を閉じる' }))
+
+    // 同じTripを表示していても、サーバーで確定結果を照合するまでは新規操作を出さない。
+    expect(screen.getByRole('alert').textContent).toContain('再操作できません')
+    await user.click(route().getByRole('button', { name: /昼食店A/ }))
+    expect(screen.queryByRole('button', { name: 'この予定だけ変更' })).toBeNull()
+    expect(screen.queryByRole('table')).toBeNull()
+    expect(generate).toHaveBeenCalledTimes(1)
+    expect(apply).toHaveBeenCalledTimes(1)
+  })
+
   it.each(['not_checked', 'violated'] as const)('%s の候補は承認できない', async (status) => {
     const user = userEvent.setup()
     render(
