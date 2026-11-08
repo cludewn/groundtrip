@@ -1,6 +1,10 @@
 'use client'
 
-import { getAuthSnapshot } from './client'
+import {
+  getAuthSnapshot,
+  isAuthSessionCurrent,
+  registerAuthSessionOperation,
+} from './client'
 
 export type SessionDeliveryOutcome = 'not_sent' | 'unknown'
 const sessionGenerationByScope = new WeakMap<SessionScope, number>()
@@ -68,6 +72,58 @@ function assertSnapshotMatchesScope(
   }
 }
 
+// 同期区間で、現在の認証境界が取得時の世代と同じか確認する。
+// fetch呼び出しの直前や、Reactへ状態更新を渡す直前に使う。
+export function assertCurrentSessionScopeSync(
+  scope: SessionScope,
+  outcome: SessionDeliveryOutcome = 'not_sent',
+): void {
+  const expectedGeneration = sessionGenerationByScope.get(scope)
+  if (
+    expectedGeneration === undefined ||
+    !isAuthSessionCurrent(scope.uid, expectedGeneration)
+  ) {
+    throw new SessionChangedError(outcome)
+  }
+}
+
+export type SessionScopeOperation = Readonly<{
+  signal: AbortSignal
+  assertCurrent(outcome?: SessionDeliveryOutcome): void
+  dispose(): void
+}>
+
+// 進行中のI/Oを認証世代に登録する。境界通知時にAbortControllerを同期中断し、
+// 外部signalも同じ通信へ伝える。すでに送信された書き込みは取り消せない。
+export function beginSessionScopeOperation(
+  scope: SessionScope,
+  externalSignal?: AbortSignal,
+): SessionScopeOperation {
+  assertCurrentSessionScopeSync(scope)
+  const controller = new AbortController()
+  const expectedGeneration = sessionGenerationByScope.get(scope)
+  if (expectedGeneration === undefined) throw new SessionChangedError()
+  const unregister = registerAuthSessionOperation(scope.uid, expectedGeneration, controller)
+  if (!unregister) throw new SessionChangedError()
+  const onExternalAbort = () => controller.abort()
+  if (externalSignal?.aborted) controller.abort()
+  else externalSignal?.addEventListener('abort', onExternalAbort, { once: true })
+
+  let disposed = false
+  return {
+    signal: controller.signal,
+    assertCurrent(outcome = 'not_sent') {
+      assertCurrentSessionScopeSync(scope, outcome)
+    },
+    dispose() {
+      if (disposed) return
+      disposed = true
+      unregister()
+      externalSignal?.removeEventListener('abort', onExternalAbort)
+    },
+  }
+}
+
 // 応答を画面へ反映する直前にも、取得時点のUser世代を確認する。
 // POST後に呼ぶ場合は、世代変更を「結果不明」として扱う（サーバーで保存済みの可能性がある）。
 export async function assertCurrentSessionScope(
@@ -83,6 +139,7 @@ export async function assertCurrentSessionScope(
     throw error
   }
   assertSnapshotMatchesScope(scope, snapshot, outcome)
+  assertCurrentSessionScopeSync(scope, outcome)
 }
 
 // 取得時のスコープと同じセッションのときだけ、認証ヘッダーを返す（失敗時は閉じる）。
@@ -92,5 +149,6 @@ export async function assertCurrentSessionScope(
 export async function getAuthHeadersForScope(scope: SessionScope): Promise<Headers> {
   const snapshot = await getAuthSnapshot()
   assertSnapshotMatchesScope(scope, snapshot, 'not_sent')
+  assertCurrentSessionScopeSync(scope)
   return new Headers({ Authorization: `Bearer ${snapshot.token}` })
 }
