@@ -183,8 +183,16 @@ it('別々のクライアントで同じデモUIDを使い、匿名データと�
   })
   expect((await gate.get()).get('counts.storage.total')).toBe(5)
 
+  const { date, region, timeZone, preferences, fixedStops } = sampleGenerateTripRequest
   const gen = (token: string) =>
-    protectedRequest('/api/trips/generate', token, sampleGenerateTripRequest)
+    protectedRequest('/api/trips/generate', token, {
+      date,
+      region,
+      timeZone,
+      preferences,
+      fixedStops,
+      learningSelections: [],
+    })
   expect((await generate(gen(demoA))).status).toBe(422)
   const overQuota = await generate(gen(demoB))
   expect(overQuota.status).toBe(429)
