@@ -1,7 +1,9 @@
-import { authErrorResponse, requireActor, type Actor } from '@/lib/auth/server'
+import { isCostlyApiEnabled } from '@/server/costly-api'
 import { issueRevisionProposalTokens } from '@/server/persistence/revision-provenance'
 import { FirestoreTripStore } from '@/server/persistence/trips'
 
+import { COSTS } from '../../../../server/cost-control/costs'
+import { meteredGemini, meteredMaps } from '../../../../server/cost-control/providers'
 import { createLazyVertexGeminiClient } from '../../../../server/gemini/client'
 import { createLazyMapsClient } from '../../../../server/maps'
 import { handleReviseTripRequest, isTripRevisionEnabled } from '../../../../server/revision/handler'
@@ -15,34 +17,39 @@ const client = createLazyVertexGeminiClient(process.env)
 const maps = createLazyMapsClient(process.env)
 
 const logFailure = (event: RevisionFailureEvent) => {
-  console.error('[trip-revision] 候補の作成に失敗', event)
+  console.error(
+    '[trip-revision] 候補の作成に失敗',
+    event.kind === 'gemini_call' ? event : { kind: event.kind },
+  )
 }
 
 export async function POST(request: Request): Promise<Response> {
-  const enabled = isTripRevisionEnabled(process.env)
-  let actor: Actor | undefined
-  if (enabled) {
-    try {
-      actor = await requireActor(request)
-    } catch (error) {
-      return authErrorResponse(error)
-    }
-  }
+  // 保存を有効にした環境だけ、本人報告の状態を確認・記録し、署名付きの候補を返す。
+  // その読み書きは、候補の生成と同じ操作（予約）に含め、書き込みは書き込み権で確定する。
+  const persistence = isCostlyApiEnabled(process.env.PERSISTENCE_ENABLED)
   return handleReviseTripRequest(request, {
-    isEnabled: () => enabled,
-    revise: async (tripRequest) => {
-      const report =
-        actor && process.env.PERSISTENCE_ENABLED?.trim() === 'true'
-          ? await new FirestoreTripStore().prepareRevisionGeneration(actor, tripRequest)
-          : undefined
+    isEnabled: () => isTripRevisionEnabled(process.env),
+    cost: persistence ? COSTS.reviseWithReports : COSTS.revise,
+    revise: async (tripRequest, operation, actor) => {
+      const report = persistence
+        ? await new FirestoreTripStore().prepareRevisionGeneration(
+            actor,
+            tripRequest,
+            operation.write,
+          )
+        : undefined
       if (report?.blocked && !report.reported) {
         return {
           status: 'insufficient_information',
           message: '未解消の本人報告があります。報告の状態を確認してください。',
         }
       }
-      const result = await reviseTrip(tripRequest, { client, maps, report: logFailure })
-      return actor && report
+      const result = await reviseTrip(tripRequest, {
+        client: meteredGemini(operation, client),
+        maps: meteredMaps(operation, maps),
+        report: logFailure,
+      })
+      return report
         ? issueRevisionProposalTokens(actor, tripRequest, result, report.reportVersion)
         : result
     },

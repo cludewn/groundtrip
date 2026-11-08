@@ -3,6 +3,9 @@ import { connectAuthEmulator, getAuth, signInAnonymously } from 'firebase/auth'
 import { FieldValue } from 'firebase-admin/firestore'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
+// 適用・生成・保存の業務ロジック単独の検証。課金・保存の共通の保護は revision-guards.test.ts で実ストアを使って確かめる。
+import '../helpers/mock-cost-control-commit'
+
 import { POST as applyRevision } from '@/app/api/trips/[tripId]/revisions/[revisionId]/apply/route'
 import {
   GET as getReport,
@@ -844,6 +847,8 @@ describe('Revision適用 API＋Firestore Emulator', () => {
         query: expect.stringContaining(trip.stops[1].name),
         includeOpeningHours: false,
       }),
+      // 有料の照会は計量済みclientを通り、操作の中断シグナルが渡る。
+      expect.any(AbortSignal),
     )
     expect(maps.computeRoute.mock.calls.map(([options]) => options)).toEqual(
       expect.arrayContaining([
@@ -909,7 +914,10 @@ describe('Revision適用 API＋Firestore Emulator', () => {
     })
     expect((await apply()).status).toBe(200)
     expect(maps.computeRoute.mock.calls).toEqual([
-      [{ originPlaceId: 'place-2', destinationPlaceId: 'place-b', mode: 'WALK' }],
+      [
+        { originPlaceId: 'place-2', destinationPlaceId: 'place-b', mode: 'WALK' },
+        expect.any(AbortSignal),
+      ],
     ])
     expect((await tripRef().get()).get('trip.stops').slice(0, 2)).toEqual(stops.slice(0, 2))
     expect((await readTrip()).stops.slice(0, 2)).toEqual(trip.stops.slice(0, 2))

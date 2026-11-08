@@ -49,8 +49,9 @@ JSONエスケープで渡された孤立サロゲートは、ネストした文�
 
 ## API
 
-保存APIは既定で無効。`PERSISTENCE_ENABLED=true` のときに有効になり、無効時は認証・本文の読み取り・DBアクセス前に
-`503 persistence_disabled` を返す。有効時は全操作に `Authorization: Bearer <Firebase ID token>` が必要。JSON本文のある操作には
+保存APIは既定で無効。本番の招待制デモは `PERSISTENCE_ENABLED` と `COSTLY_API_DEMO_ENABLED` の両方が必要。
+停止中は認証・本文・DBに進まず503 `persistence_disabled` を返す。有効時はBearer、招待UID、App Check、共有利用枠を検証する。
+[設定とエラーの契約](API_ABUSE_PROTECTION.md)を参照。書き込みには
 `Content-Type: application/json` を指定する。本文上限は64 KiB。レスポンスは `Cache-Control: private, no-store`。
 DTOの所有者・撤回マーカーはレスポンスに含めない。
 
@@ -102,11 +103,21 @@ Stopごとの根拠16件、変更理由・現地報告各1000文字、Learning�
 
 ローカル検証はEmulatorに限定する。一般公開は、対象DB・ADC/IAM・全拒否Rulesを確認し、匿名UIDを増やしても回避できない
 全体の回数・同時実行制限、App Checkまたは代替策、GCPのクォータ・予算通知・停止手順を用意してから判断する。
-保存枠はUID内の蓄積量を抑える。繰り返し取得・更新や匿名UIDの量産による全体の利用量には #29 の公開前保護を適用する。
-Revision適用はさらに `TRIP_REVISION_APPLY_ENABLED=true` が必要。未設定時は認証後、本文読取・DB・Mapsアクセス前に
-`503 revision_apply_disabled` を返す。公開前に #29 の保護を生成・保存・適用に接続する。
+保存枠はUID内の蓄積量を抑える。繰り返し取得・更新や匿名UIDの量産による全体の利用量には、[Issue #29の公開前保護](API_ABUSE_PROTECTION.md)を適用する。
+Revision適用はさらに `TRIP_REVISION_APPLY_ENABLED=true` が必要で、本番は共通デモフラグも要る。未設定時は認証・利用枠の予約・本文読取・DB・Mapsアクセスより前に
+`503 revision_apply_disabled` を返す。適用・本人報告の更新・候補の保存は、課金・保存の共通の利用枠と書き込み権（fencing）を通す。
 署名鍵はサーバー専用の `REVISION_PROPOSAL_SIGNING_KEY` に32バイトの乱数をbase64urlで設定し、全インスタンスで共有する。
 鍵の更新で未保存の旧署名は無効になる。保存時に検証済みの候補は記録した期限を使う。
+
+## 書き込みの結果が不明な場合
+
+書き込みのコミットと同じ取引で、共有制御文書の版を照合する。期限後に再開した処理は、
+書き込み権の失効・回収や期間切替が先に永続化されていれば、古い版のまま確定できない。
+コミットの応答を失った場合は503 `write_result_unknown`。HTTPタイムアウトも結果確認のきっかけとし、
+再送前に現在の版・ID・承認状態を取得する。旧版や同一IDでの再送は重複書き込みを防ぐ既存の制約を通る。
+Revision適用は、結果不明のとき同じ操作の読取枠内で版と承認状態を一度だけ照会する。承認済みなら `already_applied` を返し、
+確認できなければ503 `apply_result_unknown`。自動で再送しない。
+[期限とコミットの境界、デモ期間の切替](API_ABUSE_PROTECTION.md#業務書き込みのfencing)
 
 ## 版管理と承認
 
@@ -173,6 +184,10 @@ Revision適用はさらに `TRIP_REVISION_APPLY_ENABLED=true` が必要。未設
 | 502  | `external_service_error`          | PlacesまたはRoutes呼び出しの失敗                                           |
 | 503  | `apply_result_unknown`            | コミット結果を確認できない                                                 |
 
+適用・本人報告の取得と解消は、他の保存操作と同じく Bearer、招待UID、Web App Check、共有利用枠が必要で、拒否は
+401・403・429と503（`protection_unavailable`、`write_result_unknown`）で返る（[意味と再試行](API_ABUSE_PROTECTION.md#クライアント契約)）。
+適用の再検証（Places・Routes）は保存と同じ操作の予約に含まれる。
+
 コミット結果が不明な場合、クライアントは最新のTripと対象RevisionをGETし、Revisionの承認状態と適用版を確認する。
 通信が途切れたり `apply_result_unknown` を受け取った直後の `pending` は取得時点の状態。
 再送する場合は元のRevision IDと期待版を使う。確定したRevisionのGETは適用フラグが無効でも利用できる。
@@ -192,7 +207,11 @@ Revision適用はさらに `TRIP_REVISION_APPLY_ENABLED=true` が必要。未設
 - **PR #39** のUIは全件を `save(approved[])` に渡し、0件では呼び出さない。
   接続時は変更した項目だけを版付きで承認し、結果を項目ごとに表示する。途中で失敗した場合は保存済みと未保存を区別して再試行する。
   最後の1件も独立した撤回操作で削除できるようにし、下書きの編集・却下とサーバー上の承認・撤回を別々に表示する。
-- **#13** は `getApplicableLearnings(new FirestoreLearningStore(), actor.uid, region)` を使い、本人の有効な承認済みLearningを取り出す。
-  生成APIでは本文中のLearningを認可に使わず、サーバーで採用・反映先を確定する。
-  反映済みTripの保存を接続する際は、参照したLearningの存在・所有者・現行承認を保存トランザクション内で検証する。
+- **#13** は `resolveSelectedLearnings(new FirestoreLearningStore(), actor.uid, region, selections)` を使い、
+  利用者が画面で選んだ `{ id, version }` を、`listVersionedApproved` で取り出した本人の有効な承認済みLearningの現行版と照合する。
+  生成APIでは本文中のLearningを認可に使わず、サーバーで採用・反映先を確定する（詳細は[学びの接続契約](LEARNINGS.md)）。
+  画面の選択は、取得時の認証セッション（UID）と組で保持し、別のUIDのトークンで送らない。
+  `resolveSelectedLearnings` が返す値は、Firestoreを読んだ時点のスナップショット。外部のGemini呼び出しをトランザクションで囲まない。
+  反映済みTripの保存を接続する際は、参照したLearningの存在・所有者・現行承認と、生成時に検証した版を
+  保存トランザクション内で再検証する（現在の保存APIは適用記録つきのTripを受け付けない。提案は[学びの接続契約](LEARNINGS.md)）。
 - Trip・Revisionの削除や匿名UID喪失後のデータ保持期限は、後続のデータ運用で定める。

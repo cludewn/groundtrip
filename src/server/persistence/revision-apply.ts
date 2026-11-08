@@ -5,6 +5,7 @@ import type { DocumentReference, DocumentSnapshot, Firestore } from 'firebase-ad
 
 import { TripSchema, type RevisionRouteEndpoints, type Stop, type Trip } from '@/domain'
 import type { Actor } from '@/lib/auth/server'
+import { WriteFenceError, type WriteTransaction } from '@/server/cost-control/write-transaction'
 import type { TravelModeSetting } from '@/server/verification/segment'
 
 import {
@@ -20,6 +21,13 @@ import { parseInput, parseStored, PersistenceError } from './errors'
 import { found, readOwned, recordKey } from './paths'
 import { requireUnexpiredProposal } from './revision-provenance'
 import { reportState, storedReportStates } from './revision-reports'
+
+// 共通の課金・保存の操作（`CostlyOperation`）から受け取る最小の部分。
+// `write` だけが業務書き込みの確定に使え、リース失効後の古い確定を共有制御文書の版条件で止める。
+export interface ApplyGuard {
+  assertActive(): void
+  write: WriteTransaction
+}
 
 type Target = ReturnType<typeof readTarget>
 export type VerifyRevision = (
@@ -114,22 +122,27 @@ export async function applyStoredRevision(
   revisionId: string,
   expectedVersion: number,
   verify: VerifyRevision,
+  guard: ApplyGuard,
 ): Promise<ApplyRevisionResult> {
   const ref = tripRef.collection('revisions').doc(recordKey(parseInput(PathIdSchema, revisionId)))
   const version = parseInput(VersionSchema, expectedVersion)
-  const readSnapshots = () =>
-    db.runTransaction((transaction) => transaction.getAll(tripRef, ref), { readOnly: true })
+  // 照会の読取は、操作の予約（読取14）に含まれる。期限切れの操作では読取を始めない。
+  const readSnapshots = () => {
+    guard.assertActive()
+    return db.runTransaction((transaction) => transaction.getAll(tripRef, ref), { readOnly: true })
+  }
   const [tripSnapshot, revisionSnapshot] = await readSnapshots()
   const initial = readTarget(actor, tripSnapshot, revisionSnapshot)
   const replay = appliedResult(initial, version)
   if (replay) return replay
   const { revision, travelModes, endpoints } = requireApplicable(initial, version)
 
-  // Firestoreがトランザクションを再試行しても、有料の照合は繰り返さない。
+  // 有料の照合は1回だけ。確定の取引は再試行されない（`maxAttempts: 1`）。
+  guard.assertActive()
   const verified = await verify(initial.trip, revision, travelModes, endpoints)
-  let writesStaged = false
+  guard.assertActive()
   try {
-    return await db.runTransaction(async (transaction) => {
+    return await guard.write(async (transaction) => {
       const [currentTripSnapshot, currentRevisionSnapshot] = await transaction.getAll(tripRef, ref)
       const current = readTarget(actor, currentTripSnapshot, currentRevisionSnapshot)
       const replay = appliedResult(current, version)
@@ -188,15 +201,14 @@ export async function applyStoredRevision(
         'revision.approval': approval,
         'revision.diff.after': toStopDto(after),
       })
-      writesStaged = true
       return result
     })
   } catch (error) {
-    // 再試行時に同じトランザクションの読取で競合を確認できた場合、以前の試行も確定できない。
-    if (!writesStaged || (error instanceof PersistenceError && error.code === 'version_conflict')) {
+    // 書き込み権の失効（lease_lost）や、確定前の検証の失敗は、書き込まれていないのでそのまま返す。
+    // コミットを始めた後の失敗だけが結果不明で、版・承認状態を取得し直して確かめる。
+    if (!(error instanceof WriteFenceError) || error.code !== 'write_result_unknown') {
       throw error
     }
-    diagnosePersistenceFailure(error)
     try {
       const [currentTripSnapshot, currentRevisionSnapshot] = await readSnapshots()
       const replay = appliedResult(

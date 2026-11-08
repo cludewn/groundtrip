@@ -1,9 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import * as auth from '@/lib/auth/server'
+import '../../../../../tests/helpers/mock-cost-control'
 
 import { sampleReviseTripRequest } from '../../../../domain/samples'
 import { POST } from './route'
+
+vi.mock('@/lib/firebase/admin', () => ({
+  getAdminAuth: () => ({ verifyIdToken: async () => ({ uid: 'test-actor' }) }),
+}))
 
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -14,7 +18,7 @@ afterEach(() => {
 const post = () =>
   new Request('http://localhost/api/trips/revise', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer test.id.token' },
     body: JSON.stringify(sampleReviseTripRequest),
   })
 
@@ -42,14 +46,15 @@ describe('POST /api/trips/revise（実際のRoute）', () => {
   it('有効でも本人認証がなければ有料APIを呼ばない', async () => {
     vi.stubEnv('TRIP_REVISION_ENABLED', 'true')
     const fetchFn = forbidNetwork()
-    expect((await POST(post())).status).toBe(401)
+    const unauthenticated = post()
+    unauthenticated.headers.delete('Authorization')
+    expect((await POST(unauthenticated)).status).toBe(401)
     expect(fetchFn).not.toHaveBeenCalled()
   })
 
   it('有効でも接続設定が無ければ、通信せずに502を返し、更新後の旅程は返さない', async () => {
     vi.stubEnv('TRIP_REVISION_ENABLED', 'true')
     vi.stubEnv('GOOGLE_CLOUD_PROJECT', '')
-    vi.spyOn(auth, 'requireActor').mockResolvedValue({ uid: 'test-user' })
     vi.spyOn(console, 'error').mockImplementation(() => undefined)
     const fetchFn = forbidNetwork()
 

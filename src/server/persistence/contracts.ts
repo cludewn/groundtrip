@@ -122,6 +122,13 @@ export const VersionedLearningSchema = z.strictObject({
   learning: ApprovedLearningSchema,
 })
 
+// 利用者が画面で選んだ学び。画面に表示した版を添え、サーバーが保存済みの現行版と
+// 一致するときだけ採用する。本文や承認状態は運ばない。
+export const LearningSelectionSchema = z.strictObject({
+  id: LearningIdSchema,
+  version: VersionSchema.positive(),
+})
+
 export const TripResponseSchema = z.strictObject({ trip: TripSchema })
 const ListInfoSchema = z.strictObject({
   returned: z.int().nonnegative(),
@@ -175,3 +182,4 @@ export type SaveRevisionBody = z.infer<typeof SaveRevisionBodySchema>
 export type SavedRevision = z.infer<typeof SavedRevisionSchema>
 export type ApplyRevisionResult = z.infer<typeof ApplyRevisionResponseSchema>
 export type VersionedLearning = z.infer<typeof VersionedLearningSchema>
+export type LearningSelection = z.infer<typeof LearningSelectionSchema>
