@@ -21,11 +21,7 @@ vi.mock('@/lib/auth/client', () => ({
   getAuthSnapshot: mocks.getAuthSnapshot,
   isAuthSessionCurrent: (uid: string, generation: number) =>
     mocks.session.uid === uid && mocks.session.generation === generation,
-  registerAuthSessionOperation: (
-    uid: string,
-    generation: number,
-    controller: AbortController,
-  ) => {
+  registerAuthSessionOperation: (uid: string, generation: number, controller: AbortController) => {
     if (mocks.session.uid !== uid || mocks.session.generation !== generation) return undefined
     const operation = { uid, generation, controller }
     mocks.operations.add(operation)

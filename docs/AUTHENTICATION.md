@@ -195,18 +195,18 @@ Trip・Revision・Learningを読み込んだ認証セッションと、承認・
 食い違うと、前のUIDの画面データを新しいUIDのトークンで保存・生成へ使ってしまう。
 これを防ぐための共有部品。独自の認証モデルやUID再作成は持たず、上記の`client.ts`だけを使う。
 
-| 部品（`src/lib/auth/`）                                      | 役割                                                                                                             |
+| 部品（`src/lib/auth/`）                                  | 役割                                                                                                           |
 | -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `getAuthSnapshot()`（client.ts）                           | UID・IDトークン・認証世代を**同じUserから同じ取得処理で**組にして返す。失敗・エラー変換は`getIdToken`と同じ                                             |
-| `SessionScope`                                           | 公開値は不変の`{ uid }`。内部で取得時の認証世代に束縛し、トークンやUserは持たない                                                                |
-| `ScopedValue<T>`                                         | 取得したデータ`value`と、取得時の`scope`の組                                                                                  |
-| `captureSessionScope()`                                  | 現在のセッションのスコープを取る。セッションがなければ`ClientAuthError`で失敗し、匿名アカウントは作らない                                                  |
-| `getAuthHeadersForScope(scope)`                          | UIDと認証世代が`scope`と同じときだけ`Authorization`を返す。違えば`SessionChangedError`（トークンは渡さない）                                  |
-| `beginSessionScopeOperation(scope, signal?)`             | I/Oを認証世代に登録し、境界通知時に同期中断。外部の中断signalも伝える（送信済み書き込みは取り消せない）                                                       |
-| `assertCurrentSessionScopeSync(scope, outcome?)`         | 同期区間でUIDと認証世代を確認。送信直前・状態更新の採用直前に使う                                                                             |
-| `assertCurrentSessionScope(scope, outcome?)`             | 非同期処理後にも現在のUIDと認証世代を確認。POST後の変更は`unknown`として示せる                                                                |
-| `isSameScope(a, b)` / `assertSameScope(scoped, current)` | UIDと束縛された認証世代を比較。後者は違えば`SessionChangedError`を投げる                                                               |
-| `useSessionScope()`（use-session-scope.ts）                | 認証状態を購読し、`restoring` / `authenticated`（`scope`あり） / `session_ended` / `error`と`scopeEpoch`を返す                  |
+| `getAuthSnapshot()`（client.ts）                         | UID・IDトークン・認証世代を**同じUserから同じ取得処理で**組にして返す。失敗・エラー変換は`getIdToken`と同じ    |
+| `SessionScope`                                           | 公開値は不変の`{ uid }`。内部で取得時の認証世代に束縛し、トークンやUserは持たない                              |
+| `ScopedValue<T>`                                         | 取得したデータ`value`と、取得時の`scope`の組                                                                   |
+| `captureSessionScope()`                                  | 現在のセッションのスコープを取る。セッションがなければ`ClientAuthError`で失敗し、匿名アカウントは作らない      |
+| `getAuthHeadersForScope(scope)`                          | UIDと認証世代が`scope`と同じときだけ`Authorization`を返す。違えば`SessionChangedError`（トークンは渡さない）   |
+| `beginSessionScopeOperation(scope, signal?)`             | I/Oを認証世代に登録し、境界通知時に同期中断。外部の中断signalも伝える（送信済み書き込みは取り消せない）        |
+| `assertCurrentSessionScopeSync(scope, outcome?)`         | 同期区間でUIDと認証世代を確認。送信直前・状態更新の採用直前に使う                                              |
+| `assertCurrentSessionScope(scope, outcome?)`             | 非同期処理後にも現在のUIDと認証世代を確認。POST後の変更は`unknown`として示せる                                 |
+| `isSameScope(a, b)` / `assertSameScope(scoped, current)` | UIDと束縛された認証世代を比較。後者は違えば`SessionChangedError`を投げる                                       |
+| `useSessionScope()`（use-session-scope.ts）              | 認証状態を購読し、`restoring` / `authenticated`（`scope`あり） / `session_ended` / `error`と`scopeEpoch`を返す |
 
 利用側の約束。
 
@@ -222,7 +222,7 @@ Trip・Revision・Learningを読み込んだ認証セッションと、承認・
 5. スコープが変わった（`scopeEpoch`または`scope.uid`が変わった、`SessionChangedError`を受けた）ときは、
    表示・編集・選択・進行中の読み込みを破棄し、操作は失敗として扱う。`ClientAuthError`（`session_ended`等）も同様に扱う。
    自動の再取得・再送・匿名アカウントの作成はしない。
-5. `restoring` / `session_ended` / `error`では`scope`がなく、保存・生成を始めない。
+6. `restoring` / `session_ended` / `error`では`scope`がなく、保存・生成を始めない。
    新規開始は引き続き利用者の明示操作による`startNewAnonymousSession()`だけ。
 
 ```ts
