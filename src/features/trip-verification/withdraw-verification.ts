@@ -8,7 +8,7 @@ import { isGoogleSource } from '@/features/trip-map/model'
 // 変更後の旅程（after）の根拠のうち、照合（Places・Routes）に由来するものを、次のとおり扱う。
 // - 変更で新しく付いた根拠（部分修正の候補の根拠など）：変更後の予定に対して取った根拠なので、残す。
 // - 変更前から引き継がれた根拠：その根拠が述べている範囲が、変更前と同一のときだけ残す。
-//   - 施設の存在・営業時間：その予定の名称・種別・開始・滞在（と、旅程の日付・地域・タイムゾーン）が同一。
+//   - 施設の存在・営業時間：その予定の名称・種別・開始・滞在（と、旅程の日付・地域・タイムゾーン）とPlace IDが同一。
 //   - 前の予定 → この予定の移動：この予定と前の予定が、どちらも同一（ID・内容・Place ID）で、前の予定が隣のまま。
 //   - この予定 → 次の予定の移動：この予定と次の予定が、どちらも同一で、次の予定が隣のまま。
 //   - 何についての根拠か特定できないもの：この予定と前後の予定のすべてが同一。
@@ -85,7 +85,8 @@ export function withdrawStaleVerification(before: Trip, after: Trip): Withdrawal
       if (!carried.has(evidenceKey(item))) return true
       switch (evidenceTarget(stop, item)) {
         case 'stop':
-          return selfContent
+          // Placesの施設同定・営業時間はPlace IDの対象施設に紐づく。対象が変われば古い根拠を失効する。
+          return selfContent && old.placeId === stop.placeId
         case 'from_previous':
           return selfEndpoint && previous === 'same'
         case 'to_next':
