@@ -81,7 +81,7 @@ function createFakeAuth() {
       issued.push(snapshot)
       return snapshot
     }),
-    // 本物の getAuthHeaders と同じ形（Bearer）。保護APIヘッダーの本体を通すテストで使う。
+    // 保護API用ヘッダー（protected-api.ts）が、現在のUIDのBearerを作るために使う。
     getAuthHeaders: vi.fn(
       async () =>
         new Headers({ Authorization: `Bearer ${(await client.getAuthSnapshot()).token}` }),

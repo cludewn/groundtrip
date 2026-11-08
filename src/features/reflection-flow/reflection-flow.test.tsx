@@ -8,6 +8,7 @@ import { sampleRevision, sampleTrip } from '@/domain/samples'
 import { ClientAuthError } from '@/lib/auth/client'
 import type { VersionedLearning } from '@/server/persistence/contracts'
 
+import { fakeAppCheck } from '../../../tests/helpers/fake-app-check'
 import { fakeAuth } from '../../../tests/helpers/fake-auth-client'
 import {
   createFakeBackend,
@@ -19,6 +20,13 @@ import {
 } from '../../../tests/helpers/fake-persistence-backend'
 import { ReflectionFlow } from './reflection-flow'
 
+// 保護APIのヘッダー（Bearer＋App Check）は実物のprotected-api.tsを通し、App Check SDKとFirebase初期化だけを差し替える。
+vi.mock(
+  'firebase/app-check',
+  async () => (await import('../../../tests/helpers/fake-app-check')).appCheckModule,
+)
+vi.mock('@/lib/firebase/client', () => ({ getClientAuth: () => ({ app: {} }) }))
+
 // 認証（Firebase）だけを差し替える。セッションスコープ・LearningReview・api-client・保存ポートは、本物をつないで確かめる。
 vi.mock('@/lib/auth/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth/client')>()
@@ -26,14 +34,6 @@ vi.mock('@/lib/auth/client', async (importOriginal) => {
   fake.useErrorClass(actual.ClientAuthError)
   return { ...actual, ...fake.client }
 })
-
-// App Checkはブラウザとreキャプチャ鍵が要るのでSDKだけ差し替える。保護APIヘッダー本体（Bearer＋App Check必須）は本物を通す。
-vi.mock('firebase/app-check', () => ({
-  initializeAppCheck: () => ({}),
-  getToken: async () => ({ token: 'test.app.check' }),
-  ReCaptchaEnterpriseProvider: class {},
-}))
-vi.mock('@/lib/firebase/client', () => ({ getClientAuth: () => ({ app: {} }) }))
 
 const A = 'user-a'
 const B = 'user-b'
@@ -139,7 +139,7 @@ const approvePosts = (backend: ReturnType<typeof setupBackend>, uid?: string) =>
   backend.approveCalls().filter((call) => uid === undefined || call.uid === uid)
 
 beforeEach(() => {
-  vi.stubEnv('NEXT_PUBLIC_RECAPTCHA_ENTERPRISE_SITE_KEY', 'test-site-key')
+  fakeAppCheck.reset()
   fakeAuth.reset()
   // 復元（initializeAnonymousSession）で得られるUID。
   fakeAuth.state.restoredUid = A
