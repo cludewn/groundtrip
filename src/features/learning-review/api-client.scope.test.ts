@@ -110,6 +110,18 @@ describe('requestLearningCandidates: 取得したセッションに束縛する'
     expect(await pending).toMatchObject({ ok: false, failure: { kind: 'session_changed' } })
   })
 
+  it('応答待ちの間に同じUIDへ戻っても、古い世代の結果を採用しない', async () => {
+    const scope = await captureSessionScope()
+    let respond!: (response: Response) => void
+    const fetchFn = vi.fn(() => new Promise<Response>((resolve) => (respond = resolve)))
+    const pending = requestLearningCandidates(request, { scope, fetchFn })
+    await vi.waitFor(() => expect(fetchFn).toHaveBeenCalledTimes(1))
+    fakeAuth.signInAs('user-b')
+    fakeAuth.signInAs('user-a')
+    respond(okResponse())
+    expect(await pending).toMatchObject({ ok: false, failure: { kind: 'session_changed' } })
+  })
+
   it('App Checkを用意できないときは、有効なセッションでも送らない', async () => {
     const scope = await captureSessionScope()
     fakeAppCheck.getToken.mockRejectedValue(new Error('failed'))
