@@ -33,7 +33,8 @@ export function readUnresolvedApply(
     const raw = window.localStorage.getItem(unresolvedApplyStorageKey(ownerUid, tripId))
     if (raw === null) return { status: 'clear' }
     const parsed = PendingSchema.safeParse(JSON.parse(raw))
-    return parsed.success ? { status: 'pending', value: parsed.data } : { status: 'unavailable' }
+    if (!parsed.success) return { status: 'unavailable' }
+    return { status: 'pending', value: parsed.data }
   } catch {
     return { status: 'unavailable' }
   }

@@ -903,9 +903,7 @@ describe('本人承認とサーバー適用', () => {
       )
       other.unmount()
 
-      render(
-        <RevisionRouteTest trip={trip} generate={generate} apply={apply} />,
-      )
+      render(<RevisionRouteTest trip={trip} generate={generate} apply={apply} />)
       await locked(user)
       expect(apply).toHaveBeenCalledTimes(1)
     })
@@ -917,9 +915,7 @@ describe('本人承認とサーバー適用', () => {
       vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
         throw new Error('storage unavailable')
       })
-      render(
-        <RevisionRouteTest trip={trip} generate={generate} apply={apply} />,
-      )
+      render(<RevisionRouteTest trip={trip} generate={generate} apply={apply} />)
       await open(user)
       await request(user)
       await screen.findByRole('table')
