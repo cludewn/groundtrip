@@ -1247,13 +1247,18 @@ describe('承認済み学びのFirestore保存', () => {
 
     it('通信が要らない項目の処理でも中止を確認し、中止後に成功を返さない', async () => {
       // 一覧の取得（通信の前後の確認）を通り抜けたあと、最初の項目の処理で中止に切り替わる信号。
+      const controller = new AbortController()
+      const signal = controller.signal
       let reads = 0
-      const signal = {
-        get aborted() {
+      const readAborted = Object.getOwnPropertyDescriptor(AbortSignal.prototype, 'aborted')?.get
+      Object.defineProperty(signal, 'aborted', {
+        configurable: true,
+        get() {
           reads += 1
-          return reads >= 3
+          if (reads >= 4) controller.abort()
+          return readAborted?.call(signal) ?? false
         },
-      } as AbortSignal
+      })
       const backend = backendWith(entry(first, 1))
       const result = await createFirestoreLearningStore(scope, undefined, backend.fetchFn).save(
         [first],

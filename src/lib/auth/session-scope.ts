@@ -1,10 +1,6 @@
 'use client'
 
-import {
-  getAuthSnapshot,
-  isAuthSessionCurrent,
-  registerAuthSessionOperation,
-} from './client'
+import { getAuthSnapshot, isAuthSessionCurrent, registerAuthSessionOperation } from './client'
 
 export type SessionDeliveryOutcome = 'not_sent' | 'unknown'
 const sessionGenerationByScope = new WeakMap<SessionScope, number>()
@@ -79,10 +75,7 @@ export function assertCurrentSessionScopeSync(
   outcome: SessionDeliveryOutcome = 'not_sent',
 ): void {
   const expectedGeneration = sessionGenerationByScope.get(scope)
-  if (
-    expectedGeneration === undefined ||
-    !isAuthSessionCurrent(scope.uid, expectedGeneration)
-  ) {
+  if (expectedGeneration === undefined || !isAuthSessionCurrent(scope.uid, expectedGeneration)) {
     throw new SessionChangedError(outcome)
   }
 }

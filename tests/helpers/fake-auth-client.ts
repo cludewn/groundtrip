@@ -81,8 +81,9 @@ function createFakeAuth() {
       issued.push(snapshot)
       return snapshot
     }),
-    isAuthSessionCurrent: vi.fn((expectedUid: string, expectedGeneration: number) =>
-      uid === expectedUid && generation === expectedGeneration,
+    isAuthSessionCurrent: vi.fn(
+      (expectedUid: string, expectedGeneration: number) =>
+        uid === expectedUid && generation === expectedGeneration,
     ),
     registerAuthSessionOperation: vi.fn(
       (expectedUid: string, expectedGeneration: number, controller: AbortController) => {
