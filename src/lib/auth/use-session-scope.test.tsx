@@ -106,16 +106,15 @@ describe('useSessionScope', () => {
     expect(epochs).toEqual([...epochs].sort((a, b) => a - b))
   })
 
-  it('同じUIDの再通知では世代もscopeの参照も変えない', async () => {
+  it('同じUserのトークン更新通知では世代もscopeの参照も変えない', async () => {
     const user = userWith('user-a')
     const { result, seen } = renderScope()
     await emit(user)
     await waitFor(() => expect(result.current.status).toBe('authenticated'))
     const scope = authenticatedScope(result.current)
 
-    // 同じUserの再通知（トークン更新）と、同じUIDの新しいUserオブジェクト（再検証が走る）。
+    // Firebaseが通常のトークン更新を通知するときは、同じUserオブジェクトが維持される。
     await emit(user)
-    await emit(userWith('user-a'))
     await waitFor(() => expect(result.current.status).toBe('authenticated'))
 
     expect(result.current.scopeEpoch).toBe(0)
@@ -123,7 +122,7 @@ describe('useSessionScope', () => {
     expect(new Set(seen.map((s) => s.scopeEpoch))).toEqual(new Set([0]))
   })
 
-  it('セッション終了を挟んでAからBになった場合も世代が進む', async () => {
+  it('セッション終了も操作世代を進め、AからBへ戻るとさらに進める', async () => {
     const { result } = renderScope()
     await emit(userWith('user-a'))
     await waitFor(() => expect(result.current.status).toBe('authenticated'))
@@ -135,18 +134,65 @@ describe('useSessionScope', () => {
     await emit(userWith('user-b'))
     await waitFor(() => expect(result.current.status).toBe('authenticated'))
     expect(authenticatedScope(result.current).uid).toBe('user-b')
-    expect(result.current.scopeEpoch).toBe(1)
+    expect(result.current.scopeEpoch).toBe(2)
   })
 
-  it('セッション終了を挟んで同じUIDに戻った場合は世代を進めない', async () => {
+  it('A→session_ended→Aは2回世代を進め、古いscopeを再利用しない', async () => {
     const { result } = renderScope()
     await emit(userWith('user-a'))
     await waitFor(() => expect(result.current.status).toBe('authenticated'))
+    const scopeOfFirstA = authenticatedScope(result.current)
     await emit(null)
     expect(result.current.status).toBe('session_ended')
     await emit(userWith('user-a'))
     await waitFor(() => expect(result.current.status).toBe('authenticated'))
-    expect(result.current.scopeEpoch).toBe(0)
+    expect(result.current.scopeEpoch).toBe(2)
+    expect(authenticatedScope(result.current)).not.toBe(scopeOfFirstA)
+  })
+
+  it('同じUserの認証失効でsession_endedになった後も、復帰時に旧scopeを再利用しない', async () => {
+    const user = userWith('user-a')
+    const { result } = renderScope()
+    await emit(user)
+    await waitFor(() => expect(result.current.status).toBe('authenticated'))
+    const scopeBeforeRevocation = authenticatedScope(result.current)
+    const { getAuthSnapshot } = await import('./client')
+
+    user.getIdToken.mockRejectedValueOnce({ code: 'auth/user-token-expired' })
+    await act(async () => {
+      await expect(getAuthSnapshot()).rejects.toMatchObject({ code: 'session_ended' })
+    })
+    expect(result.current.status).toBe('session_ended')
+
+    await emit(user)
+    await waitFor(() => expect(result.current.status).toBe('authenticated'))
+    expect(result.current.scopeEpoch).toBe(1)
+    expect(authenticatedScope(result.current)).not.toBe(scopeBeforeRevocation)
+  })
+
+  it('A→B→Aでも操作世代を戻さず、最初のA scopeを再利用しない', async () => {
+    const { result } = renderScope()
+    await emit(userWith('user-a'))
+    await waitFor(() => expect(result.current.status).toBe('authenticated'))
+    const scopeOfFirstA = authenticatedScope(result.current)
+    await emit(userWith('user-b'))
+    await waitFor(() => expect(authenticatedScope(result.current).uid).toBe('user-b'))
+    await emit(userWith('user-a'))
+    await waitFor(() => expect(authenticatedScope(result.current).uid).toBe('user-a'))
+    expect(result.current.scopeEpoch).toBe(2)
+    expect(authenticatedScope(result.current)).not.toBe(scopeOfFirstA)
+  })
+
+  it('同じUIDの別Userオブジェクトは新しい認証世代として扱う', async () => {
+    const { result } = renderScope()
+    const firstA = userWith('user-a')
+    await emit(firstA)
+    await waitFor(() => expect(result.current.status).toBe('authenticated'))
+    const scopeOfFirstA = authenticatedScope(result.current)
+    await emit(userWith('user-a'))
+    await waitFor(() => expect(result.current.status).toBe('authenticated'))
+    expect(result.current.scopeEpoch).toBe(1)
+    expect(authenticatedScope(result.current)).not.toBe(scopeOfFirstA)
   })
 
   it('session_endedではscopeを返さず、匿名アカウントを自動作成しない', async () => {
