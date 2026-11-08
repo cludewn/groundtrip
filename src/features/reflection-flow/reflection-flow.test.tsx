@@ -8,6 +8,7 @@ import { sampleRevision, sampleTrip } from '@/domain/samples'
 import { ClientAuthError } from '@/lib/auth/client'
 import type { VersionedLearning } from '@/server/persistence/contracts'
 
+import { fakeAppCheck } from '../../../tests/helpers/fake-app-check'
 import { fakeAuth } from '../../../tests/helpers/fake-auth-client'
 import {
   createFakeBackend,
@@ -18,6 +19,13 @@ import {
   type BackendCall,
 } from '../../../tests/helpers/fake-persistence-backend'
 import { ReflectionFlow } from './reflection-flow'
+
+// 保護APIのヘッダー（Bearer＋App Check）は実物のprotected-api.tsを通し、App Check SDKとFirebase初期化だけを差し替える。
+vi.mock(
+  'firebase/app-check',
+  async () => (await import('../../../tests/helpers/fake-app-check')).appCheckModule,
+)
+vi.mock('@/lib/firebase/client', () => ({ getClientAuth: () => ({ app: {} }) }))
 
 // 認証（Firebase）だけを差し替える。セッションスコープ・LearningReview・api-client・保存ポートは、本物をつないで確かめる。
 vi.mock('@/lib/auth/client', async (importOriginal) => {
@@ -131,6 +139,7 @@ const approvePosts = (backend: ReturnType<typeof setupBackend>, uid?: string) =>
   backend.approveCalls().filter((call) => uid === undefined || call.uid === uid)
 
 beforeEach(() => {
+  fakeAppCheck.reset()
   fakeAuth.reset()
   // 復元（initializeAnonymousSession）で得られるUID。
   fakeAuth.state.restoredUid = A
