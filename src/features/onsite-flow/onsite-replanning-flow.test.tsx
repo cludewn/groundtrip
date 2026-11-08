@@ -851,3 +851,52 @@ describe('現地報告の候補は、暫定ガードで承認可能の判定を�
     expect(apply).not.toHaveBeenCalled()
   })
 })
+
+describe('候補生成サービスが一時的に利用できなくなった場合', () => {
+  it('適用の応答待ちにサービスが外れて戻っても、適用中状態を保ち二重送信しない', async () => {
+    const user = userEvent.setup()
+    const pending = Promise.withResolvers<Awaited<ReturnType<ApplyRevision>>>()
+    const apply = vi.fn<ApplyRevision>().mockReturnValue(pending.promise)
+    const onTripChange = vi.fn()
+    const props = { apply, onTripChange }
+    const { rerender } = render(
+      <OnSiteReplanningFlow trip={sampleTrip} generate={propose} {...props} />,
+    )
+    await openCandidates(user, 'actual')
+    await user.click(approve())
+    expect(
+      screen.getByRole('button', { name: '適用を確認中…' }).getAttribute('aria-disabled'),
+    ).toBe('true')
+
+    rerender(<OnSiteReplanningFlow trip={sampleTrip} generate={undefined} {...props} />)
+    rerender(<OnSiteReplanningFlow trip={sampleTrip} generate={propose} {...props} />)
+
+    const waiting = screen.getByRole<HTMLButtonElement>('button', { name: '適用を確認中…' })
+    expect(waiting.getAttribute('aria-disabled')).toBe('true')
+    await user.click(waiting)
+    expect(apply).toHaveBeenCalledTimes(1)
+
+    await act(async () => pending.resolve({ status: 'applied', trip: savedTrip() }))
+    expect(onTripChange).toHaveBeenCalledTimes(1)
+  })
+
+  it('適用結果不明の後にサービスが外れて戻っても、候補と再操作禁止を維持する', async () => {
+    const user = userEvent.setup()
+    const apply = vi.fn<ApplyRevision>().mockRejectedValue(new Error('通信が切れた'))
+    const props = { apply }
+    const { rerender } = render(
+      <OnSiteReplanningFlow trip={sampleTrip} generate={propose} {...props} />,
+    )
+    await openCandidates(user, 'actual')
+    await user.click(approve())
+    await screen.findByText('適用結果未確認')
+
+    rerender(<OnSiteReplanningFlow trip={sampleTrip} generate={undefined} {...props} />)
+    rerender(<OnSiteReplanningFlow trip={sampleTrip} generate={propose} {...props} />)
+
+    expect(screen.getByRole('table')).toBeTruthy()
+    expect(approve().getAttribute('aria-disabled')).toBe('true')
+    await user.click(approve())
+    expect(apply).toHaveBeenCalledTimes(1)
+  })
+})

@@ -126,12 +126,11 @@ export function OnSiteReplanningFlow({
   }, [stale])
 
   // 現地報告の候補は、承認の可否を下げる方向にだけ働く暫定ガードを通してから比較画面へ渡す。
-  const guardedGenerate: GenerateRevisions | undefined =
-    generate &&
-    (async (request, signal) => {
-      const result = await generate(request, signal)
-      return result.status === 'proposed' ? guardOnSiteProposal(result, request) : result
-    })
+  const guardedGenerate: GenerateRevisions = async (request, signal) => {
+    if (!generate) return { status: 'unavailable' }
+    const result = await generate(request, signal)
+    return result.status === 'proposed' ? guardOnSiteProposal(result, request) : result
+  }
 
   const startReport = (stopId: string) => {
     if (!generate || !trip.stops.some((stop) => stop.id === stopId && !stop.isFixed)) return
@@ -264,7 +263,7 @@ export function OnSiteReplanningFlow({
         </div>
       )}
 
-      {activeReview && session && target && guardedGenerate && (
+      {activeReview && session && target && (
         <div className="space-y-3">
           {session.submission.context.report.kind === 'simulated' && (
             <p role="note" className="rounded-lg border-2 border-dashed border-gt-rule p-3 text-sm">
@@ -281,6 +280,8 @@ export function OnSiteReplanningFlow({
             trip={trip}
             target={target}
             generate={guardedGenerate}
+            generationAvailable={generate !== undefined}
+            applyUnresolved={applyUnresolved}
             // 模擬報告では適用の経路そのものを渡さず、承認が旅程へ届かないようにする。
             apply={session.submission.context.report.kind === 'actual' ? apply : undefined}
             applyUnavailableReason={
