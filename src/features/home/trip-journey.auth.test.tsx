@@ -39,7 +39,10 @@ it('scope不在では現在の別UIDのヘッダーにフォールバックせ�
   const custom = vi.fn<GenerateRevisions>()
   vi.stubGlobal('fetch', fetchFn)
 
-  const result = await createScopedRevisions(null)(sampleReviseTripRequest, new AbortController().signal)
+  const result = await createScopedRevisions(null)(
+    sampleReviseTripRequest,
+    new AbortController().signal,
+  )
   expect(result.status).toBe('auth_required')
   expect(fetchFn).not.toHaveBeenCalled()
   expect(fakeAppCheck.getToken).not.toHaveBeenCalled()
