@@ -49,28 +49,29 @@ export function createScopedRevisions(
 
     let operation: ReturnType<typeof beginSessionScopeOperation> | undefined
     try {
-      operation = beginSessionScopeOperation(scope, signal)
-      operation.signal.throwIfAborted()
+      const active = beginSessionScopeOperation(scope, signal)
+      operation = active
+      active.signal.throwIfAborted()
 
       const result = await (generateRevisions
-        ? generateRevisions(request, operation.signal)
-        : requestRevisions(request, operation.signal, {
+        ? generateRevisions(request, active.signal)
+        : requestRevisions(request, active.signal, {
             getHeaders: () => getProtectedApiHeadersForScope(scope),
             fetchFn: (input, init) => {
               // App CheckやBearer取得を待つ間にUIDが変わっても、旧Tripを送信しない。
-              operation!.assertCurrent()
-              operation!.signal.throwIfAborted()
+              active.assertCurrent()
+              active.signal.throwIfAborted()
               return fetch(input, {
                 ...init,
-                signal: operation!.signal,
+                signal: active.signal,
                 redirect: 'error',
               })
             },
           }))
 
       // requestRevisionsは認証エラーを結果として返すため、結果の採用直前にも独立して判定。
-      operation.assertCurrent('unknown')
-      operation.signal.throwIfAborted()
+      active.assertCurrent('unknown')
+      active.signal.throwIfAborted()
       return result
     } catch (error) {
       if (error instanceof SessionChangedError) {
