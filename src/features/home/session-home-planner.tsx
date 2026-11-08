@@ -3,13 +3,41 @@
 import { useState } from 'react'
 
 import { requestTripGeneration } from '@/features/trip-planner/api-client'
-import { verifyTripWithProtectedApi } from '@/features/trip-verification/protected-verify'
+import { requestTripVerification } from '@/features/trip-verification/api-client'
+import { withAuthHeaders } from '@/features/trip-verification/browser-verify'
 import { startNewAnonymousSession } from '@/lib/auth/client'
 import { getProtectedApiHeadersForScope } from '@/lib/auth/protected-api'
+import { beginSessionScopeOperation, type SessionScope } from '@/lib/auth/session-scope'
 import { useSessionScope } from '@/lib/auth/use-session-scope'
 import { isDemoSessionActive } from '@/lib/firebase/client'
 
 import { HomePlanner } from './home-planner'
+
+async function runScoped<T>(
+  scope: SessionScope,
+  signal: AbortSignal | undefined,
+  run: (fetchFn: typeof fetch, signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const operation = beginSessionScopeOperation(scope, signal)
+  const page = new AbortController()
+  const combined = AbortSignal.any([operation.signal, page.signal])
+  const onPageHide = () => page.abort()
+  const scopedFetch: typeof fetch = (input, init) => {
+    operation.assertCurrent()
+    combined.throwIfAborted()
+    return fetch(input, { ...init, signal: combined, redirect: 'error' })
+  }
+  window.addEventListener('pagehide', onPageHide, { once: true })
+  try {
+    const result = await run(scopedFetch, combined)
+    operation.assertCurrent('unknown')
+    combined.throwIfAborted()
+    return result
+  } finally {
+    window.removeEventListener('pagehide', onPageHide)
+    operation.dispose()
+  }
+}
 
 export function SessionHomePlanner() {
   const session = useSessionScope()
@@ -57,10 +85,17 @@ export function SessionHomePlanner() {
       <HomePlanner
         generate={(request, options) =>
           scope
-            ? requestTripGeneration(request, {
-                ...options,
-                getHeaders: () => getProtectedApiHeadersForScope(scope),
-              })
+            ? runScoped(scope, options?.signal, (fetchFn, signal) =>
+                requestTripGeneration(request, {
+                  ...options,
+                  fetchFn,
+                  signal,
+                  getHeaders: () => getProtectedApiHeadersForScope(scope),
+                }),
+              ).catch(() => ({
+                ok: false as const,
+                failure: { kind: 'session_changed' as const, message: '利用状態が変わりました。' },
+              }))
             : Promise.resolve({
                 ok: false,
                 failure: { kind: 'auth_required', message },
@@ -68,7 +103,17 @@ export function SessionHomePlanner() {
         }
         verify={(trip, options) =>
           scope
-            ? verifyTripWithProtectedApi(trip, options)
+            ? runScoped(scope, options?.signal, (fetchFn, signal) =>
+                requestTripVerification(trip, {
+                  fetchFn: withAuthHeaders(fetchFn, () => getProtectedApiHeadersForScope(scope), {
+                    requireAuth: true,
+                  }),
+                  signal,
+                }),
+              ).catch(() => ({
+                ok: false as const,
+                failure: { kind: 'auth_required' as const, message: '利用状態が変わりました。' },
+              }))
             : Promise.resolve({
                 ok: false,
                 failure: { kind: 'auth_required', message },
