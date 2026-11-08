@@ -15,14 +15,20 @@ import {
   isApplyUnresolved,
   judgeLatestTrip,
   markApplyUnresolved,
-  unresolvedBaseVersion,
+  unresolvedApply,
 } from './unresolved-apply'
 
 // サーバーに保存されている最新の旅程（正本）を取得する。取得できないときは null を返すか例外を投げる。
 export type LoadLatestTrip = (tripId: string, signal: AbortSignal) => Promise<Trip | null>
+// サーバーから対象Revisionの承認状態を取得する。
+export type LoadAppliedRevision = (
+  tripId: string,
+  revisionId: string,
+  signal: AbortSignal,
+) => Promise<unknown>
 
 const unresolvedMessage =
-  '適用結果を確認できませんでした。サーバーの最新の旅程と照合できるまで、この旅程は再操作できません。'
+  '適用結果を確認できませんでした。対象候補の承認記録と最新の旅程を確認できるまで、この旅程は再操作できません。'
 
 interface RevisionRouteViewProps {
   trip: Trip
@@ -32,6 +38,7 @@ interface RevisionRouteViewProps {
   apply?: ApplyRevision
   // 結果不明の適用を解消するため、サーバーの最新の旅程を取得する。渡さないと、結果不明の旅程は解禁できない。
   loadLatestTrip?: LoadLatestTrip
+  loadAppliedRevision?: LoadAppliedRevision
   // 固定の切り替え・候補の適用で旅程が変わったとき、画面に採用する旅程を決める（変えなければ受け取った旅程を返す）。
   // 照合結果の取り下げなど、旅程の変更に連動して根拠を戻す用途。予定の名称・時刻・固定は変えないこと。
   adoptTripChange?: (changed: Trip) => Trip
@@ -44,6 +51,7 @@ export function RevisionRouteView({
   generate,
   apply,
   loadLatestTrip,
+  loadAppliedRevision,
   adoptTripChange,
 }: RevisionRouteViewProps) {
   const [local, setLocal] = useState<{
@@ -153,21 +161,29 @@ export function RevisionRouteView({
 
   // 結果不明のとき、サーバーの最新の旅程と照合して解禁するか判断する。取得に失敗しても解禁しない。
   const checkLatestTrip = async () => {
-    const baseVersion = unresolvedBaseVersion(sourceTrip.id)
-    if (!loadLatestTrip || baseVersion === undefined || reconciling.current) return
+    const pending = unresolvedApply(sourceTrip.id)
+    if (!loadLatestTrip || !loadAppliedRevision || !pending || reconciling.current) return
     reconciling.current = true
     const abort = new AbortController()
     reconcileAbort.current = abort
     setReconcile({ status: 'checking' })
     let latest: Trip | null = null
+    let revision: unknown = null
     try {
       latest = await loadLatestTrip(sourceTrip.id, abort.signal)
+      revision = await loadAppliedRevision(sourceTrip.id, pending.revisionId, abort.signal)
     } catch {
       latest = null
     }
     reconciling.current = false
-    if (abort.signal.aborted || unresolvedBaseVersion(sourceTrip.id) !== baseVersion) return
-    const verdict = judgeLatestTrip(sourceTrip.id, baseVersion, latest)
+    if (abort.signal.aborted || unresolvedApply(sourceTrip.id) !== pending) return
+    const verdict = judgeLatestTrip(
+      sourceTrip.id,
+      pending.baseVersion,
+      pending.revisionId,
+      latest,
+      revision,
+    )
     if (verdict.kind === 'unverified') {
       setReconcile({ status: 'failed' })
       return
@@ -175,13 +191,9 @@ export function RevisionRouteView({
     clearApplyUnresolved(sourceTrip.id)
     setReconcile(null)
     refresh()
-    if (verdict.kind === 'applied') {
-      // 適用が確定していた（または、その後に更新された）。サーバーの旅程を採用し、古い画面の根拠は引き継がない。
-      setLocal({ source: sourceTrip, trip: adoptTripChange?.(verdict.trip) ?? verdict.trip })
-      leave('サーバーで適用を確認し、最新の旅程を表示しています。', 'success')
-    } else {
-      leave('サーバーで適用されていないことを確認しました。もう一度部分修正を始められます。')
-    }
+    // 対象Revisionの承認が確定した場合だけ、取得した旅程を採用する。
+    setLocal({ source: sourceTrip, trip: adoptTripChange?.(verdict.trip) ?? verdict.trip })
+    leave('サーバーで適用を確認し、最新の旅程を表示しています。', 'success')
   }
 
   const unresolvedGuide = (
@@ -189,10 +201,10 @@ export function RevisionRouteView({
       <p>{unresolvedMessage}</p>
       {reconcile?.status === 'failed' && (
         <p>
-          最新の旅程を取得できなかったため、まだ再操作できません。通信を確認して、もう一度お試しください。
+          対象の適用を確定できませんでした。承認記録を確認できるまで再操作できません。通信を確認して、もう一度お試しください。
         </p>
       )}
-      {loadLatestTrip ? (
+      {loadLatestTrip && loadAppliedRevision ? (
         <button
           className="min-h-11 font-bold underline"
           type="button"
@@ -202,7 +214,7 @@ export function RevisionRouteView({
           {reconcile?.status === 'checking' ? '確認中…' : '最新の旅程を取得して確認する'}
         </button>
       ) : (
-        <p>最新の旅程をサーバーから取得し直してください。</p>
+        <p>最新の旅程と対象Revisionの承認記録をサーバーから取得し直してください。</p>
       )}
     </>
   )
@@ -229,8 +241,11 @@ export function RevisionRouteView({
             meta={current.meta}
             generate={generate}
             apply={apply}
-            onApplyUnresolvedChange={(unresolved) => {
-              if (unresolved) markApplyUnresolved(session.trip.id, session.trip.version)
+            onApplyUnresolvedChange={(unresolved, revisionId) => {
+              if (unresolved) {
+                if (!revisionId) throw new Error('revision ID is required for uncertain apply')
+                markApplyUnresolved(session.trip.id, session.trip.version, revisionId)
+              }
               else clearApplyUnresolved(session.trip.id)
               refresh()
               setSession((active) => active && { ...active, applyUnresolved: unresolved })

@@ -75,7 +75,7 @@ interface RevisionReviewProps {
   applyUnavailableReason?: string
   onCancel: () => void
   onApplied: (trip: Trip, receipt?: ApplyRevisionResult) => void
-  onApplyUnresolvedChange: (unresolved: boolean) => void
+  onApplyUnresolvedChange: (unresolved: boolean, revisionId?: string) => void
   // 現地報告は修正理由と文脈をまとめて受け取り、旅行前と同じ修正エンジンで扱う。
   onSiteReport?: {
     reason: string
@@ -303,7 +303,7 @@ export function RevisionReview({
     activeApply.current = attempt
     setApplyFailure(null)
     setIsApplying(true)
-    onApplyUnresolvedChange(true)
+    onApplyUnresolvedChange(true, decision.revision.id)
     try {
       const result = await apply(structuredClone(decision))
       if (activeApply.current !== attempt) return
