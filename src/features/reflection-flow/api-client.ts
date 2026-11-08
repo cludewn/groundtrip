@@ -11,6 +11,7 @@ import {
 import { ClientAuthError } from '@/lib/auth/client'
 import {
   assertCurrentSessionScope,
+  beginSessionScopeOperation,
   getAuthHeadersForScope,
   SessionChangedError,
   type SessionScope,
@@ -173,6 +174,7 @@ type RequestOptions = {
   body?: unknown
   signal?: AbortSignal
   fetchFn?: typeof fetch
+  getHeaders?: (scope: SessionScope) => Promise<Headers>
 }
 
 // 取得した時点のセッション（scope）のトークンだけで送る。
@@ -183,55 +185,75 @@ async function authorizedJson<T>(
   schema: z.ZodType<T>,
   options: RequestOptions = {},
 ): Promise<T> {
-  const { method = 'GET', body, signal, fetchFn = fetch } = options
-  // 認証が失敗しても新しい匿名ユーザーを勝手に作らない。UIDが違えばSessionChangedErrorで止まる。
-  const headers = await getAuthHeadersForScope(scope)
+  const {
+    method = 'GET',
+    body,
+    signal,
+    fetchFn = fetch,
+    getHeaders = getAuthHeadersForScope,
+  } = options
+  // 認証が失敗しても新しい匿名ユーザーを勝手に作らない。
+  const headers = await getHeaders(scope)
   if (body !== undefined) headers.set('Content-Type', 'application/json')
-  if (signal?.aborted)
-    throw new ReflectionApiError(INTERRUPTED_MESSAGE, undefined, undefined, 'not_sent')
 
-  let response: Response
-  let text: string
+  // ヘッダー取得後からfetchまでの境界も同期確認し、通信をセッション世代に登録する。
+  const operation = beginSessionScopeOperation(scope, signal)
   try {
-    response = await fetchFn(path, {
-      method,
-      headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
-      cache: 'no-store',
-      signal,
-    })
-    text = await response.text()
-  } catch {
-    // 送信した後に応答を得られなかった。サーバーが処理を終えている可能性がある。
-    throw new ReflectionApiError(INTERRUPTED_MESSAGE, undefined, undefined, 'unknown')
-  }
-  // 応答を採用する直前にも、要求を開始したUser世代が続いているか確認する。
-  // POST後に世代が変わっていた場合、サーバー側で保存済みの可能性があるため結果不明。
-  await assertCurrentSessionScope(scope, method === 'POST' ? 'unknown' : 'not_sent')
-  if (signal?.aborted)
-    throw new ReflectionApiError(INTERRUPTED_MESSAGE, undefined, undefined, 'unknown')
+    if (signal?.aborted)
+      throw new ReflectionApiError(INTERRUPTED_MESSAGE, undefined, undefined, 'not_sent')
+    operation.assertCurrent('not_sent')
 
-  const json = parseJson(text)
-  // 本文がJSONかどうかより先にステータスを見る。プロキシが返すHTMLの502/503でも、状況に合う案内を使う。
-  if (!response.ok) {
-    const error = ErrorSchema.safeParse(json)
-    const known = own(KNOWN_FAILURES, error.success ? error.data.error.code : undefined)
-    // 既知のコードだけ、定型文言と確定の有無を使う。未知の本文は、利用者に見せない。
-    throw new ReflectionApiError(
-      known?.message ?? fallbackMessage(response.status),
-      response.status,
-      error.success ? error.data.error.code : undefined,
-      known?.outcome ?? 'unknown',
-    )
+    let response: Response
+    let text: string
+    try {
+      // operation.assertCurrentとfetchは同じ同期区間。境界通知時はsignalも同期的に中断される。
+      response = await fetchFn(path, {
+        method,
+        headers,
+        body: body === undefined ? undefined : JSON.stringify(body),
+        cache: 'no-store',
+        signal: operation.signal,
+      })
+      text = await response.text()
+    } catch {
+      // fetchを開始した後の通信断は、サーバーが処理を終えた可能性がある。
+      operation.assertCurrent(method === 'POST' ? 'unknown' : 'not_sent')
+      throw new ReflectionApiError(INTERRUPTED_MESSAGE, undefined, undefined, 'unknown')
+    }
+    // 応答を採用する直前にも、要求を開始したUser世代が続いているか確認する。
+    // POST後に世代が変わっていた場合、サーバー側で保存済みの可能性があるため結果不明。
+    const outcome = method === 'POST' ? 'unknown' : 'not_sent'
+    await assertCurrentSessionScope(scope, outcome)
+    operation.assertCurrent(outcome)
+    if (signal?.aborted)
+      throw new ReflectionApiError(INTERRUPTED_MESSAGE, undefined, undefined, 'unknown')
+
+    const json = parseJson(text)
+    // 本文がJSONかどうかより先にステータスを見る。プロキシが返すHTMLの502/503でも、状況に合う案内を使う。
+    if (!response.ok) {
+      const error = ErrorSchema.safeParse(json)
+      const known = own(KNOWN_FAILURES, error.success ? error.data.error.code : undefined)
+      // 既知のコードだけ、定型文言と確定の有無を使う。未知の本文は、利用者に見せない。
+      throw new ReflectionApiError(
+        known?.message ?? fallbackMessage(response.status),
+        response.status,
+        error.success ? error.data.error.code : undefined,
+        known?.outcome ?? 'unknown',
+      )
+    }
+    if (json === undefined) {
+      throw new ReflectionApiError(INVALID_RESPONSE_MESSAGE, response.status, undefined, 'unknown')
+    }
+    const parsed = schema.safeParse(json)
+    if (!parsed.success) {
+      throw new ReflectionApiError(INVALID_RESPONSE_MESSAGE, response.status, undefined, 'unknown')
+    }
+    // parse後・返却直前にも同期確認する。呼び出し側は状態更新時にも取得時scopeを確認する。
+    operation.assertCurrent(outcome)
+    return parsed.data
+  } finally {
+    operation.dispose()
   }
-  if (json === undefined) {
-    throw new ReflectionApiError(INVALID_RESPONSE_MESSAGE, response.status, undefined, 'unknown')
-  }
-  const parsed = schema.safeParse(json)
-  if (!parsed.success) {
-    throw new ReflectionApiError(INVALID_RESPONSE_MESSAGE, response.status, undefined, 'unknown')
-  }
-  return parsed.data
 }
 
 type LoadOptions = { signal?: AbortSignal; fetchFn?: typeof fetch }

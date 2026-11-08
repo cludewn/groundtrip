@@ -33,6 +33,15 @@ function createFakeAuth() {
   let generation = 0
   const listeners = new Set<(state: AuthStateLike) => void>()
   const issued: Array<{ uid: string; token: string }> = []
+  const operations = new Set<{
+    uid: string
+    generation: number
+    controller: AbortController
+  }>()
+  const abortOperations = () => {
+    for (const operation of operations) operation.controller.abort()
+    operations.clear()
+  }
 
   const state = {
     // 復元（initializeAnonymousSession）で得られるUID。
@@ -72,6 +81,17 @@ function createFakeAuth() {
       issued.push(snapshot)
       return snapshot
     }),
+    isAuthSessionCurrent: vi.fn((expectedUid: string, expectedGeneration: number) =>
+      uid === expectedUid && generation === expectedGeneration,
+    ),
+    registerAuthSessionOperation: vi.fn(
+      (expectedUid: string, expectedGeneration: number, controller: AbortController) => {
+        if (uid !== expectedUid || generation !== expectedGeneration) return undefined
+        const operation = { uid: expectedUid, generation: expectedGeneration, controller }
+        operations.add(operation)
+        return () => operations.delete(operation)
+      },
+    ),
     initializeAnonymousSession: vi.fn(async (): Promise<AuthUser> => {
       if (state.restoreError) throw state.restoreError
       if (!uid && state.restoredUid) api.signInAs(state.restoredUid)
@@ -97,13 +117,19 @@ function createFakeAuth() {
     },
     /** 指定のUIDでサインインし、購読者へ通知する（別のUIDへの切り替えにも使う）。 */
     signInAs(next: string) {
-      if (uid !== next) generation += 1
+      if (uid !== next) {
+        generation += 1
+        abortOperations()
+      }
       uid = next
       notify(authenticated())
     },
     /** Firebase側のUIDだけを切り替え、購読者へは通知しない（通知より先に変わる場合の再現）。 */
     switchSilently(next: string | null) {
-      if (uid !== next) generation += 1
+      if (uid !== next) {
+        generation += 1
+        abortOperations()
+      }
       uid = next
     },
     /** 購読者へ、いまの状態を通知する。 */
@@ -112,7 +138,10 @@ function createFakeAuth() {
     },
     /** サインアウト（セッション終了）。購読者へ通知する。 */
     endSession() {
-      if (uid !== null) generation += 1
+      if (uid !== null) {
+        generation += 1
+        abortOperations()
+      }
       uid = null
       notify({
         status: 'session_ended',
@@ -125,6 +154,7 @@ function createFakeAuth() {
       notify({ status: 'restoring', sessionGeneration: generation })
     },
     reset() {
+      abortOperations()
       uid = null
       generation = 0
       listeners.clear()

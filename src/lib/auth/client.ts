@@ -62,15 +62,22 @@ type Session = {
   initialization?: Promise<AuthUser>
   starting?: Promise<AuthUser>
   verification?: Promise<void>
+  activeOperations: Set<AbortController>
 }
 
 const sessions = new WeakMap<Auth, Session>()
 const restoredAuths = new WeakSet<Auth>()
+
+function invalidateSessionOperations(session: Session): void {
+  for (const controller of session.activeOperations) controller.abort()
+  session.activeOperations.clear()
+}
 const errorListeners = new Set<(error: ClientAuthError, session: Session) => void>()
 
 function currentSession(auth: Auth): Session {
   const previous = sessions.get(auth)
   if (previous && previous.user === auth.currentUser) return previous
+  if (previous) invalidateSessionOperations(previous)
   // UIDが同じでも、サインアウトやUserオブジェクトの置換後は別世代とする。
   const session: Session = {
     auth,
@@ -78,6 +85,7 @@ function currentSession(auth: Auth): Session {
     generation: previous ? previous.generation + 1 : 0,
     verified: false,
     errorGeneration: 0,
+    activeOperations: new Set(),
   }
   sessions.set(auth, session)
   return session
@@ -118,7 +126,14 @@ function reportError(
     session.errorGeneration += 1
     session.lastError = safeError
     // 失効・終了は同じUIDへ戻っても以前の操作を復活させない。
-    if (safeError.code === 'session_ended') session.generation += 1
+    if (safeError.code === 'session_ended') {
+      invalidateSessionOperations(session)
+      session.generation += 1
+      session.verified = false
+      session.verification = undefined
+      session.initialization = undefined
+      session.starting = undefined
+    }
     errorListeners.forEach((listener) => {
       if (isCurrent(session)) listener(safeError, session)
     })
@@ -254,19 +269,41 @@ export function observeAuthState(listener: (state: AuthState) => void): () => vo
     errorListeners.add(onError)
     // SDK仕様上、onIdTokenChangedのエラーコールバックは呼ばれない。
     // エラーは検証・初期化・サインイン・トークン取得のPromiseで扱う。
+    let lastNotifiedUser: User | null | undefined = initialSession.user
     unsubscribe = onIdTokenChanged(auth, (user) => {
       if (!active) return
+      const previousSession = sessions.get(auth)
       const session = currentSession(auth)
-      if (session.user !== user) return
+      const sessionReplaced = previousSession !== session
+      const notificationChanged = lastNotifiedUser !== user
+      if (sessionReplaced) {
+        // currentUser自体の置換ですでに世代を進めた。次の同じUser通知で二重に進めない。
+        lastNotifiedUser = session.user
+      } else {
+        lastNotifiedUser = user
+      }
+      if (notificationChanged && !sessionReplaced) {
+        // 連続した認証通知でもcurrentUserが既に元のUserへ戻っている場合、通知列から世代境界を数える。
+        // currentSessionが既にUser置換を検出した通常経路では二重に世代を進めない。
+        invalidateSessionOperations(session)
+        session.generation += 1
+        session.verified = false
+        session.errorGeneration += 1
+        session.lastError = undefined
+        session.verification = undefined
+        session.initialization = undefined
+        session.starting = undefined
+      }
+      const currentUser = session.user
       const observedGeneration = ++notificationGeneration
-      if (!user) {
+      if (!currentUser) {
         notifyError(new ClientAuthError('session_ended'), session.generation)
         return
       }
       if (session.verified) {
         listener({
           status: 'authenticated',
-          user: summarize(user),
+          user: summarize(currentUser),
           sessionGeneration: session.generation,
         })
         return
@@ -277,7 +314,7 @@ export function observeAuthState(listener: (state: AuthState) => void): () => vo
           if (active && notificationGeneration === observedGeneration && isCurrent(session)) {
             listener({
               status: 'authenticated',
-              user: summarize(user),
+              user: summarize(currentUser),
               sessionGeneration: session.generation,
             })
           }
@@ -333,6 +370,29 @@ export async function getIdToken(forceRefresh = false): Promise<string> {
 // 呼び出し側がgetIdTokenと別にUIDを読むと、その間のユーザー切替で食い違うため、組が必要なときはこちらを使う。
 export function getAuthSnapshot(): Promise<AuthSnapshot> {
   return fetchAuthSnapshot(false)
+}
+
+// 同期区間での送信直前・応答採用直前に、通知時点で更新された認証世代を確認する。
+// currentSessionはcurrentUserの差し替えも検出して進行中操作を同期的に中断する。
+export function isAuthSessionCurrent(uid: string, generation: number): boolean {
+  try {
+    const session = currentSession(getClientAuth())
+    return session.user?.uid === uid && session.generation === generation
+  } catch {
+    return false
+  }
+}
+
+// セッション境界でAbortControllerを同期的に中断する。返された関数で通常終了時に登録を解除する。
+export function registerAuthSessionOperation(
+  uid: string,
+  generation: number,
+  controller: AbortController,
+): (() => void) | undefined {
+  const session = currentSession(getClientAuth())
+  if (session.user?.uid !== uid || session.generation !== generation) return undefined
+  session.activeOperations.add(controller)
+  return () => session.activeOperations.delete(controller)
 }
 
 export async function getAuthHeaders(): Promise<Headers> {

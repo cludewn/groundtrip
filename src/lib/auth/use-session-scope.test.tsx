@@ -52,6 +52,18 @@ async function emit(user: FakeUser | null) {
   })
 }
 
+// 複数のSDK通知をReactのcommitより前に同じ同期区間で届ける。
+function notifySynchronously(user: FakeUser | null) {
+  const notify = mocks.observe.mock.calls.at(-1)?.[1]
+  if (typeof notify !== 'function') throw new Error('SDK購読が登録されていません')
+  notify(user)
+}
+
+function emitSynchronously(user: FakeUser | null) {
+  mocks.auth.currentUser = user
+  notifySynchronously(user)
+}
+
 function renderScope() {
   const seen: SessionScopeState[] = []
   const hook = renderHook(() => {
@@ -112,6 +124,8 @@ describe('useSessionScope', () => {
     await emit(user)
     await waitFor(() => expect(result.current.status).toBe('authenticated'))
     const scope = authenticatedScope(result.current)
+    const { beginSessionScopeOperation } = await import('./session-scope')
+    const operation = beginSessionScopeOperation(scope)
 
     // Firebaseが通常のトークン更新を通知するときは、同じUserオブジェクトが維持される。
     await emit(user)
@@ -119,7 +133,9 @@ describe('useSessionScope', () => {
 
     expect(result.current.scopeEpoch).toBe(0)
     expect(authenticatedScope(result.current)).toBe(scope)
+    expect(operation.signal.aborted).toBe(false)
     expect(new Set(seen.map((s) => s.scopeEpoch))).toEqual(new Set([0]))
+    operation.dispose()
   })
 
   it('セッション終了も操作世代を進め、AからBへ戻るとさらに進める', async () => {
@@ -181,6 +197,82 @@ describe('useSessionScope', () => {
     await waitFor(() => expect(authenticatedScope(result.current).uid).toBe('user-a'))
     expect(result.current.scopeEpoch).toBe(2)
     expect(authenticatedScope(result.current)).not.toBe(scopeOfFirstA)
+  })
+
+  it('Reactの再描画前にA→B→Aが届いても、旧操作をその場で中断する', async () => {
+    const { result } = renderScope()
+    const firstA = userWith('user-a')
+    await emit(firstA)
+    await waitFor(() => expect(result.current.status).toBe('authenticated'))
+    const oldScope = authenticatedScope(result.current)
+    const { beginSessionScopeOperation } = await import('./session-scope')
+    const operation = beginSessionScopeOperation(oldScope)
+
+    act(() => {
+      emitSynchronously(userWith('user-b'))
+      expect(operation.signal.aborted).toBe(true)
+      expect(() => operation.assertCurrent()).toThrow(SessionChangedError)
+      emitSynchronously(firstA)
+    })
+
+    await waitFor(() => {
+      expect(result.current.status).toBe('authenticated')
+      expect(authenticatedScope(result.current).uid).toBe('user-a')
+    })
+    expect(result.current.scopeEpoch).toBe(2)
+    expect(authenticatedScope(result.current)).not.toBe(oldScope)
+    operation.dispose()
+  })
+
+  it('中間Userの通知が遅れても、通知列のA→B→Aで2度同期失効する', async () => {
+    const { result } = renderScope()
+    const firstA = userWith('user-a')
+    await emit(firstA)
+    await waitFor(() => expect(result.current.status).toBe('authenticated'))
+    const oldScope = authenticatedScope(result.current)
+    const { beginSessionScopeOperation } = await import('./session-scope')
+    const operation = beginSessionScopeOperation(oldScope)
+
+    // currentUserはAのまま、中間のB通知が後から届く状況を作る。
+    act(() => {
+      notifySynchronously(userWith('user-b'))
+      expect(operation.signal.aborted).toBe(true)
+      expect(() => operation.assertCurrent()).toThrow(SessionChangedError)
+      notifySynchronously(firstA)
+    })
+
+    await waitFor(() => {
+      expect(result.current.status).toBe('authenticated')
+      expect(authenticatedScope(result.current).uid).toBe('user-a')
+    })
+    expect(result.current.scopeEpoch).toBe(2)
+    expect(authenticatedScope(result.current)).not.toBe(oldScope)
+    operation.dispose()
+  })
+
+  it('Reactの再描画前にsession_ended→Aが届いても、旧操作をその場で中断する', async () => {
+    const { result } = renderScope()
+    const firstA = userWith('user-a')
+    await emit(firstA)
+    await waitFor(() => expect(result.current.status).toBe('authenticated'))
+    const oldScope = authenticatedScope(result.current)
+    const { beginSessionScopeOperation } = await import('./session-scope')
+    const operation = beginSessionScopeOperation(oldScope)
+
+    act(() => {
+      emitSynchronously(null)
+      expect(operation.signal.aborted).toBe(true)
+      expect(() => operation.assertCurrent()).toThrow(SessionChangedError)
+      emitSynchronously(firstA)
+    })
+
+    await waitFor(() => {
+      expect(result.current.status).toBe('authenticated')
+      expect(authenticatedScope(result.current).uid).toBe('user-a')
+    })
+    expect(result.current.scopeEpoch).toBe(2)
+    expect(authenticatedScope(result.current)).not.toBe(oldScope)
+    operation.dispose()
   })
 
   it('同じUIDの別Userオブジェクトは新しい認証世代として扱う', async () => {

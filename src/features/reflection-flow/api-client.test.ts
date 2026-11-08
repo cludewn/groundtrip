@@ -163,6 +163,28 @@ describe('取得と保存は、取得したセッションに結び付く', () =
     expect(backend.fetchFn).not.toHaveBeenCalled()
   })
 
+  it('ヘッダー取得後・fetch直前のA→B→Aでは、古いscopeの要求を送らない', async () => {
+    const headersReady = Promise.withResolvers<void>()
+    const pendingHeaders = Promise.withResolvers<Headers>()
+    const fetchFn = vi.fn<typeof fetch>()
+    const request = loadSavedTrips(scope, {
+      fetchFn,
+      getHeaders: () => {
+        headersReady.resolve()
+        return pendingHeaders.promise
+      },
+    })
+
+    await headersReady.promise
+    pendingHeaders.resolve(new Headers({ Authorization: 'Bearer token-of-user-a' }))
+    // await継続がfetchへ進む前に、認証境界を同じ同期区間で通す。
+    fakeAuth.switchSilently(B)
+    fakeAuth.switchSilently(A)
+
+    await expect(request).rejects.toBeInstanceOf(SessionChangedError)
+    expect(fetchFn).not.toHaveBeenCalled()
+  })
+
   it.each(getters)(
     '%s：応答を待つ間にA→B→Aと切り替わったら、取得したデータを渡さない',
     async (_name, load) => {
