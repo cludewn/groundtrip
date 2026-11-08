@@ -149,7 +149,7 @@ export function readRevisionProposal(
     !revisions.every((revision) => matchesRevisionTarget(revision, trip, target))
   )
     return null
-
+  // サーバーは依頼の理由と文脈をそのままRevisionへ写す。別の依頼の応答を取り違えていないか確かめる。
   const reason = TextSchema.safeParse(request.reason)
   const context = RevisionContextSchema.safeParse(request.context)
   if (
@@ -158,6 +158,7 @@ export function readRevisionProposal(
     !revisions.every(
       (revision) =>
         revision.reason === reason.data &&
+        // 共通スキーマを通した値どうしを比べ、キーの順序の違いで不一致にしない。
         JSON.stringify(revision.context) === JSON.stringify(context.data),
     )
   )
