@@ -8,10 +8,35 @@ import { loadApprovedLearningOptions } from './api-client'
 
 // 既定の認証ヘッダー（getAuthHeadersForScope）の経路を、実際のsession-scope.tsのまま通すため、
 // 土台のgetAuthSnapshotだけを差し替える。
-const mocks = vi.hoisted(() => ({ getAuthSnapshot: vi.fn() }))
-vi.mock('@/lib/auth/client', () => ({ getAuthSnapshot: mocks.getAuthSnapshot }))
+const mocks = vi.hoisted(() => ({
+  getAuthSnapshot: vi.fn(),
+  session: { uid: 'user-a', generation: 0 },
+  operations: new Set<{
+    uid: string
+    generation: number
+    controller: AbortController
+  }>(),
+}))
+vi.mock('@/lib/auth/client', () => ({
+  getAuthSnapshot: mocks.getAuthSnapshot,
+  isAuthSessionCurrent: (uid: string, generation: number) =>
+    mocks.session.uid === uid && mocks.session.generation === generation,
+  registerAuthSessionOperation: (
+    uid: string,
+    generation: number,
+    controller: AbortController,
+  ) => {
+    if (mocks.session.uid !== uid || mocks.session.generation !== generation) return undefined
+    const operation = { uid, generation, controller }
+    mocks.operations.add(operation)
+    return () => mocks.operations.delete(operation)
+  },
+}))
 
 beforeEach(() => {
+  for (const operation of mocks.operations) operation.controller.abort()
+  mocks.operations.clear()
+  mocks.session = { uid: 'user-a', generation: 0 }
   mocks.getAuthSnapshot.mockReset()
   mocks.getAuthSnapshot.mockResolvedValue({
     uid: 'user-a',
@@ -21,6 +46,11 @@ beforeEach(() => {
 })
 
 const scopeA = createSessionScope('user-a', 0)
+const switchSyncSession = (uid: string, generation: number) => {
+  for (const operation of mocks.operations) operation.controller.abort()
+  mocks.operations.clear()
+  mocks.session = { uid, generation }
+}
 const headers = async () => new Headers({ Authorization: 'Bearer test-token' })
 const payload = (learnings: unknown[] = [{ learning: sampleApprovedLearning, version: 1 }]) => ({
   learnings,
@@ -234,6 +264,41 @@ describe('認証セッションとの結び付け', () => {
 
     expect(result).toMatchObject({ ok: false, kind: 'session_changed' })
     expect(fetchFn).not.toHaveBeenCalled()
+  })
+
+  it('ヘッダー取得後・fetch直前のA→B→Aでは、古いscopeの要求を送らない', async () => {
+    const headersReady = Promise.withResolvers<void>()
+    const pendingHeaders = Promise.withResolvers<Headers>()
+    const fetchFn = vi.fn<typeof fetch>()
+    const resultPromise = loadApprovedLearningOptions({
+      scope: scopeA,
+      fetchFn,
+      getHeaders: () => {
+        headersReady.resolve()
+        return pendingHeaders.promise
+      },
+    })
+
+    await headersReady.promise
+    pendingHeaders.resolve(new Headers({ Authorization: 'Bearer test-token' }))
+    switchSyncSession('user-b', 1)
+    switchSyncSession('user-a', 2)
+
+    await expect(resultPromise).resolves.toMatchObject({ ok: false, kind: 'session_changed' })
+    expect(fetchFn).not.toHaveBeenCalled()
+  })
+
+  it('認証境界はGET中の通信を同期中断し、応答を採用しない', async () => {
+    let requestSignal: AbortSignal | null | undefined
+    const fetchFn = vi.fn<typeof fetch>(async (_input, init) => {
+      requestSignal = init?.signal
+      switchSyncSession('user-b', 1)
+      switchSyncSession('user-a', 2)
+      return Response.json(payload())
+    })
+
+    await expect(load(fetchFn)).resolves.toMatchObject({ ok: false, kind: 'session_changed' })
+    expect(requestSignal?.aborted).toBe(true)
   })
 
   it('応答待ちの間に同じUIDへ再認証した場合、前世代の一覧を採用しない', async () => {

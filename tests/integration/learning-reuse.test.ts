@@ -8,8 +8,9 @@ import { GET as listLearnings } from '@/app/api/learnings/route'
 import { GET as getTrip } from '@/app/api/trips/[tripId]/route'
 import { POST as createTrip } from '@/app/api/trips/route'
 import { sampleApprovedLearning, sampleTrip } from '@/domain/samples'
-import { MAX_LEARNING_CONTENT_LENGTH } from '@/lib/learnings/lifecycle'
+import type { SessionScope, SessionScopeOperation } from '@/lib/auth/session-scope'
 import { getAdminAuth, getAdminFirestore } from '@/lib/firebase/admin'
+import { MAX_LEARNING_CONTENT_LENGTH } from '@/lib/learnings/lifecycle'
 import { resolveSelectedLearnings } from '@/server/learning-reuse/selection'
 import { LearningListResponseSchema, TripResponseSchema } from '@/server/persistence/contracts'
 import { toLearningDocument, toTripDocument } from '@/server/persistence/dto'
@@ -93,6 +94,19 @@ const viaRoute: typeof fetch = async (_input, init) =>
   listLearnings(
     new Request('http://localhost/api/learnings', { method: 'GET', headers: init?.headers }),
   )
+
+// These parser integration cases use an isolated Firebase App and inject its headers directly.
+const isolatedSessionOperation = (
+  scope: SessionScope,
+  signal?: AbortSignal,
+): SessionScopeOperation => {
+  void scope
+  return {
+    signal: signal ?? new AbortController().signal,
+    assertCurrent: () => {},
+    dispose: () => {},
+  }
+}
 
 async function codeOf(promise: Promise<unknown>) {
   return promise.then(
@@ -308,6 +322,7 @@ describe('破損・上限超過の保存データは、一部だけ採用せず�
       scope: createSessionScope(session.uid, 0),
       fetchFn: viaRoute,
       getHeaders: async () => session.headers(),
+      beginOperation: isolatedSessionOperation,
     })
     expect(loaded).toMatchObject({ ok: false, kind: 'incomplete' })
 
@@ -335,6 +350,7 @@ describe('破損・上限超過の保存データは、一部だけ採用せず�
       scope: createSessionScope(session.uid, 0),
       fetchFn: viaRoute,
       getHeaders: async () => session.headers(),
+      beginOperation: isolatedSessionOperation,
     })
     expect(loaded).toMatchObject({ ok: false, kind: 'incomplete' })
     expect(
