@@ -1342,3 +1342,82 @@ describe('承認済み学びのFirestore保存', () => {
     })
   })
 })
+
+describe('レビュー指摘の回帰：一覧の一意性・ステータスとコードの整合・認証世代', () => {
+  it('保存前の一覧に同じIDの学びが2件あるときは、書き込みの根拠にせず、何も送らない', async () => {
+    const backend = backendWith()
+    backend.intercept(isListLearnings, () =>
+      json({
+        learnings: [entry(first, 1), entry(first, 2)],
+        listInfo: { returned: 2, skippedInvalid: 0, truncated: false },
+      }),
+    )
+    const result = await createFirestoreLearningStore(scope, undefined, backend.fetchFn).save([
+      second,
+    ])
+    expect(result).toMatchObject({ ok: false, savedIds: [], unknownIds: [] })
+    expect(backend.approveCalls()).toHaveLength(0)
+  })
+
+  it('保存後の一覧にIDの重複があるときは、取り直した一覧で保存済みと照合しない（結果不明のまま）', async () => {
+    const backend = backendWith()
+    backend.intercept(isApprove(first.id), () => {
+      throw new TypeError('offline')
+    })
+    let lists = 0
+    backend.intercept(
+      (call) => isListLearnings(call) && ++lists === 2,
+      ({ proceed }) => {
+        proceed()
+        return json({
+          learnings: [entry(first, 1), entry(first, 1)],
+          listInfo: { returned: 2, skippedInvalid: 0, truncated: false },
+        })
+      },
+      { always: true },
+    )
+    const result = await createFirestoreLearningStore(scope, undefined, backend.fetchFn).save([
+      first,
+    ])
+    expect(result).toMatchObject({ ok: false, savedIds: [], unknownIds: [first.id] })
+  })
+
+  it.each([
+    [502, 'version_conflict'],
+    [500, 'learning_revoked'],
+    [409, 'storage_unavailable'],
+    [200 + 201, 'invalid_request'],
+  ])(
+    'ステータス%iとコード%sが矛盾する応答からは、保存されなかったと確定しない（結果不明）',
+    async (status, code) => {
+      const backend = backendWith()
+      backend.intercept(isApprove(first.id), () => failure(status, code, 'サーバーの文言'))
+      const result = await createFirestoreLearningStore(scope, undefined, backend.fetchFn).save([
+        first,
+      ])
+      expect(result).toMatchObject({ ok: false, savedIds: [], unknownIds: [first.id] })
+    },
+  )
+
+  it('保存後の取り直しが通信断で失敗し、その間に認証世代が変わったときは、全件成功と断定しない', async () => {
+    const backend = backendWith()
+    let lists = 0
+    backend.intercept(
+      (call) => isListLearnings(call) && ++lists === 2,
+      ({ proceed }) => {
+        proceed()
+        // A→B→A。同じUIDでも別の認証世代。
+        fakeAuth.switchSilently(B)
+        fakeAuth.signInAs(A)
+        throw new TypeError('offline')
+      },
+      { always: true },
+    )
+    const onSaved = vi.fn()
+    const result = await createFirestoreLearningStore(scope, onSaved, backend.fetchFn).save([first])
+    expect(result).toMatchObject({ ok: false, savedIds: [], unknownIds: [first.id] })
+    expect(backend.account(A).learnings.has(first.id)).toBe(true)
+    // 古い世代の保存からは、一覧更新の通知をしない。
+    expect(onSaved).not.toHaveBeenCalled()
+  })
+})

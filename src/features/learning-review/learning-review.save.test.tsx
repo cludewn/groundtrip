@@ -433,6 +433,39 @@ describe('LearningReview: 保存先が返す、項目ごとの結果（任意の
     expect(document.body.textContent).not.toContain('— 結果不明')
   })
 
+  it('保存中に別の候補を却下しても、送信済みの結果不明は現在の下書きに置き換わらず、確認できる', async () => {
+    const pending = deferred<SaveResult>()
+    const { user } = setup(() => pending.promise, { requestCandidates: twoCandidates() })
+    await approveBoth(user)
+    await user.click(saveButton())
+
+    // 保存の応答を待つ間に、送信に含まれていない操作として、別の候補を却下する。
+    await user.click(screen.getAllByRole('button', { name: '却下する' })[1])
+    await act(async () =>
+      pending.resolve({ ok: false, message: '通信に失敗しました。', unknownIds: ['learning-a'] }),
+    )
+
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('前回の保存結果が未確認の学びが1件あります')
+    expect(alert.textContent).toContain('候補Aの内容')
+  })
+
+  it('保存中に別の候補の内容を編集しても、送信済みの結果不明を失わない', async () => {
+    const pending = deferred<SaveResult>()
+    const { user } = setup(() => pending.promise, { requestCandidates: twoCandidates() })
+    await approveBoth(user)
+    await user.click(saveButton())
+
+    await user.type(screen.getAllByLabelText('学びの内容')[1], '（編集）')
+    await act(async () =>
+      pending.resolve({ ok: false, message: '通信に失敗しました。', unknownIds: ['learning-a'] }),
+    )
+
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('前回の保存結果が未確認の学びが1件あります')
+    expect(alert.textContent).toContain('候補Aの内容')
+  })
+
   it('認証状態を確認できない間は保存ボタンを無効にし、保存処理も始めない', async () => {
     const { user, saveMock } = setup(async () => ({ ok: true }), {
       canSave: false,
