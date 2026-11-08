@@ -256,7 +256,11 @@ async function authorizedJson<T>(
   }
 }
 
-type LoadOptions = { signal?: AbortSignal; fetchFn?: typeof fetch }
+type LoadOptions = {
+  signal?: AbortSignal
+  fetchFn?: typeof fetch
+  getHeaders?: (scope: SessionScope) => Promise<Headers>
+}
 
 export async function loadSavedTrips(
   scope: SessionScope,
