@@ -25,6 +25,38 @@ export const CONTROL_DOCUMENT = 'apiAbuseControl/gate'
 const TRANSACTION_ATTEMPTS = 2
 const STORE_TIMEOUT_MS = 2000
 const MINUTE_MS = 60_000
+const DENIAL_TTL_MS = 1000
+const DENIAL_CACHE_SIZE = 512
+// Firestore client ごとに独立させ、許可やストア障害は保存しない。
+const denialCaches = new WeakMap<Firestore, Map<string, number>>()
+
+function denialCache(db: Firestore): Map<string, number> {
+  let cache = denialCaches.get(db)
+  if (!cache) {
+    cache = new Map()
+    denialCaches.set(db, cache)
+  }
+  return cache
+}
+
+function cachedDenial(cache: Map<string, number>, key: string, now: number): boolean {
+  const until = cache.get(key)
+  if (until === undefined) return false
+  if (until <= now) {
+    cache.delete(key)
+    return false
+  }
+  return true
+}
+
+function rememberDenial(cache: Map<string, number>, key: string, until: number): void {
+  cache.delete(key)
+  if (cache.size >= DENIAL_CACHE_SIZE) {
+    const oldest = cache.keys().next().value
+    if (oldest !== undefined) cache.delete(oldest)
+  }
+  cache.set(key, until)
+}
 // ALREADY_EXISTS / FAILED_PRECONDITION / ABORTED
 const CONFLICT_CODES = new Set([6, 9, 10])
 
@@ -134,6 +166,13 @@ export class FirestoreCostStore {
       const requested = UsageSchema.parse({ ...EMPTY_USAGE, ...cost })
       const categories = operationCategories(requested)
       if (!categories.length) return { kind: 'unavailable' }
+      const cache = denialCache(this.db)
+      const costKey = JSON.stringify(COST_KEYS.map((key) => requested[key]))
+      const globalKey = `global:${costKey}`
+      const uidKey = `uid:${owner}:${costKey}`
+      if (cachedDenial(cache, globalKey, performance.now())) return limited('global')
+      if (cachedDenial(cache, uidKey, performance.now())) return limited('uid')
+      let denialUntil = 0
 
       const result = await withinDeadline(this.timeoutMs, () =>
         this.retryConflict<Admission>(started, async () => {
@@ -153,6 +192,7 @@ export class FirestoreCostStore {
           const now = Math.floor(snapshot.readTime.toMillis())
           const start = Date.parse(state.policy.startsAt)
           const end = Date.parse(state.policy.endsAt)
+          denialUntil = started + Math.min(DENIAL_TTL_MS, end - now)
           const until = Math.min(end, now + LEASE_MS)
           if (!state.policy.enabled || now < start || until - now <= LEASE_MARGIN_MS) {
             return { kind: 'unavailable' }
@@ -238,6 +278,9 @@ export class FirestoreCostStore {
       if (performance.now() - started >= this.timeoutMs) {
         reportCostControlFailure('reservation_deadline')
         return { kind: 'unavailable' }
+      }
+      if (result.kind === 'limited' && denialUntil > performance.now()) {
+        rememberDenial(cache, result.scope === 'global' ? globalKey : uidKey, denialUntil)
       }
       return result
     } catch (error) {

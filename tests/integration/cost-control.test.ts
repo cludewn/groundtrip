@@ -60,6 +60,8 @@ const client = initializeClient(
 )
 let uid: string
 let token: string
+let clockOffset = 0
+const realPerformanceNow = performance.now.bind(performance)
 
 beforeAll(async () => {
   const auth = getAuth(client)
@@ -70,6 +72,9 @@ beforeAll(async () => {
 })
 
 beforeEach(async () => {
+  // 前テストのプロセス内拒否キャッシュは期限切れにする。
+  clockOffset += 2_000
+  vi.spyOn(performance, 'now').mockImplementation(() => realPerformanceNow() + clockOffset)
   await db.recursiveDelete(gate)
   verifyAppCheck.mockResolvedValue({ appId: 'demo-app-id' })
   generateJson.mockResolvedValue(
@@ -128,6 +133,23 @@ function request(path: string, body?: unknown) {
 }
 
 describe('分散枠のFirestoreトランザクション', () => {
+  it('同時枠の拒否を短時間維持し、期限後は解放された枠を再確認する', async () => {
+    await seed()
+    const store = new FirestoreCostStore(db)
+    const first = allowed(await store.reserve('cache-user', { gemini: 1 }))
+    expect(await store.reserve('cache-user', { gemini: 1 })).toEqual({
+      kind: 'limited',
+      scope: 'uid',
+    })
+    await first.release()
+    expect(await store.reserve('cache-user', { gemini: 1 })).toEqual({
+      kind: 'limited',
+      scope: 'uid',
+    })
+    clockOffset += 1_000
+    await allowed(await store.reserve('cache-user', { gemini: 1 })).release()
+  })
+
   it('異なるクライアントからの並行要求でUID別・全体の同時枠を超えない', async () => {
     await seed()
     const first = new FirestoreCostStore(db)
@@ -187,6 +209,7 @@ describe('分散枠のFirestoreトランザクション', () => {
     const [person] = (await gate.collection('uids').get()).docs
     const lastMinute = person.readTime.toMillis() - 61_000
     await person.ref.update({ 'counts.storage.minute': [lastMinute] })
+    clockOffset += 1_000
     await allowed(await store.reserve('a', { reads: 1 })).release()
     await person.ref.update({ 'counts.storage.minute': [lastMinute] })
     expect(await store.reserve('a', { reads: 1 })).toEqual({ kind: 'limited', scope: 'uid' })
@@ -226,6 +249,7 @@ describe('分散枠のFirestoreトランザクション', () => {
     expect(await store.reserve(uid, { reads: 1 })).toEqual({ kind: 'limited', scope: 'uid' })
 
     await gate.update({ 'policy.enabled': false })
+    clockOffset += 1_000
     expect(await store.reserve(uid, { reads: 1 })).toEqual({ kind: 'unavailable' })
     expect((await gate.get()).get('leases')).toEqual([])
     await db.recursiveDelete(gate.collection('uids'))
