@@ -926,4 +926,67 @@ describe('候補生成サービスが一時的に利用できなくなった場�
     await user.click(approve())
     expect(apply).toHaveBeenCalledTimes(1)
   })
+
+  it('サービスが外れている間に結果不明の応答が届いても、戻った後に再送できない', async () => {
+    const user = userEvent.setup()
+    const pending = Promise.withResolvers<Awaited<ReturnType<ApplyRevision>>>()
+    const apply = vi.fn<ApplyRevision>().mockReturnValue(pending.promise)
+    const props = { apply }
+    const { rerender } = render(
+      <OnSiteReplanningFlow trip={sampleTrip} generate={propose} {...props} />,
+    )
+    await openCandidates(user, 'actual')
+    await user.click(approve())
+
+    rerender(<OnSiteReplanningFlow trip={sampleTrip} generate={undefined} {...props} />)
+    await act(async () => pending.resolve({ status: 'uncertain' }))
+    rerender(<OnSiteReplanningFlow trip={sampleTrip} generate={propose} {...props} />)
+
+    expect(screen.getByRole('table')).toBeTruthy()
+    expect(approve().getAttribute('aria-disabled')).toBe('true')
+    await user.click(approve())
+    expect(apply).toHaveBeenCalledTimes(1)
+    // 結果不明は、進行画面へ戻っても再計画を再開できない。
+    await user.click(screen.getByRole('button', { name: '旅程を確認' }))
+    await user.click(replanButton())
+    expect(screen.queryByRole('heading', { name: '現地の状況を報告する' })).toBeNull()
+  })
+
+  it('サービスが外れている間に適用成功の応答が届いた場合は、その結果を反映する', async () => {
+    const user = userEvent.setup()
+    const pending = Promise.withResolvers<Awaited<ReturnType<ApplyRevision>>>()
+    const apply = vi.fn<ApplyRevision>().mockReturnValue(pending.promise)
+    const onTripChange = vi.fn()
+    const props = { apply, onTripChange }
+    const { rerender } = render(
+      <OnSiteReplanningFlow trip={sampleTrip} generate={propose} {...props} />,
+    )
+    await openCandidates(user, 'actual')
+    await user.click(approve())
+
+    rerender(<OnSiteReplanningFlow trip={sampleTrip} generate={undefined} {...props} />)
+    await act(async () => pending.resolve({ status: 'applied', trip: savedTrip() }))
+
+    expect(onTripChange).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('table')).toBeNull()
+  })
+
+  it('サービスが外れている間に明確な失敗が届いたら、戻った後に新しい比較で再操作できる', async () => {
+    const user = userEvent.setup()
+    const pending = Promise.withResolvers<Awaited<ReturnType<ApplyRevision>>>()
+    const apply = vi.fn<ApplyRevision>().mockReturnValue(pending.promise)
+    const props = { apply }
+    const { rerender } = render(
+      <OnSiteReplanningFlow trip={sampleTrip} generate={propose} {...props} />,
+    )
+    await openCandidates(user, 'actual')
+    await user.click(approve())
+
+    rerender(<OnSiteReplanningFlow trip={sampleTrip} generate={undefined} {...props} />)
+    await act(async () => pending.resolve({ status: 'failed' }))
+    rerender(<OnSiteReplanningFlow trip={sampleTrip} generate={propose} {...props} />)
+
+    expect(screen.queryByRole('note')).toBeNull()
+    expect(apply).toHaveBeenCalledTimes(1)
+  })
 })
