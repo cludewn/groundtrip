@@ -5,7 +5,7 @@ import { createSessionScope } from '@/lib/auth/session-scope'
 import { bind, valueIn, type HeldSession } from './session-bound'
 
 const held = (uid: string, epoch: number): HeldSession => ({
-  scope: createSessionScope(uid),
+  scope: createSessionScope(uid, epoch),
   epoch,
 })
 

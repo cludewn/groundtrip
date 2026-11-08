@@ -64,7 +64,9 @@ export function ReflectionFlow({ initialTripId }: { initialTripId?: string }) {
   if (auth.status === 'authenticated' && (held === null || held.scope !== auth.scope)) {
     setHeld({ scope: auth.scope, epoch: auth.scopeEpoch })
   }
-  const sessionKey = held ? JSON.stringify([held.epoch, held.scope.uid]) : ''
+  const heldSessionKey = held ? JSON.stringify([held.epoch, held.scope.uid]) : ''
+  // Auth listener が世代を同期的に進めた時点で、React state更新を待たず古い内容を隠す。
+  const visibleHeld = held?.epoch === auth.scopeEpoch ? held : null
 
   const [tripsBound, setTripsBound] = useState<Bound<TripsPhase> | null>(null)
   const [tripsAttempt, setTripsAttempt] = useState(0)
@@ -88,18 +90,18 @@ export function ReflectionFlow({ initialTripId }: { initialTripId?: string }) {
   // セッションが変わったら、選択・確認待ち・読み直しを捨てる（描画中の状態調整）。
   // 取得済みの結果は、セッションと組で持つので、ここで消さなくても別のセッションの画面には見えない。
   const [lastSessionKey, setLastSessionKey] = useState('')
-  if (sessionKey !== lastSessionKey) {
-    setLastSessionKey(sessionKey)
+  if (heldSessionKey !== lastSessionKey) {
+    setLastSessionKey(heldSessionKey)
     setSelectedTripId(null)
     setPendingTripId(null)
     setReloadAttempt(0)
-    setSessionNotice(lastSessionKey !== '' && sessionKey !== '' ? SESSION_CHANGED_NOTICE : '')
+    setSessionNotice(lastSessionKey !== '' && heldSessionKey !== '' ? SESSION_CHANGED_NOTICE : '')
     // 認証済みのセッションが得られたので、それまでの認証の失敗は解消した。
-    if (sessionKey !== '') setBootError(null)
+    if (heldSessionKey !== '') setBootError(null)
   }
   useEffect(() => {
     approvedRef.current = NO_APPROVED
-  }, [sessionKey])
+  }, [heldSessionKey])
 
   const openSession = useCallback(async (newAccount: boolean) => {
     const request = ++bootRequestRef.current
@@ -129,62 +131,65 @@ export function ReflectionFlow({ initialTripId }: { initialTripId?: string }) {
 
   // 保存済みの旅行の取得。認証済みのセッションごとに、そのセッションのトークンで取得する。
   useEffect(() => {
-    if (!held) return
+    if (!visibleHeld) return
     const ticket = tripsGate.begin()
-    loadSavedTrips(held.scope, { signal: ticket.signal }).then(
+    loadSavedTrips(visibleHeld.scope, { signal: ticket.signal }).then(
       (list) => {
         if (!ticket.isCurrent()) return
         const warning = isCompleteList(list.listInfo, list.trips.length)
           ? ''
           : '一部の旅程を表示できません。保存データの状態を確認してください。'
-        setTripsBound(bind(held, { kind: 'ready', trips: list.trips, warning }))
+        setTripsBound(bind(visibleHeld, { kind: 'ready', trips: list.trips, warning }))
         if (initialTripId && list.trips.some((trip) => trip.id === initialTripId)) {
           setSelectedTripId(initialTripId)
         }
       },
       (error: unknown) => {
         if (!ticket.isCurrent()) return
-        setTripsBound(bind(held, { kind: 'error', message: userMessageOf(error) }))
+        setTripsBound(bind(visibleHeld, { kind: 'error', message: userMessageOf(error) }))
       },
     )
     return () => tripsGate.cancel()
-  }, [held, tripsAttempt, initialTripId, tripsGate])
+  }, [visibleHeld, tripsAttempt, initialTripId, tripsGate])
 
-  const trips = valueIn(tripsBound, held)
+  const trips = valueIn(tripsBound, visibleHeld)
   const tripsReady = trips?.kind === 'ready'
 
   // 選んだ旅行と変更履歴の取得。旅行を選び直したときは、古い応答を採用しない。
   useEffect(() => {
-    if (!held || !selectedTripId || !tripsReady) return
+    if (!visibleHeld || !selectedTripId || !tripsReady) return
     const tripId = selectedTripId
     const ticket = historyGate.begin()
-    setHistoryBound(bind(held, { tripId, kind: 'loading' }))
-    loadReflectionHistory(held.scope, tripId, { signal: ticket.signal }).then(
+    setHistoryBound(bind(visibleHeld, { tripId, kind: 'loading' }))
+    loadReflectionHistory(visibleHeld.scope, tripId, { signal: ticket.signal }).then(
       (history) => {
-        if (ticket.isCurrent()) setHistoryBound(bind(held, { tripId, kind: 'ready', history }))
+        if (ticket.isCurrent())
+          setHistoryBound(bind(visibleHeld, { tripId, kind: 'ready', history }))
       },
       (error: unknown) => {
         if (ticket.isCurrent()) {
-          setHistoryBound(bind(held, { tripId, kind: 'error', message: userMessageOf(error) }))
+          setHistoryBound(
+            bind(visibleHeld, { tripId, kind: 'error', message: userMessageOf(error) }),
+          )
         }
       },
     )
     return () => historyGate.cancel()
-  }, [held, selectedTripId, tripsReady, reloadAttempt, historyGate])
+  }, [visibleHeld, selectedTripId, tripsReady, reloadAttempt, historyGate])
 
-  const historyValue = valueIn(historyBound, held)
+  const historyValue = valueIn(historyBound, visibleHeld)
   const history = selectedTripId && historyValue?.tripId === selectedTripId ? historyValue : null
 
   // 保存済みの学びの取得。保存直後の再取得と重なっても、古い応答が新しい一覧を上書きしない。
   const refreshSaved = useCallback(async () => {
-    if (!held) return
+    if (!visibleHeld) return
     const ticket = savedGate.begin()
     try {
-      const result = await loadSavedLearnings(held.scope, { signal: ticket.signal })
+      const result = await loadSavedLearnings(visibleHeld.scope, { signal: ticket.signal })
       if (!ticket.isCurrent()) return
       setSavedBound(
         bind(
-          held,
+          visibleHeld,
           isCompleteList(result.listInfo, result.learnings.length)
             ? { kind: 'ready', list: result }
             : { kind: 'error', message: '保存済みの学びをすべて確認できませんでした。' },
@@ -192,25 +197,28 @@ export function ReflectionFlow({ initialTripId }: { initialTripId?: string }) {
       )
     } catch (error) {
       if (!ticket.isCurrent()) return
-      setSavedBound(bind(held, { kind: 'error', message: userMessageOf(error) }))
+      setSavedBound(bind(visibleHeld, { kind: 'error', message: userMessageOf(error) }))
     }
-  }, [held, savedGate])
+  }, [visibleHeld, savedGate])
   // セッションが変わるとき、画面を閉じるときは、進行中の取得を中止し、結果を採用しない。
-  useEffect(() => () => savedGate.cancel(), [held, savedGate])
+  useEffect(() => () => savedGate.cancel(), [visibleHeld, savedGate])
 
   const loadedTripId = history?.kind === 'ready' ? history.history.trip.id : null
   useEffect(() => {
     if (loadedTripId) void refreshSaved()
   }, [loadedTripId, refreshSaved])
 
-  const savedValue = valueIn(savedBound, held)
+  const savedValue = valueIn(savedBound, visibleHeld)
   const saved = savedValue?.kind === 'ready' ? savedValue.list : null
   const savedError = savedValue?.kind === 'error' ? savedValue.message : ''
 
   // 保存の相手は、画面が結び付いているセッション。セッションごとに作り直し、版の記憶も混ぜない。
   const store = useMemo(
-    () => (held ? createFirestoreLearningStore(held.scope, () => void refreshSaved()) : undefined),
-    [held, refreshSaved],
+    () =>
+      visibleHeld
+        ? createFirestoreLearningStore(visibleHeld.scope, () => void refreshSaved())
+        : undefined,
+    [visibleHeld, refreshSaved],
   )
 
   const handleApprovedChange = useCallback((approved: ApprovedLearning[]) => {

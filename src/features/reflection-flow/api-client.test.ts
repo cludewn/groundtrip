@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { sampleApprovedLearning, sampleRevision, sampleTrip } from '@/domain/samples'
 import { ClientAuthError } from '@/lib/auth/client'
 import {
-  createSessionScope,
+  captureSessionScope,
   SessionChangedError,
   type SessionScope,
 } from '@/lib/auth/session-scope'
@@ -55,10 +55,10 @@ const second = { ...sampleApprovedLearning, id: 'learning-second', content: '次
 const third = { ...sampleApprovedLearning, id: 'learning-third', content: '朝は早く出発する' }
 const entry = (learning: typeof first, version = 1): VersionedLearning => ({ version, learning })
 
-beforeEach(() => {
+beforeEach(async () => {
   fakeAuth.reset()
   fakeAuth.signInAs(A)
-  scope = createSessionScope(A)
+  scope = await captureSessionScope()
 })
 
 // 保存済みの学びがある1アカウントの疑似バックエンド。
@@ -164,15 +164,34 @@ describe('取得と保存は、取得したセッションに結び付く', () =
   })
 
   it.each(getters)(
-    '%s：応答を待つ間にUIDが変わったら、取得したデータを渡さない',
+    '%s：応答を待つ間にA→B→Aと切り替わったら、取得したデータを渡さない',
     async (_name, load) => {
       const backend = backendWith()
       backend.intercept(
         () => true,
         ({ proceed }) => {
           const response = proceed()
-          // 画面への通知より先に、Firebase側のUIDだけが変わる。
+          // 画面への通知より先にA→B→Aと切り替わる。UIDが元に戻っても古い世代は無効。
           fakeAuth.switchSilently(B)
+          fakeAuth.switchSilently(A)
+          return response
+        },
+        { always: true },
+      )
+      await expect(load(backend.fetchFn)).rejects.toBeInstanceOf(SessionChangedError)
+    },
+  )
+
+  it.each(getters)(
+    '%s：セッション終了後に同じUIDへ戻っても、古い応答を渡さない',
+    async (_name, load) => {
+      const backend = backendWith()
+      backend.intercept(
+        () => true,
+        ({ proceed }) => {
+          const response = proceed()
+          fakeAuth.endSession()
+          fakeAuth.signInAs(A)
           return response
         },
         { always: true },
@@ -904,7 +923,7 @@ describe('承認済み学びのFirestore保存', () => {
   describe('認証セッションとの結び付き', () => {
     it('保存の途中でUIDが変わったら、残りは送らず、新しいUIDのトークンでは何も送らない', async () => {
       const backend = createFakeBackend({ [A]: {}, [B]: {} })
-      // 1件目の送信を終えた後、2件目の送信の直前にUIDが変わる。
+      // 1件目のPOSTはサーバーで保存済みだが、応答を採用する前にUIDが変わる。
       backend.intercept(isApprove(first.id), ({ proceed }) => {
         const response = proceed()
         fakeAuth.switchSilently(B)
@@ -918,18 +937,19 @@ describe('承認済み学びのFirestore保存', () => {
       ])
       expect(result).toMatchObject({
         ok: false,
-        savedIds: [first.id],
-        unknownIds: [],
+        savedIds: [],
+        unknownIds: [first.id],
         retryable: false,
       })
       if (!result.ok) {
         expect(result.message).toContain('セッションが変わったため保存を中止しました')
-        expect(result.message).toContain('保存済み／未保存／結果不明を再確認してください')
+        expect(result.message).toContain('結果不明')
       }
       expect(backend.approveCalls()).toHaveLength(1)
       // 新しいUIDのトークンでは、何も送っていない。
       expect(backend.calls.some((call) => call.uid === B)).toBe(false)
       expect(backend.account(B).learnings.size).toBe(0)
+      expect(backend.account(A).learnings.has(first.id)).toBe(true)
       expect(onSaved).toHaveBeenCalledTimes(1)
     })
 
@@ -950,10 +970,14 @@ describe('承認済み学びのFirestore保存', () => {
         [B]: { learnings: [entry({ ...first, content: 'Bの学び' }, 7)] },
       })
       const storeA = createFirestoreLearningStore(scope, undefined, backend.fetchFn)
-      const storeB = createFirestoreLearningStore(createSessionScope(B), undefined, backend.fetchFn)
       // Aの版を確認した後、Bの画面で同じIDを保存しようとしても、Aの版は使われない。
       expect(await storeA.save([{ ...first, content: 'Aの学び' }])).toEqual({ ok: true })
       fakeAuth.signInAs(B)
+      const storeB = createFirestoreLearningStore(
+        await captureSessionScope(),
+        undefined,
+        backend.fetchFn,
+      )
       const result = await storeB.save([{ ...first, content: 'Bの新しい内容' }])
       // Bの学びは、Bの画面で確認した覚えがないので、上書きしない。
       expect(result).toMatchObject({ ok: false, retryable: false })

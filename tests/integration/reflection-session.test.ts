@@ -9,7 +9,7 @@ import { GET as listRevisions } from '@/app/api/trips/[tripId]/revisions/route'
 import { GET as getTrip } from '@/app/api/trips/[tripId]/route'
 import { GET as listTrips, POST as createTrip } from '@/app/api/trips/route'
 import { sampleApprovedLearning, sampleTrip } from '@/domain/samples'
-import { createSessionScope } from '@/lib/auth/session-scope'
+import { captureSessionScope } from '@/lib/auth/session-scope'
 import { LearningListResponseSchema } from '@/server/persistence/contracts'
 import { createFirestoreLearningStore } from '@/features/reflection-flow/api-client'
 
@@ -161,24 +161,18 @@ beforeEach(async () => {
   await Promise.all([saveTripFor(a), saveTripFor(b)])
 })
 
+const scopeFor = async (uid: string) => {
+  fakeAuth.signInAs(uid)
+  return captureSessionScope()
+}
+
 afterAll(async () => {
   await Promise.all(apps.map(deleteApp))
 })
 
 describe('振り返りの保存：セッション・結果不明・競合（Firestore Emulator＋認証済みRoute Handlers）', () => {
   it('AとBに同じTrip IDと同じLearning IDがあっても、保存先の版と内容を混同しない', async () => {
-    const storeA = createFirestoreLearningStore(
-      createSessionScope(a.uid),
-      undefined,
-      server.fetchFn,
-    )
-    const storeB = createFirestoreLearningStore(
-      createSessionScope(b.uid),
-      undefined,
-      server.fetchFn,
-    )
-
-    fakeAuth.signInAs(a.uid)
+    const storeA = createFirestoreLearningStore(await scopeFor(a.uid), undefined, server.fetchFn)
     expect(await storeA.save([learningOf('lrn-shared', 'Aの内容', SHARED_TRIP)])).toEqual({
       ok: true,
     })
@@ -186,7 +180,7 @@ describe('振り返りの保存：セッション・結果不明・競合（Fire
     expect(await storeA.save([learningOf('lrn-shared', 'Aの更新後の内容', SHARED_TRIP)])).toEqual({
       ok: true,
     })
-    fakeAuth.signInAs(b.uid)
+    const storeB = createFirestoreLearningStore(await scopeFor(b.uid), undefined, server.fetchFn)
     // Bには同じIDの学びがまだ無い。Aの版（2）を使わず、Bの保存先の版（初回＝0）で保存できる。
     expect(await storeB.save([learningOf('lrn-shared', 'Bの内容', SHARED_TRIP)])).toEqual({
       ok: true,
@@ -208,11 +202,7 @@ describe('振り返りの保存：セッション・結果不明・競合（Fire
   })
 
   it('Aのスコープのストアは、UIDがBに変わった後は何も送らず、Bの保存先に書き込まない', async () => {
-    const storeA = createFirestoreLearningStore(
-      createSessionScope(a.uid),
-      undefined,
-      server.fetchFn,
-    )
+    const storeA = createFirestoreLearningStore(await scopeFor(a.uid), undefined, server.fetchFn)
     fakeAuth.signInAs(b.uid)
 
     const result = await storeA.save([learningOf('lrn-a', 'Aの学び', SHARED_TRIP)])
@@ -224,12 +214,7 @@ describe('振り返りの保存：セッション・結果不明・競合（Fire
   })
 
   it('保存中にUIDが変わっても、残りは送らず、Bのトークンでは何も書き込まない', async () => {
-    const storeA = createFirestoreLearningStore(
-      createSessionScope(a.uid),
-      undefined,
-      server.fetchFn,
-    )
-    fakeAuth.signInAs(a.uid)
+    const storeA = createFirestoreLearningStore(await scopeFor(a.uid), undefined, server.fetchFn)
     // 1件目の保存が終わった直後に、認証済みのUIDがBへ変わる。
     server.around(isApprove('lrn-1'), async (_call, run) => {
       const response = await run()
@@ -245,8 +230,8 @@ describe('振り返りの保存：セッション・結果不明・競合（Fire
 
     expect(result).toMatchObject({
       ok: false,
-      savedIds: ['lrn-1'],
-      unknownIds: [],
+      savedIds: [],
+      unknownIds: ['lrn-1'],
       retryable: false,
     })
     if (!result.ok) {
@@ -260,8 +245,7 @@ describe('振り返りの保存：セッション・結果不明・競合（Fire
   })
 
   it('サーバーが確定した後に応答だけを失っても、取り直した一覧で保存済みと照合でき、再送しない', async () => {
-    const store = createFirestoreLearningStore(createSessionScope(a.uid), undefined, server.fetchFn)
-    fakeAuth.signInAs(a.uid)
+    const store = createFirestoreLearningStore(await scopeFor(a.uid), undefined, server.fetchFn)
     server.around(isApprove('lrn-2'), async (_call, run) => {
       // 書き込みは確定するが、応答は届かない。
       await run()
@@ -282,8 +266,7 @@ describe('振り返りの保存：セッション・結果不明・競合（Fire
   })
 
   it('確定後の応答喪失で取り直しも失敗したら結果不明。確認して保存し直しても二重に保存しない', async () => {
-    const store = createFirestoreLearningStore(createSessionScope(a.uid), undefined, server.fetchFn)
-    fakeAuth.signInAs(a.uid)
+    const store = createFirestoreLearningStore(await scopeFor(a.uid), undefined, server.fetchFn)
     server.around(isApprove('lrn-1'), async (_call, run) => {
       await run()
       throw new TypeError('offline')
@@ -307,8 +290,7 @@ describe('振り返りの保存：セッション・結果不明・競合（Fire
   })
 
   it('事前の一覧で保存済みだった学びが、保存の間に撤回されたら、保存済みと断定しない', async () => {
-    const store = createFirestoreLearningStore(createSessionScope(a.uid), undefined, server.fetchFn)
-    fakeAuth.signInAs(a.uid)
+    const store = createFirestoreLearningStore(await scopeFor(a.uid), undefined, server.fetchFn)
     expect(await store.save([learningOf('lrn-1', '1件目', SHARED_TRIP)])).toEqual({ ok: true })
     // 2件目の保存の直前に、別の端末が1件目の承認を撤回する（版1）。
     server.around(isApprove('lrn-2'), async (_call, run) => {
@@ -336,8 +318,7 @@ describe('振り返りの保存：セッション・結果不明・競合（Fire
   })
 
   it('別端末が学びを更新していたら、古い内容で上書きしない（取得時の版の不一致）', async () => {
-    const store = createFirestoreLearningStore(createSessionScope(a.uid), undefined, server.fetchFn)
-    fakeAuth.signInAs(a.uid)
+    const store = createFirestoreLearningStore(await scopeFor(a.uid), undefined, server.fetchFn)
     expect(await store.save([learningOf('lrn-1', '最初の内容', SHARED_TRIP)])).toEqual({ ok: true })
     // 別の端末が、同じ学びを版1から更新する。
     const other = await approveLearning(
@@ -363,8 +344,7 @@ describe('振り返りの保存：セッション・結果不明・競合（Fire
   })
 
   it('取得とPOSTの間に別端末が更新したら、サーバーの版の検査で止まり、上書きしない。取得時の版は#53の版付き契約どおり', async () => {
-    const store = createFirestoreLearningStore(createSessionScope(a.uid), undefined, server.fetchFn)
-    fakeAuth.signInAs(a.uid)
+    const store = createFirestoreLearningStore(await scopeFor(a.uid), undefined, server.fetchFn)
     expect(await store.save([learningOf('lrn-1', '最初の内容', SHARED_TRIP)])).toEqual({ ok: true })
     server.around(isApprove('lrn-1'), async (_call, run) => {
       await approveLearning(

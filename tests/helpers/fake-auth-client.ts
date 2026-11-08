@@ -15,10 +15,10 @@ import { vi } from 'vitest'
 
 type AuthUser = { uid: string; isAnonymous: boolean }
 type AuthStateLike =
-  | { status: 'restoring' }
-  | { status: 'session_ended'; error: Error }
-  | { status: 'authenticated'; user: AuthUser }
-  | { status: 'error'; error: Error }
+  | { status: 'restoring'; sessionGeneration: number }
+  | { status: 'session_ended'; error: Error; sessionGeneration: number }
+  | { status: 'authenticated'; user: AuthUser; sessionGeneration: number }
+  | { status: 'error'; error: Error; sessionGeneration: number }
 type ErrorClass = new (code: 'session_ended' | 'unavailable') => Error
 
 export const tokenOf = (uid: string) => `token-of-${uid}`
@@ -30,6 +30,7 @@ export const uidOfToken = (header: string | null) => {
 function createFakeAuth() {
   let ErrorClassRef: ErrorClass | undefined
   let uid: string | null = null
+  let generation = 0
   const listeners = new Set<(state: AuthStateLike) => void>()
   const issued: Array<{ uid: string; token: string }> = []
 
@@ -45,7 +46,9 @@ function createFakeAuth() {
   }
 
   const authenticated = (): AuthStateLike =>
-    uid ? { status: 'authenticated', user: { uid, isAnonymous: true } } : { status: 'restoring' }
+    uid
+      ? { status: 'authenticated', user: { uid, isAnonymous: true }, sessionGeneration: generation }
+      : { status: 'restoring', sessionGeneration: generation }
   const notify = (next: AuthStateLike) => listeners.forEach((listener) => listener(next))
 
   const fail = (code: 'session_ended' | 'unavailable') => {
@@ -56,7 +59,7 @@ function createFakeAuth() {
   const client = {
     observeAuthState: vi.fn((listener: (state: AuthStateLike) => void) => {
       listeners.add(listener)
-      listener({ status: 'restoring' })
+      listener({ status: 'restoring', sessionGeneration: generation })
       if (uid) listener(authenticated())
       return () => {
         listeners.delete(listener)
@@ -65,7 +68,7 @@ function createFakeAuth() {
     getAuthSnapshot: vi.fn(async () => {
       state.onSnapshot?.(client.getAuthSnapshot.mock.calls.length)
       if (!uid) throw fail('session_ended')
-      const snapshot = { uid, token: state.tokenFor?.(uid) ?? tokenOf(uid) }
+      const snapshot = { uid, token: state.tokenFor?.(uid) ?? tokenOf(uid), generation }
       issued.push(snapshot)
       return snapshot
     }),
@@ -94,11 +97,13 @@ function createFakeAuth() {
     },
     /** 指定のUIDでサインインし、購読者へ通知する（別のUIDへの切り替えにも使う）。 */
     signInAs(next: string) {
+      if (uid !== next) generation += 1
       uid = next
       notify(authenticated())
     },
     /** Firebase側のUIDだけを切り替え、購読者へは通知しない（通知より先に変わる場合の再現）。 */
     switchSilently(next: string | null) {
+      if (uid !== next) generation += 1
       uid = next
     },
     /** 購読者へ、いまの状態を通知する。 */
@@ -107,15 +112,21 @@ function createFakeAuth() {
     },
     /** サインアウト（セッション終了）。購読者へ通知する。 */
     endSession() {
+      if (uid !== null) generation += 1
       uid = null
-      notify({ status: 'session_ended', error: fail('session_ended') })
+      notify({
+        status: 'session_ended',
+        error: fail('session_ended'),
+        sessionGeneration: generation,
+      })
     },
     /** 認証の確認中に戻す（UIDは変えない）。 */
     restoring() {
-      notify({ status: 'restoring' })
+      notify({ status: 'restoring', sessionGeneration: generation })
     },
     reset() {
       uid = null
+      generation = 0
       listeners.clear()
       issued.length = 0
       state.restoredUid = 'user-1'

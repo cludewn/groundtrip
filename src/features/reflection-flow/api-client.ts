@@ -10,9 +10,8 @@ import {
 } from '@/domain'
 import { ClientAuthError } from '@/lib/auth/client'
 import {
-  captureSessionScope,
+  assertCurrentSessionScope,
   getAuthHeadersForScope,
-  isSameScope,
   SessionChangedError,
   type SessionScope,
 } from '@/lib/auth/session-scope'
@@ -206,6 +205,9 @@ async function authorizedJson<T>(
     // 送信した後に応答を得られなかった。サーバーが処理を終えている可能性がある。
     throw new ReflectionApiError(INTERRUPTED_MESSAGE, undefined, undefined, 'unknown')
   }
+  // 応答を採用する直前にも、要求を開始したUser世代が続いているか確認する。
+  // POST後に世代が変わっていた場合、サーバー側で保存済みの可能性があるため結果不明。
+  await assertCurrentSessionScope(scope, method === 'POST' ? 'unknown' : 'not_sent')
   if (signal?.aborted)
     throw new ReflectionApiError(INTERRUPTED_MESSAGE, undefined, undefined, 'unknown')
 
@@ -228,12 +230,6 @@ async function authorizedJson<T>(
   const parsed = schema.safeParse(json)
   if (!parsed.success) {
     throw new ReflectionApiError(INVALID_RESPONSE_MESSAGE, response.status, undefined, 'unknown')
-  }
-  if (method === 'GET') {
-    // 応答を待つ間にUIDが変わっていたら、取得したデータを渡さない（別のUIDの画面へ反映させない）。
-    // 現在のUIDはFirebaseから直接読み直す。画面側の通知より早く変わっても検出できる。
-    const current = await captureSessionScope()
-    if (!isSameScope(scope, current)) throw new SessionChangedError()
   }
   return parsed.data
 }
@@ -372,7 +368,8 @@ function describeSaveFailure(error: unknown, state: SaveState): SaveFailure {
 // 送信の結果が確定しているか。想定外の例外は、送信の有無を言い切れないので結果不明とする。
 function deliveryOf(error: unknown): DeliveryOutcome {
   if (error instanceof ReflectionApiError) return error.outcome
-  if (error instanceof SessionChangedError || error instanceof ClientAuthError) return 'not_sent'
+  if (error instanceof SessionChangedError) return error.outcome
+  if (error instanceof ClientAuthError) return 'not_sent'
   return 'unknown'
 }
 

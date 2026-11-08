@@ -817,12 +817,29 @@ describe('ReflectionFlow：取得・編集・保存を同じ認証セッショ�
     expect(alert).toBeTruthy()
     expect(screen.getByRole('button', { name: '新しい利用を始める' })).toBeTruthy()
     const before = backend.calls.length
-    await user.click(saveButton())
-    await screen.findByText(/^保存できませんでした。/)
+    expect(screen.queryByRole('heading', { name: /承認済みの学び/ })).toBeNull()
+    expect(
+      screen.queryByRole('button', { name: /保存する|保存しています|保存済みか確認して/ }),
+    ).toBeNull()
     expect(approvePosts(backend)).toHaveLength(0)
     expect(backend.calls.length).toBe(before)
     expect(fakeAuth.client.startNewAnonymousSession).not.toHaveBeenCalled()
-    expect(saveStatus()).toContain('未保存です')
+  })
+
+  it('セッション終了後に同じUIDへ戻っても、前世代の承認内容を再表示しない', async () => {
+    setupBackend()
+    const user = userEvent.setup()
+    render(<ReflectionFlow />)
+    await prepare(user, /京都市/)
+    expect(screen.getByRole('heading', { name: /承認済みの学び（2件）/ })).toBeTruthy()
+
+    await act(async () => {
+      fakeAuth.endSession()
+      fakeAuth.signInAs(A)
+    })
+
+    await screen.findByRole('button', { name: /京都市/ })
+    expect(screen.queryByRole('heading', { name: /承認済みの学び/ })).toBeNull()
   })
 })
 
