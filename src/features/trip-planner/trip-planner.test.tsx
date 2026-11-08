@@ -95,7 +95,6 @@ describe('TripPlanner: 生成の成功', () => {
       timeZone: 'Asia/Tokyo',
       preferences: ['ゆっくり歩きたい', '抹茶を食べたい'],
       fixedStops: [],
-      learnings: [],
     })
     // 結果の見出しへフォーカスが移る。
     expect(document.activeElement).toBe(heading)

@@ -7,6 +7,10 @@ export type ApiErrorStatus =
   | 'unsupported_media_type'
   | 'payload_too_large'
   | 'internal_error'
+  // 選んだ学びが変更・撤回された（409）。選び直しを案内する。
+  | 'selection_changed'
+  // 保存済みの学びを確認できない（503）。機能停止（service_unavailable）とは区別し、学びを使わずに作る道を案内する。
+  | 'learnings_unavailable'
 
 export interface ApiErrorBody {
   status: ApiErrorStatus

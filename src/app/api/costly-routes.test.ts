@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { sampleGenerateTripRequest, sampleReviseTripRequest, sampleTrip } from '@/domain/samples'
+import { sampleReviseTripRequest, sampleTrip } from '@/domain/samples'
+
+import { sampleGenerateTripBody } from '../../../tests/helpers/generate-request'
 
 import { POST as candidates } from './learnings/candidates/route'
 import { POST as generate } from './trips/generate/route'
@@ -38,7 +40,7 @@ const privateDetails = 'private UID, API key and SDK diagnostics'
 const authHeader = `Bearer ${token}`
 
 const routes = [
-  ['/api/trips/generate', 'TRIP_GENERATION_ENABLED', generate, sampleGenerateTripRequest],
+  ['/api/trips/generate', 'TRIP_GENERATION_ENABLED', generate, sampleGenerateTripBody()],
   ['/api/trips/verify', 'TRIP_VERIFICATION_ENABLED', verify, { trip: sampleTrip }],
   ['/api/trips/revise', 'TRIP_REVISION_ENABLED', revise, sampleReviseTripRequest],
   [
