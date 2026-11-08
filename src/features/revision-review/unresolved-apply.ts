@@ -13,9 +13,7 @@ const PendingSchema = z.strictObject({
 
 export type UnresolvedApply = Readonly<z.infer<typeof PendingSchema>>
 export type UnresolvedApplyState =
-  | { status: 'clear' }
-  | { status: 'pending'; value: UnresolvedApply }
-  | { status: 'unavailable' }
+  { status: 'clear' } | { status: 'pending'; value: UnresolvedApply } | { status: 'unavailable' }
 
 export function unresolvedApplyStorageKey(ownerUid: string, tripId: string): string {
   return STORAGE_PREFIX + encodeURIComponent(ownerUid) + ':' + encodeURIComponent(tripId)
