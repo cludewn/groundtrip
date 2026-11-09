@@ -21,6 +21,7 @@ interface TripRouteViewProps {
   onTripChange?: (trip: Trip) => Trip | void
   // 部分修正を始める（候補の比較・承認は部分修正の機能の責務）。未指定なら修正の操作は出さない。
   onStartRevision?: (stopId: string) => void
+  revisionUnavailableReason?: string
 }
 
 // 旅程の一覧（路線図）の表示と、予定の選択・固定の切り替え。
@@ -37,6 +38,7 @@ export function TripRouteView({
   appliedStopId,
   onTripChange,
   onStartRevision,
+  revisionUnavailableReason,
 }: TripRouteViewProps) {
   const [trip, setTrip] = useState(tripProp)
   const [lastProp, setLastProp] = useState(tripProp)
@@ -156,6 +158,7 @@ export function TripRouteView({
           segment={segmentEvidence(trip.stops, selectedIndex)}
           kind={routeStopKind(selected, meta?.[selected.id])}
           onStartRevision={onStartRevision}
+          revisionUnavailableReason={revisionUnavailableReason}
           onToggleFixed={toggleFixed}
           onClose={closeSheet}
         />

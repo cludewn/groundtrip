@@ -207,7 +207,7 @@ export function OnSiteReportForm({
       style={rootStyle}
       className={`mx-auto w-full max-w-xl rounded-xl border-2 border-(--of-edge) bg-(--of-paper) p-4 text-base text-(--of-ink) ${wrapClass}`}
     >
-      <h2 id={id('heading')} className="text-lg font-semibold">
+      <h2 id={id('heading')} className="gt-screen-title">
         現地の状況を報告する
       </h2>
       <p className="mt-1 text-sm text-(--of-muted)">

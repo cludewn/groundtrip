@@ -31,6 +31,7 @@ interface StopSheetProps {
   kind?: StopKind
   // 部分修正を始める。未提供なら、修正の操作は表示しない（未実装の操作を見せない）。
   onStartRevision?: (stopId: string) => void
+  revisionUnavailableReason?: string
   onToggleFixed: (stopId: string, fixed: boolean) => void
   onClose: () => void
 }
@@ -48,6 +49,7 @@ export function StopSheet({
   closing,
   onExited,
   onStartRevision,
+  revisionUnavailableReason,
   onToggleFixed,
   onClose,
 }: StopSheetProps) {
@@ -323,7 +325,7 @@ export function StopSheet({
               >
                 {stop.isFixed ? '固定を解除する' : 'この予定を固定する'}
               </button>
-              {onStartRevision && (
+              {onStartRevision && stop.kind !== 'transport' && (
                 <button
                   type="button"
                   disabled={stop.isFixed}
@@ -334,6 +336,11 @@ export function StopSheet({
                 </button>
               )}
             </div>
+            {stop.kind === 'transport' ? (
+              <p className="text-sm text-gt-muted">乗車・乗換は部分修正の対象外です。</p>
+            ) : !stop.isFixed && !onStartRevision && revisionUnavailableReason ? (
+              <p className="text-sm text-gt-muted">{revisionUnavailableReason}</p>
+            ) : null}
           </div>
         </div>
       </section>

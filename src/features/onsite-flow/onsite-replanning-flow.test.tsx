@@ -150,6 +150,7 @@ const openCandidates = async (
   await goToLunch(user)
   await submitReport(user, kind, preset)
   await user.click(screen.getByRole('button', { name: '変更候補を探す' }))
+  await user.click(await screen.findByRole('button', { name: '変更内容を確認する' }))
   await screen.findByRole('table')
 }
 
@@ -237,6 +238,7 @@ describe('現地報告から再計画', () => {
     await submitReport(user, 'simulated')
     expect(screen.getByText(/デモ用の想定です。現地で実際に起きたことではありません/)).toBeTruthy()
     await user.click(screen.getByRole('button', { name: '変更候補を探す' }))
+    await user.click(await screen.findByRole('button', { name: '変更内容を確認する' }))
     await screen.findByRole('table')
     expect(generate.mock.calls[0][0].context).toEqual({
       phase: 'on_site',
