@@ -665,7 +665,9 @@ describe('認証＋App Check＋分散枠を通る実Route', () => {
     expect(generateJson).toHaveBeenCalledTimes(1)
     expect(verifyAppCheck).toHaveBeenCalledBefore(generateJson)
 
-    expect((await listTrips(request('/api/trips'))).status).toBe(200)
+    const currentClientRequest = request('/api/trips')
+    currentClientRequest.headers.set(LEARNING_TRIP_HEADER, LEARNING_TRIP_PROTOCOL)
+    expect((await listTrips(currentClientRequest)).status).toBe(200)
     const snapshot = await gate.get()
     expect(snapshot.get('reserved')).toMatchObject({ gemini: 1, reads: 21 })
     expect(snapshot.get('leases')).toEqual([])
