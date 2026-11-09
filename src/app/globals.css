@@ -293,6 +293,29 @@ body:has(main [data-flow-header]:not([hidden] *)) main {
     radial-gradient(circle at left 26%, transparent 5px, #000 5.5px),
     radial-gradient(circle at left 74%, transparent 5px, #000 5.5px);
   mask-composite: intersect;
+  flex-wrap: wrap;
+}
+
+/* Base structure remains available to RouteMap recovery views outside the ticket paper. */
+.gt-itinerary-stop-card {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: stretch;
+  border: 1px solid var(--gt-rule);
+  border-radius: 8px;
+  background-color: var(--gt-paper);
+  color: var(--gt-ink);
+}
+
+.gt-itinerary-stop-content {
+  min-width: 0;
+  flex: 1 1 0%;
+  padding: 12px 14px;
+}
+
+.gt-itinerary-stub {
+  display: none;
 }
 
 /* Ticket styling is confined to the real itinerary route, not shared route previews. */
@@ -304,12 +327,7 @@ body:has(main [data-flow-header]:not([hidden] *)) main {
 }
 
 .gt-itinerary-route .gt-itinerary-stop-card {
-  display: flex;
-  width: 100%;
-  min-width: 0;
-  align-items: stretch;
-  border: 1px solid var(--gt-itinerary-rule);
-  border-radius: 8px;
+  border-color: var(--gt-itinerary-rule);
   background-color: var(--gt-itinerary-paper);
   background-image:
     repeating-linear-gradient(135deg, var(--gt-itinerary-pattern) 0 1px, transparent 1px 7px),
@@ -317,7 +335,6 @@ body:has(main [data-flow-header]:not([hidden] *)) main {
   box-shadow:
     0 1px 2px rgb(0 0 0 / 14%),
     0 5px 12px rgb(0 0 0 / 6%);
-  color: var(--gt-ink);
 }
 
 .gt-itinerary-route .gt-itinerary-stop-card[data-kind='meal'] {
@@ -329,19 +346,12 @@ body:has(main [data-flow-header]:not([hidden] *)) main {
 }
 
 .gt-itinerary-route .gt-food-ticket {
-  flex-wrap: wrap;
   mask-image: none;
 }
 
 .gt-itinerary-route .gt-itinerary-stop-card:focus-visible {
   outline: 2px solid var(--gt-preview);
   outline-offset: 2px;
-}
-
-.gt-itinerary-route .gt-itinerary-stop-content {
-  min-width: 0;
-  flex: 1 1 0%;
-  padding: 12px 14px;
 }
 
 .gt-itinerary-route .gt-itinerary-stub {
