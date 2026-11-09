@@ -32,6 +32,9 @@ it('候補のGoogle由来の根拠を本人報告や模擬情報と分けて帰�
     },
   }
   render(<CandidateComparison trip={sampleTrip} revision={revision} label="候補A" />)
+  const summary = screen.getByRole('group', { name: '候補のGoogle Maps照合' })
+  expect(within(summary).getByRole('img', { name: 'Google Maps' })).toBeTruthy()
+  expect(summary.textContent).not.toContain('模擬情報')
   const box = screen.getByRole('group', {
     name: 'Google Maps Platformで確認した内容',
     hidden: true,
