@@ -246,6 +246,11 @@ export function HomePlanner({
 
   return (
     <>
+      {statusContent && (
+        <div className="mx-auto w-full max-w-xl px-4 pt-2" data-session-status>
+          {statusContent}
+        </div>
+      )}
       {showDiscoveryHome ? (
         <div hidden={journeyVisible} data-discovery-active={!journeyVisible ? 'true' : undefined}>
           <DiscoveryHome
@@ -260,7 +265,6 @@ export function HomePlanner({
             onOpenTrips={() => openHomeMode('bookmarks')}
             onOpenRecords={() => openHomeMode('records')}
             onCreate={createFromDiscovery}
-            statusContent={statusContent}
             bookmarksContent={
               <SavedTripChooser
                 key={`${session.discard}:${chooserSeq}:bookmarks`}

@@ -13,6 +13,7 @@ async function mockJourney(
   context: BrowserContext,
   initialSavedTrips: (typeof trip)[] = [],
   onGenerate: () => void = () => {},
+  activateDemoMarker = false,
 ) {
   const uid = 'journey-history-fixture'
   const now = Math.floor(Date.now() / 1000)
@@ -24,7 +25,8 @@ async function mockJourney(
   ].join('.')
 
   // SDKのHTTP境界だけを差し替えて、アプリの認証状態とルーターを実際に動かす。
-  await context.addInitScript(() => {
+  await context.addInitScript((isDemo) => {
+    if (isDemo) sessionStorage.setItem('groundtrip-demo-session', 'fixture-demo')
     let completed: () => void
     const enterprise = {
       ready: (start: () => void) => start(),
@@ -38,7 +40,7 @@ async function mockJourney(
       },
     }
     Object.assign(window, { grecaptcha: { enterprise } })
-  })
+  }, activateDemoMarker)
   await context.route('https://www.google.com/recaptcha/**', (route) => route.fulfill({ body: '' }))
   await context.route('https://content-firebaseappcheck.googleapis.com/**', (route) =>
     route.fulfill({ json: { token: 'fixture-app-check', ttl: '3600s' } }),
@@ -140,7 +142,7 @@ test('利用規約からホームへ進み、旅程とホームをBack／Forward
   context,
   page,
 }) => {
-  const saveAttempts = await mockJourney(context)
+  const saveAttempts = await mockJourney(context, [], undefined, true)
   await page.goto('/access#ticket=' + 'a'.repeat(43))
   await page.waitForURL('/welcome')
   await page.getByRole('button', { name: '旅をはじめる' }).click()
@@ -151,6 +153,12 @@ test('利用規約からホームへ進み、旅程とホームをBack／Forward
   const logo = page.getByRole('link', { name: 'GroundTrip ホーム' })
   await logo.click()
   await page.waitForURL('/')
+  const sessionStatus = page.locator('[data-session-status]')
+  await expect(sessionStatus).toBeVisible()
+  await expect(sessionStatus).toHaveCount(1)
+  await expect(sessionStatus.getByRole('note')).toContainText(
+    'デモの旅程・学び・利用枠は共有されます',
+  )
   const input = page.getByLabel('旅行先（必須）')
   await page.getByRole('button', { name: /城と歴史/ }).click()
   await page.getByRole('button', { name: '旅の条件へ進む' }).click()
@@ -159,6 +167,11 @@ test('利用規約からホームへ進み、旅程とホームをBack／Forward
   await page.getByRole('button', { name: '旅程を作成する' }).click()
   const journey = page.getByRole('heading', { name: '旅程の提案', exact: true })
   await expect(journey).toBeVisible()
+  await expect(sessionStatus).toBeVisible()
+  await expect(sessionStatus).toHaveCount(1)
+  await expect(sessionStatus.getByRole('note')).toContainText(
+    'デモの旅程・学び・利用枠は共有されます',
+  )
   const historyMarker = await page.evaluate(() => JSON.stringify(history.state.groundTripJourney))
   expect(historyMarker).not.toContain(trip.id)
   expect(historyMarker).not.toContain('京都市')

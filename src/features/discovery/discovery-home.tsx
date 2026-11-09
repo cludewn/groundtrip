@@ -19,7 +19,6 @@ interface DiscoveryHomeProps {
   onOpenTrips: () => void
   onOpenRecords: () => void
   onCreate: (draft: DiscoveryDraft) => void
-  statusContent?: ReactNode
   bookmarksContent?: ReactNode
   recordsContent?: ReactNode
   createContent?: ReactNode
@@ -33,7 +32,6 @@ export function DiscoveryHome({
   onOpenTrips,
   onOpenRecords,
   onCreate,
-  statusContent,
   bookmarksContent,
   recordsContent,
   createContent,
@@ -220,7 +218,6 @@ export function DiscoveryHome({
       <section hidden={mode !== 'bookmarks'} className="min-h-[55vh] space-y-4 pb-24">
         <h1 className="gt-screen-title">しおり</h1>
         <p className="text-sm text-gt-muted">自分で保存した旅程を開けます。</p>
-        {mode === 'bookmarks' && statusContent}
         {bookmarksContent}
       </section>
 
@@ -229,7 +226,6 @@ export function DiscoveryHome({
         <p className="text-sm text-gt-muted">
           保存した旅を振り返り、次の旅に活かす学びを確認できます。
         </p>
-        {mode === 'records' && statusContent}
         {mode === 'records' && recordsContent}
       </section>
 
@@ -237,7 +233,6 @@ export function DiscoveryHome({
         <button type="button" onClick={onOpenHome} className="gt-button-secondary">
           写真から探す
         </button>
-        {mode === 'create' && statusContent}
         {createContent}
       </section>
 
