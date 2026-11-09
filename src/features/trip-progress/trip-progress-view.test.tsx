@@ -182,10 +182,10 @@ describe('進む・戻る', () => {
     expect(within(currentCard()).getByText('14時の予約展示（架空）')).toBeTruthy()
   })
 
-  it('ボタンのタップ領域は44px以上（min-h-11）', () => {
+  it('進行ボタンに44px以上の最小高さを指定する', () => {
     render(<TripProgressView trip={sampleTrip} onReplan={() => undefined} />)
     for (const button of screen.getAllByRole('button')) {
-      expect(button.className).toContain('min-h-11')
+      expect(button.className).toMatch(/min-h-\[(46|52)px\]/)
     }
   })
 })
@@ -213,12 +213,12 @@ describe('縦の路線：状態を色だけに頼らず示す', () => {
     ])
   })
 
-  it('訪問済みにはチェックの印、先の予定には番号が付く（形でも区別できる）', async () => {
+  it('訪問済みはチェック、進行中は番号、固定の後続予定は鍵で示す', async () => {
     render(<TripProgressView trip={sampleTrip} initialIndex={1} />)
     const [visited, current, upcoming] = routeItems()
     expect(visited.querySelector('svg path[d^="M5 12.5"]')).not.toBeNull()
     expect(current.textContent).toContain('2')
-    expect(upcoming.textContent).toContain('3')
+    expect(upcoming.querySelector('svg rect')).not.toBeNull()
     expect(upcoming.querySelector('svg path[d^="M5 12.5"]')).toBeNull()
   })
 })

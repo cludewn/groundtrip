@@ -1,6 +1,9 @@
 import type { ConstraintCheck, Revision, Stop, Trip } from '@/domain'
 
-import { GoogleMapsSourceBox } from '@/features/legal/google-maps-attribution'
+import {
+  GoogleMapsAttribution,
+  GoogleMapsSourceBox,
+} from '@/features/legal/google-maps-attribution'
 import {
   EvidenceDetail,
   StatusBadge,
@@ -138,9 +141,14 @@ function TravelValue({
     </>
   )
   return segment?.status === 'known' && segment.source.kind === 'routes' ? (
-    <GoogleMapsSourceBox caption="Google Mapsの移動時間" compact>
-      {content}
-    </GoogleMapsSourceBox>
+    <div
+      role="group"
+      aria-label="Google Mapsの移動時間"
+      className="rounded border border-[#5e5e5e] bg-white px-[3px] py-1 text-gt-ink"
+    >
+      <div>{content}</div>
+      <GoogleMapsAttribution />
+    </div>
   ) : (
     content
   )
@@ -239,20 +247,26 @@ export function CandidatePreviewSummary({
   trip,
   revision,
   comparison,
+  showSchedule = true,
 }: {
   trip: Trip
   revision: Revision
   comparison?: TravelComparison
+  showSchedule?: boolean
 }) {
   const { after } = revision.diff
   const index = trip.stops.findIndex(({ id }) => id === revision.targetStopId)
   const fixedStops = trip.stops.filter(({ isFixed }) => isFixed)
   return (
-    <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
-      <dt className="font-semibold">時刻・滞在</dt>
-      <dd>
-        {after.plannedStartTime}〜{endTime(after)}（{after.durationMinutes}分）
-      </dd>
+    <dl className="grid grid-cols-[minmax(0,32%)_minmax(0,1fr)] gap-x-3 gap-y-2 text-sm wrap-anywhere">
+      {showSchedule && (
+        <>
+          <dt className="font-semibold">時刻・滞在</dt>
+          <dd>
+            {after.plannedStartTime}〜{endTime(after)}（{after.durationMinutes}分）
+          </dd>
+        </>
+      )}
       <dt className="font-semibold">前の予定から</dt>
       <dd>
         {index === 0 ? (
@@ -269,23 +283,27 @@ export function CandidatePreviewSummary({
           <TravelValue slot={comparison?.after.toNext} inline showCheckedAt={false} />
         )}
       </dd>
-      <dt className="font-semibold">固定予定</dt>
-      <dd>
-        {fixedStops.length ? (
-          <>
-            <p>場所・時刻を維持</p>
-            <ul className="text-gt-muted">
-              {fixedStops.map((stop) => (
-                <li key={stop.id}>
-                  {stop.plannedStartTime} {stop.name}
-                </li>
-              ))}
-            </ul>
-          </>
-        ) : (
-          '固定予定なし'
-        )}
-      </dd>
+      {showSchedule && (
+        <>
+          <dt className="font-semibold">固定予定</dt>
+          <dd>
+            {fixedStops.length ? (
+              <>
+                <p>場所・時刻を維持</p>
+                <ul className="text-gt-muted">
+                  {fixedStops.map((stop) => (
+                    <li key={stop.id}>
+                      {stop.plannedStartTime} {stop.name}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            ) : (
+              '固定予定なし'
+            )}
+          </dd>
+        </>
+      )}
     </dl>
   )
 }
@@ -342,7 +360,39 @@ export function CandidateComparison({
   ]
   return (
     <div className="gt-enter space-y-4">
-      <section aria-label="予定への影響" className="space-y-2 border-t border-gt-rule pt-4">
+      <div className="overflow-hidden rounded-[14px] border border-gt-rule">
+        <table className="w-full table-fixed border-collapse text-left text-xs leading-relaxed wrap-anywhere">
+          <caption className="sr-only">現在の予定と選択中の候補の差分</caption>
+          <thead>
+            <tr>
+              <th scope="col" className="w-[20%] px-[5px] py-2">
+                項目
+              </th>
+              <th scope="col" className="w-[40%] px-[5px] py-2">
+                変更前
+              </th>
+              <th scope="col" className="px-[5px] py-2 text-gt-preview">
+                {label}
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.label} className="border-t border-gt-rule bg-gt-paper">
+                <th scope="row" className="px-[5px] py-2 align-top text-xs text-gt-muted">
+                  {row.label}
+                </th>
+                <td className="px-[5px] py-2 align-top">{row.before}</td>
+                <td className="bg-gt-preview-bg/50 px-[5px] py-2 align-top font-semibold text-gt-preview">
+                  {row.after}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <section aria-label="予定への影響" className="gt-card space-y-2">
         <div className="flex flex-wrap items-center gap-2">
           <h4 className="font-bold">予定への影響</h4>
           <ConstraintBadge status={revision.constraintCheck.status} />
@@ -377,34 +427,7 @@ export function CandidateComparison({
           <p className="text-sm text-gt-muted">この旅程に固定予定はありません。</p>
         )}
       </section>
-      <table className="w-full table-fixed border-collapse text-left text-sm leading-relaxed wrap-anywhere">
-        <caption className="sr-only">現在の予定と選択中の候補の差分</caption>
-        <thead>
-          <tr>
-            <th scope="col" className="w-[26%] p-1.5">
-              項目
-            </th>
-            <th scope="col" className="w-[37%] p-1.5">
-              今の予定
-            </th>
-            <th scope="col" className="p-1.5 text-gt-preview">
-              {label}
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => (
-            <tr key={row.label} className="border-t border-gt-rule">
-              <th scope="row" className="p-1.5 align-top text-sm">
-                {row.label}
-              </th>
-              <td className="p-1.5 align-top">{row.before}</td>
-              <td className="p-1.5 align-top">{row.after}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <section className="space-y-2 border-t border-gt-rule pt-3" aria-label="根拠と照合日時">
+      <section className="gt-card space-y-2" aria-label="根拠と照合日時">
         <details>
           <summary className="min-h-11 cursor-pointer py-2.5 font-semibold">
             根拠・情報源を見る
@@ -415,6 +438,9 @@ export function CandidateComparison({
           </div>
         </details>
       </section>
+      <p className="rounded-xl border border-gt-unk/50 bg-gt-unk-bg p-2.5 text-xs font-semibold text-gt-unk">
+        ⓘ 整合は、現実の正しさの保証ではありません。
+      </p>
     </div>
   )
 }

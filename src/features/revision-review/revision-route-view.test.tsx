@@ -119,6 +119,48 @@ const approvalDisabled = () => approve().getAttribute('aria-disabled') === 'true
 const tableInConfirmation = () => within(screen.getByRole('table'))
 
 describe('部分修正の候補比較', () => {
+  it('チケットの比較ボタンから開き、食事の希望を既存の修正理由として送る', async () => {
+    const user = userEvent.setup()
+    const generate = vi
+      .fn<GenerateRevisions>()
+      .mockResolvedValue({ status: 'no_candidates', message: '候補がありません' })
+    render(<RevisionRouteTest trip={trip} meta={meta} generate={generate} />)
+
+    await user.click(screen.getByRole('button', { name: 'この予定だけ変更して比較' }))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    await user.type(screen.getByLabelText('修正理由（必須）'), '店内が静かな場所がよい')
+    await user.type(screen.getByLabelText('希望条件（任意）'), '温かい麺')
+    await user.click(screen.getByRole('button', { name: /^早い/ }))
+    expect(screen.getByLabelText<HTMLTextAreaElement>('修正理由（任意）').value).toBe(
+      '店内が静かな場所がよい',
+    )
+    await user.click(screen.getByRole('button', { name: '変更候補を探す' }))
+
+    expect(generate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetStopId: target.id,
+        reason: '移動時間を短くしたい\n店内が静かな場所がよい\n希望条件：温かい麺',
+      }),
+      expect.any(AbortSignal),
+    )
+  })
+
+  it('おまかせのボタンは理由の手入力なしで既存の候補生成へ進む', async () => {
+    const user = userEvent.setup()
+    const generate = vi
+      .fn<GenerateRevisions>()
+      .mockResolvedValue({ status: 'no_candidates', message: '候補がありません' })
+    render(<RevisionRouteTest trip={trip} meta={meta} generate={generate} />)
+
+    await open(user)
+    await user.click(screen.getByRole('button', { name: 'こだわらない（おまかせで探す）' }))
+
+    expect(generate).toHaveBeenCalledWith(
+      expect.objectContaining({ targetStopId: target.id, reason: 'おまかせで別の場所を探したい' }),
+      expect.any(AbortSignal),
+    )
+  })
+
   it('非固定の乗車・乗換は旅行前の部分修正の対象外にする', async () => {
     const user = userEvent.setup()
     const generate = vi.fn<GenerateRevisions>()
@@ -175,7 +217,7 @@ describe('部分修正の候補比較', () => {
     expect(
       route().getByText(trip.stops[2].name).closest('[data-variant]')?.querySelector('svg'),
     ).toBeTruthy()
-    expect(route().getByText('営業時間：確認できない')).toBeTruthy()
+    expect(route().getByText('変更は未適用')).toBeTruthy()
     await user.click(await screen.findByRole('button', { name: '変更内容を確認する' }))
     const table = within(await screen.findByRole('table'))
     const scope = () => within(screen.getByRole('region', { name: '予定への影響' }))
@@ -373,7 +415,7 @@ describe('部分修正の候補比較', () => {
     expect(screen.getByLabelText<HTMLTextAreaElement>('修正理由（必須）').value).toBe('店が休み')
   })
 
-  it('待機中にTabでキャンセルへ移ると、502の後もEnterで再送信しない', async () => {
+  it('待機中にTabでキャンセル操作へ移ると、502の後もEnterで再送信しない', async () => {
     const user = userEvent.setup()
     const pending = Promise.withResolvers<Response>()
     const fetchFn = vi.fn<typeof fetch>().mockReturnValue(pending.promise)
@@ -384,9 +426,12 @@ describe('部分修正の候補比較', () => {
     await open(user)
     expect(container.querySelector('[role="status"][aria-atomic="true"]')).toBe(liveRegion)
     await request(user)
-    const cancel = screen.getByRole('button', { name: 'キャンセル' })
     await user.tab({ shift: document.activeElement !== document.body })
-    expect(document.activeElement).toBe(cancel)
+    const cancel = document.activeElement
+    expect([
+      screen.getByRole('button', { name: '部分修正を閉じる' }),
+      screen.getByRole('button', { name: 'キャンセル' }),
+    ]).toContain(cancel)
 
     await act(async () =>
       pending.resolve(

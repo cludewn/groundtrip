@@ -41,7 +41,7 @@ const submitReport = async (
   )
   await user.click(
     screen.getByRole('button', {
-      name: kind === 'actual' ? '実際の報告として送る' : '模擬報告として送る',
+      name: kind === 'actual' ? '実際の報告で候補検索へ' : '模擬報告で候補検索へ',
     }),
   )
 }
@@ -766,14 +766,14 @@ describe('報告の入力中に対象の予定が変わった場合', () => {
       // 対象を選ばないまま送ろうとしても、別の予定への報告にはならない。
       await user.click(screen.getByRole('radio', { name: closedPreset }))
       await user.click(screen.getByRole('radio', { name: /いまの現地の状況（実際の報告）/ }))
-      await user.click(screen.getByRole('button', { name: '実際の報告として送る' }))
+      await user.click(screen.getByRole('button', { name: '実際の報告で候補検索へ' }))
       expect(screen.getByText(/どの予定の状況かを選んでください/)).toBeTruthy()
       expect(screen.queryByRole('button', { name: '変更候補を探す' })).toBeNull()
       expect(generate).not.toHaveBeenCalled()
 
       // 利用者が対象を選び直せば、その予定として進められる。
       await user.click(screen.getByRole('radio', { name: /カフェC（架空）/ }))
-      await user.click(screen.getByRole('button', { name: '実際の報告として送る' }))
+      await user.click(screen.getByRole('button', { name: '実際の報告で候補検索へ' }))
       await user.click(screen.getByRole('button', { name: '変更候補を探す' }))
       await waitFor(() => expect(generate).toHaveBeenCalledTimes(1))
       expect(generate.mock.calls[0][0].targetStopId).toBe('stop-cafe')
