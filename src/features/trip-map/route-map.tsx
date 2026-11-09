@@ -125,7 +125,7 @@ function SegmentLabel({
   }
   return (
     <p
-      className={`mt-2 flex flex-wrap items-center gap-1.5 text-xs text-gt-muted ${travelEvidence && segment?.status !== 'known' ? 'rounded border border-[#5E5E5E] bg-white p-1' : ''}`}
+      className={`mt-2 flex flex-wrap items-center gap-1.5 text-xs text-gt-muted ${travelEvidence ? 'rounded border border-[#5E5E5E] bg-white p-1' : ''}`}
     >
       <svg
         width="12"
@@ -141,7 +141,7 @@ function SegmentLabel({
         <path d="M12 4v15M6 13l6 6 6-6" />
       </svg>
       <span>{text}</span>
-      {travelEvidence && segment?.status !== 'known' && <GoogleMapsAttribution />}
+      {travelEvidence && <GoogleMapsAttribution />}
     </p>
   )
 }
