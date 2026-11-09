@@ -141,7 +141,7 @@ test('写真テーマから下書きを続け、Back／Forwardと3つのホー�
 test('利用規約からホームへ進み、旅程とホームをBack／Forwardで往復して再開できる', async ({
   context,
   page,
-}) => {
+}, testInfo) => {
   const saveAttempts = await mockJourney(context, [], undefined, true)
   await page.goto('/access#ticket=' + 'a'.repeat(43))
   await page.waitForURL('/welcome')
@@ -172,6 +172,7 @@ test('利用規約からホームへ進み、旅程とホームをBack／Forward
   await expect(sessionStatus.getByRole('note')).toContainText(
     'デモの旅程・学び・利用枠は共有されます',
   )
+  await page.screenshot({ path: testInfo.outputPath('itinerary.png'), fullPage: true })
   const historyMarker = await page.evaluate(() => JSON.stringify(history.state.groundTripJourney))
   expect(historyMarker).not.toContain(trip.id)
   expect(historyMarker).not.toContain('京都市')
