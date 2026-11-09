@@ -22,6 +22,8 @@ import { createFakeBackend, isListLearnings } from '../../../tests/helpers/fake-
 
 import { fromTripDocument, toTripDocument } from '@/server/persistence/dto'
 import { documentKey } from '@/server/persistence/paths'
+import { generateTrip } from '@/server/trip-generation/generate-trip'
+import { GenerateTripHttpRequestSchema } from '@/server/trip-generation/http-request'
 
 import { HomePlanner } from './home-planner'
 
@@ -192,7 +194,7 @@ function setup(
   const backend = createFakeBackend(accounts, { candidates })
   const generateCalls: GenerateCall[] = []
   const state = {
-    generate: (): Response => json({ status: 'proposed', trip: generatedTrip }),
+    generate: (): Response | Promise<Response> => json({ status: 'proposed', trip: generatedTrip }),
     verifyCalls: 0,
   }
   const fetchFn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -303,6 +305,97 @@ afterEach(() => {
 })
 
 describe('トップ画面の通し導線：生成→照合→保存→現地報告→修正の採用', () => {
+  it('生成した食事をチケットで表示し、照合・固定・保存・再読込でも種別を維持する', async () => {
+    const { backend, generateCalls, state } = setup()
+    const generateJson = vi.fn().mockResolvedValue(
+      JSON.stringify({
+        failure: null,
+        stops: [
+          {
+            fixedStopId: null,
+            name: '庭園',
+            kind: 'sight',
+            plannedStartTime: '10:00',
+            durationMinutes: 60,
+          },
+          {
+            fixedStopId: null,
+            name: '鴨川食堂',
+            kind: 'meal',
+            plannedStartTime: '12:00',
+            durationMinutes: 75,
+          },
+          {
+            fixedStopId: null,
+            name: '喫茶室（種別未指定）',
+            plannedStartTime: '14:00',
+            durationMinutes: 60,
+          },
+        ],
+        learningApplications: [],
+      }),
+    )
+    state.generate = async () => {
+      const { learningSelections, ...conditions } = GenerateTripHttpRequestSchema.parse(
+        generateCalls.at(-1)?.body,
+      )
+      expect(learningSelections).toEqual([])
+      const result = await generateTrip(
+        { ...conditions, learnings: [] },
+        { client: { generateJson } },
+      )
+      return json(result, result.status === 'proposed' ? 200 : 422)
+    }
+    backend.intercept(
+      (call) => call.method === 'POST' && call.path === '/api/trips',
+      ({ call }) => {
+        const input = TripSchema.parse(call.body)
+        const saved = fromTripDocument(toTripDocument({ uid: A }, input), documentKey(input.id))
+        backend.account(A).trips.push(saved)
+        return json({ trip: saved }, 201)
+      },
+    )
+
+    const user = userEvent.setup()
+    const first = renderHome()
+    const card = (name: RegExp) =>
+      within(screen.getByRole('list', { name: '旅程の路線図' })).getByRole('button', { name })
+    const meal = () => card(/鴨川食堂/)
+    await generate(user)
+    expect(generateJson).toHaveBeenCalledOnce()
+    expect(meal().dataset.variant).toBe('ticket')
+    expect(meal().textContent).toContain('12:00〜13:15・75分')
+    expect(meal().textContent).toContain('未照合')
+    expect(card(/庭園/).dataset.variant).toBe('station')
+    expect(card(/喫茶室/).dataset.variant).toBe('station')
+
+    await verify(user)
+    expect(meal().dataset.variant).toBe('ticket')
+    await user.click(meal())
+    await user.click(
+      within(screen.getByRole('dialog')).getByRole('button', { name: 'この予定を固定する' }),
+    )
+    await user.keyboard('{Escape}')
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(meal().textContent).toContain('固定予定')
+    expect(meal().dataset.variant).toBe('ticket')
+    await saveTripFromScreen(user)
+    expect(backend.account(A).trips[0].stops.map(({ kind }) => kind)).toEqual([
+      'sight',
+      'meal',
+      undefined,
+    ])
+    expect(backend.account(A).trips[0].stops[1]).toMatchObject({ isFixed: true, evidence: [] })
+
+    first.unmount()
+    renderHome()
+    await user.click(screen.getByRole('button', { name: '保存した旅程で旅行を続ける' }))
+    await user.click(await screen.findByRole('button', { name: new RegExp(REGION) }))
+    expect(meal().dataset.variant).toBe('ticket')
+    expect(meal().textContent).toContain('固定予定')
+    expect(card(/喫茶室/).dataset.variant).toBe('station')
+  })
+
   it('未保存で固定して解除しても、保存や部分修正を解禁しない', async () => {
     const { backend } = setup()
     const user = userEvent.setup()

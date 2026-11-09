@@ -145,6 +145,9 @@ export function TripRouteView({
       <p className="mt-3 text-sm text-gt-muted empty:hidden">{!selected && notice?.message}</p>
       <p className="mt-2 text-sm text-gt-muted">
         路線図は旅の順番を表すもので、実際の地図ではありません。
+        {!mock && trip.stops.some((stop) => stop.kind !== undefined) && (
+          <>AIが提案した予定の種別は旅程上の分類です。照合結果は各予定の根拠に表示します。</>
+        )}
       </p>
       {selected && (
         <StopSheet
