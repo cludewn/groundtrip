@@ -213,13 +213,23 @@ describe('縦の路線：状態を色だけに頼らず示す', () => {
     ])
   })
 
-  it('訪問済みはチェック、進行中は番号、固定の後続予定は鍵で示す', async () => {
+  it('固定予定は進行状態が変わっても駅番号と鍵を別々に表示する', async () => {
     render(<TripProgressView trip={sampleTrip} initialIndex={1} />)
     const [visited, current, upcoming] = routeItems()
-    expect(visited.querySelector('svg path[d^="M5 12.5"]')).not.toBeNull()
-    expect(current.textContent).toContain('2')
-    expect(upcoming.querySelector('svg rect')).not.toBeNull()
-    expect(upcoming.querySelector('svg path[d^="M5 12.5"]')).toBeNull()
+    const stationNumber = (row: HTMLElement) => row.querySelector('[data-station-number]')
+    const fixedMark = (row: HTMLElement) => row.querySelector('[data-fixed-mark]')
+
+    expect(stationNumber(visited)?.textContent).toBe('1')
+    expect(stationNumber(current)?.textContent).toBe('2')
+    expect(stationNumber(upcoming)?.textContent).toBe('3')
+    expect(stationNumber(upcoming)?.nextElementSibling).toBe(fixedMark(upcoming))
+    expect(fixedMark(visited)?.querySelector('svg')).not.toBeNull()
+    expect(fixedMark(current)).toBeNull()
+
+    await userEvent.setup().click(screen.getByRole('button', { name: '次の予定へ進む' }))
+    expect(stationNumber(upcoming)?.textContent).toBe('3')
+    expect(stationNumber(upcoming)?.nextElementSibling).toBe(fixedMark(upcoming))
+    expect(checkMark(current)).not.toBeNull()
   })
 })
 

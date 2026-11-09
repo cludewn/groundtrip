@@ -318,18 +318,22 @@ function Route({ stops, currentIndex }: { stops: readonly Stop[]; currentIndex: 
                 className={`absolute -bottom-px left-[14px] top-6 w-[6px] rounded-full ${progress === 'visited' ? 'bg-gt-rail/60' : 'bg-gt-line'}`}
               />
             )}
-            <span
-              aria-hidden="true"
-              className={`relative z-10 ml-1 grid size-[26px] place-items-center rounded-full border-[3px] text-[11px] font-bold ${stop.isFixed && progress === 'upcoming' ? 'border-gt-ink bg-gt-ink text-white' : nodeStyles[progress]}`}
-            >
-              {progress === 'visited' ? (
-                <CheckIcon size={14} />
-              ) : stop.isFixed ? (
-                <LockIcon size={13} />
-              ) : (
-                index + 1
+            <div aria-hidden="true" className="relative z-10 flex items-start gap-[3px] pl-[4px]">
+              <span
+                data-station-number={stop.isFixed || progress !== 'visited' ? '' : undefined}
+                className={`grid size-[26px] shrink-0 place-items-center rounded-full border-[3px] text-[11px] font-bold ${nodeStyles[progress]}`}
+              >
+                {progress === 'visited' && !stop.isFixed ? <CheckIcon size={14} /> : index + 1}
+              </span>
+              {stop.isFixed && (
+                <span
+                  data-fixed-mark
+                  className="mt-[6px] grid size-[14px] shrink-0 place-items-center rounded bg-gt-ink text-white"
+                >
+                  <LockIcon size={10} />
+                </span>
               )}
-            </span>
+            </div>
             <div className={`${wrapClass} ${progress === 'visited' ? 'text-gt-muted' : ''}`}>
               <p className="text-xs font-semibold text-gt-muted">
                 {stop.plannedStartTime}

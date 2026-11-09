@@ -852,12 +852,6 @@ export function RevisionReview({
               <span className="block text-xs text-gt-muted">{target.plannedStartTime}の予定</span>
               {target.name} → <strong>{candidate.diff.after.name}</strong>
             </p>
-            <CandidatePreviewSummary
-              trip={trip}
-              revision={candidate}
-              comparison={comparison}
-              showSchedule={false}
-            />
           </section>
           <section className="gt-card space-y-2 rounded-[14px] border-2 border-gt-rail bg-[#ecebe5] p-3.5">
             <h3 className="flex items-center gap-1.5 text-sm font-bold">
@@ -884,17 +878,27 @@ export function RevisionReview({
                 ))}
             </ul>
           </section>
+          <CandidateComparison
+            trip={trip}
+            revision={candidate}
+            label={label}
+            comparison={comparison}
+            compact
+          />
           <footer className="space-y-2 pb-[max(8px,env(safe-area-inset-bottom))]">
             {applyFailure && (
               <div role="alert" className="gt-notice gt-enter font-semibold" data-tone="error">
                 {applyMessages[applyFailure.status]} {applyFailure.message}
               </div>
             )}
-            <aside className="space-y-1 rounded-[14px] border border-gt-unk/60 bg-gt-unk-bg p-3 text-sm text-gt-unk">
-              <h3 className="font-bold">確認の範囲</h3>
-              <p>臨時休業・混雑・渋滞・遅延は確認の対象外です。</p>
-              {approvalNote && <p id={`${id}-approval-note`}>{approvalNote}</p>}
-            </aside>
+            {approvalNote && (
+              <p
+                id={`${id}-approval-note`}
+                className="rounded-[14px] border border-gt-unk/60 bg-gt-unk-bg p-3 text-sm text-gt-unk"
+              >
+                {approvalNote}
+              </p>
+            )}
             <div className="grid gap-2.5">
               <button
                 type="button"
@@ -920,12 +924,6 @@ export function RevisionReview({
               変更する前に、固定予定や時刻の条件をサーバーでもう一度確認します。
             </p>
           </footer>
-          <CandidateComparison
-            trip={trip}
-            revision={candidate}
-            label={label}
-            comparison={comparison}
-          />
           {canReviewConditions && (
             <button
               type="button"
