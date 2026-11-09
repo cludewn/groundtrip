@@ -1,5 +1,6 @@
 import type { ConstraintCheck, Revision, Stop, Trip } from '@/domain'
 
+import { GoogleMapsSourceBox } from '@/features/legal/google-maps-attribution'
 import {
   EvidenceDetail,
   StatusBadge,
@@ -69,7 +70,7 @@ function TravelValue({
   const segment = slot?.segment
   const simulated = segment?.status === 'known' && segment.source.kind === 'simulation'
   const checkedAt = segment?.checkedAt && checkedAtFormat.format(new Date(segment.checkedAt))
-  return (
+  const content = (
     <>
       {!segment ? (
         '移動時間は未取得'
@@ -99,6 +100,11 @@ function TravelValue({
         </span>
       )}
     </>
+  )
+  return segment?.status === 'known' && segment.source.kind === 'routes' ? (
+    <GoogleMapsSourceBox caption="Google Mapsの移動時間">{content}</GoogleMapsSourceBox>
+  ) : (
+    content
   )
 }
 
@@ -150,11 +156,28 @@ function VerificationScope({
 }
 
 function StopEvidence({ stop, label }: { stop: Stop; label: string }) {
+  const google = stop.evidence.filter(
+    ({ source }) => source.kind === 'places' || source.kind === 'routes',
+  )
+  const other = stop.evidence.filter(
+    ({ source }) => source.kind !== 'places' && source.kind !== 'routes',
+  )
   return (
     <div className="space-y-1">
       <h4 className="text-sm font-bold">{label}</h4>
       {stop.evidence.length ? (
-        stop.evidence.map((evidence) => <EvidenceDetail key={evidence.id} evidence={evidence} />)
+        <>
+          {other.map((evidence) => (
+            <EvidenceDetail key={evidence.id} evidence={evidence} />
+          ))}
+          {google.length > 0 && (
+            <GoogleMapsSourceBox caption="Google Maps Platformで確認した内容">
+              {google.map((evidence) => (
+                <EvidenceDetail key={evidence.id} evidence={evidence} />
+              ))}
+            </GoogleMapsSourceBox>
+          )}
+        </>
       ) : (
         <UnverifiedBadge />
       )}
