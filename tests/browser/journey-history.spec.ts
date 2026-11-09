@@ -9,7 +9,11 @@ const trip = {
 }
 const listInfo = { returned: 0, skippedInvalid: 0, truncated: false }
 
-async function mockJourney(context: BrowserContext, initialSavedTrips: (typeof trip)[] = []) {
+async function mockJourney(
+  context: BrowserContext,
+  initialSavedTrips: (typeof trip)[] = [],
+  onGenerate: () => void = () => {},
+) {
   const uid = 'journey-history-fixture'
   const now = Math.floor(Date.now() / 1000)
   const encode = (value: object) => Buffer.from(JSON.stringify(value)).toString('base64url')
@@ -65,7 +69,10 @@ async function mockJourney(context: BrowserContext, initialSavedTrips: (typeof t
     const path = new URL(request.url()).pathname
     if (path === '/api/access/exchange')
       return route.fulfill({ json: { customToken: 'fixture.custom.token' } })
-    if (path === '/api/trips/generate') return route.fulfill({ json: { status: 'proposed', trip } })
+    if (path === '/api/trips/generate') {
+      onGenerate()
+      return route.fulfill({ json: { status: 'proposed', trip } })
+    }
     if (path === '/api/learnings') return route.fulfill({ json: { learnings: [], listInfo } })
     if (path === '/api/trips' && request.method() === 'POST') {
       saveAttempts += 1
@@ -90,7 +97,46 @@ async function mockJourney(context: BrowserContext, initialSavedTrips: (typeof t
 
 test.use({ viewport: { width: 390, height: 900 } })
 
-test('利用規約からホームへ進み、生成後のロゴ操作をBack／Forwardでたどる', async ({
+test('写真テーマから下書きを続け、Back／Forwardと3つのホーム導線で入力を保つ', async ({
+  context,
+  page,
+}) => {
+  let generationRequests = 0
+  await mockJourney(context, [], () => generationRequests++)
+  await page.goto('/access#ticket=' + 'a'.repeat(43))
+  await page.waitForURL('/welcome')
+  await page.getByRole('button', { name: '旅をはじめる' }).click()
+  await page.waitForURL('/')
+
+  const hero = page.getByRole('button', { name: '名古屋城の写真をテーマに選ぶ' })
+  await hero.click()
+  await expect(hero).toHaveAttribute('aria-pressed', 'true')
+  const hope = page.getByLabel('旅の希望（任意）')
+  await hope.fill('ゆっくり歩きたい')
+  await page.getByRole('button', { name: '旅の条件へ進む' }).click()
+  const region = page.getByLabel('旅行先（必須）')
+  await expect(region).toHaveValue('名古屋市')
+  await page.getByLabel('日付（必須）').fill('2026-11-14')
+
+  await page.goBack()
+  await expect(hope).toHaveValue('ゆっくり歩きたい')
+  await page.goForward()
+  await expect(region).toHaveValue('名古屋市')
+  await expect(page.getByLabel('日付（必須）')).toHaveValue('2026-11-14')
+
+  await page.getByRole('button', { name: 'ホーム' }).click()
+  await page.getByRole('button', { name: 'しおり' }).click()
+  await expect(page.getByRole('heading', { name: 'しおり' })).toBeVisible()
+  await page.goBack()
+  await expect(hope).toHaveValue('ゆっくり歩きたい')
+  await page.getByRole('button', { name: '記録' }).click()
+  await expect(page.getByRole('heading', { name: '記録' })).toBeVisible()
+  await page.getByRole('button', { name: 'ホーム' }).click()
+  await expect(hope).toHaveValue('ゆっくり歩きたい')
+  expect(generationRequests).toBe(0)
+})
+
+test('利用規約からホームへ進み、旅程とホームをBack／Forwardで往復して再開できる', async ({
   context,
   page,
 }) => {
@@ -106,6 +152,8 @@ test('利用規約からホームへ進み、生成後のロゴ操作をBack／F
   await logo.click()
   await page.waitForURL('/')
   const input = page.getByLabel('旅行先（必須）')
+  await page.getByRole('button', { name: /城と歴史/ }).click()
+  await page.getByRole('button', { name: '旅の条件へ進む' }).click()
   await input.fill('京都市')
   await page.getByLabel('日付（必須）').fill(trip.date)
   await page.getByRole('button', { name: '旅程を作成する' }).click()
@@ -115,17 +163,16 @@ test('利用規約からホームへ進み、生成後のロゴ操作をBack／F
   expect(historyMarker).not.toContain(trip.id)
   expect(historyMarker).not.toContain('京都市')
   await logo.click()
-  await expect(input).toHaveValue('京都市')
+  const resumeTrip = page.getByRole('button', { name: /現在の旅程を開く/ })
+  await expect(resumeTrip).toContainText('京都市')
 
   await page.goBack()
   await expect(journey).toBeVisible()
   await page.goForward()
-  await expect(input).toBeVisible()
+  await expect(resumeTrip).toBeVisible()
   await expect(input).toHaveValue('京都市')
-  await page.getByRole('button', { name: '旅程へ戻る', exact: true }).click()
+  await resumeTrip.click()
   await expect(journey).toBeVisible()
-  await page.goForward()
-  await expect(input).toBeVisible()
   expect(saveAttempts()).toBe(0)
 })
 
@@ -138,6 +185,7 @@ test('保存済み旅程の最終予定と振り返りを往復し、入力と�
   await page.waitForURL('/welcome')
   await page.getByRole('button', { name: '旅をはじめる' }).click()
   await page.waitForURL('/')
+  await page.getByRole('button', { name: 'しおり' }).click()
   await page.getByRole('button', { name: '保存した旅程で旅行を続ける' }).click()
   await page.getByRole('button').filter({ hasText: trip.region }).click()
 
