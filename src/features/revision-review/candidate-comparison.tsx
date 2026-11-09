@@ -102,7 +102,9 @@ function TravelValue({
     </>
   )
   return segment?.status === 'known' && segment.source.kind === 'routes' ? (
-    <GoogleMapsSourceBox caption="Google Mapsの移動時間">{content}</GoogleMapsSourceBox>
+    <GoogleMapsSourceBox caption="Google Mapsの移動時間" compact>
+      {content}
+    </GoogleMapsSourceBox>
   ) : (
     content
   )

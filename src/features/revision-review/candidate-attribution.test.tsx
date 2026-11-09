@@ -36,7 +36,7 @@ it('候補のGoogle由来の根拠を本人報告や模擬情報と分けて帰�
     name: 'Google Maps Platformで確認した内容',
     hidden: true,
   })
-  expect(within(box).getByText('Google Maps')).toBeTruthy()
+  expect(within(box).getByRole('img', { name: 'Google Maps', hidden: true })).toBeTruthy()
   expect(box.textContent).not.toContain('模擬情報')
 })
 
