@@ -46,7 +46,7 @@ export function WelcomeScreen() {
       />
 
       <div className="relative z-10 flex min-h-dvh w-full max-w-3xl flex-col items-center justify-between px-5 pt-[max(1.5rem,env(safe-area-inset-top))] pb-[max(1.5rem,env(safe-area-inset-bottom))] text-center sm:px-8">
-        <div className="drop-shadow-[0_1px_5px_rgb(255_255_255/75%)]">
+        <div className="self-end drop-shadow-[0_1px_5px_rgb(255_255_255/75%)]">
           <Image
             src="/brand/groundtrip-logo.png"
             alt="GroundTrip"
