@@ -18,6 +18,7 @@ import {
   type ApplyRevision,
   type GenerateRevisions,
 } from '@/features/revision-review/api-client'
+import type { LearningSaveUnavailable } from '@/features/trip-save/learning-save-availability'
 import { TripSavePanel, type SaveTrip } from '@/features/trip-save/trip-save-panel'
 import type { FinishTripAction } from '@/features/trip-progress/trip-progress-view'
 import { getProtectedApiHeadersForScope } from '@/lib/auth/protected-api'
@@ -40,6 +41,9 @@ interface TripJourneyProps {
   generateRevisions?: GenerateRevisions
   applyRevision?: ApplyRevision
   saveTrip?: SaveTrip
+  learningSaveProof?: string
+  placeSaveProof?: string
+  learningSaveUnavailable?: LearningSaveUnavailable
   initialSavedTrip?: Trip
   learningSummary?: ReactNode
   verificationPanel: ReactNode
@@ -120,6 +124,9 @@ export function TripJourney({
   generateRevisions,
   applyRevision,
   saveTrip,
+  learningSaveProof,
+  placeSaveProof,
+  learningSaveUnavailable,
   initialSavedTrip,
   learningSummary,
   verificationPanel,
@@ -132,7 +139,6 @@ export function TripJourney({
 }: TripJourneyProps) {
   const [savedTrip, setSavedTrip] = useState<Trip | null>(initialSavedTrip ?? null)
   const isSavedCurrent = savedTrip !== null && sameSavedTrip(trip, savedTrip)
-  const learningPreventsSaving = !savedTrip && trip.learningApplications.length > 0
   const persistence = useMemo(
     () =>
       scope
@@ -215,13 +221,11 @@ export function TripJourney({
     savedTrip && isSavedCurrent && scope
       ? { onFinish: (event) => openReflection(event.currentTarget) }
       : {
-          unavailableReason: learningPreventsSaving
-            ? '学びを使って作った旅程は現在保存できません。振り返りを使うには、学びを選ばずに旅程を作り直して保存してください。'
-            : !savedTrip
-              ? '振り返りには旅程の保存が必要です。「旅行前の旅程へ戻る」から保存してください。'
-              : !isSavedCurrent
-                ? '現在の旅程は保存時点と異なります。「保存済みの旅程へ戻す」を選ぶと振り返れます。'
-                : '認証の状態を確認できません。認証の確認が済んでから操作してください。',
+          unavailableReason: !savedTrip
+            ? '振り返りには旅程の保存が必要です。「旅行前の旅程へ戻る」から保存してください。'
+            : !isSavedCurrent
+              ? '現在の旅程は保存時点と異なります。「保存済みの旅程へ戻す」を選ぶと振り返れます。'
+              : '認証の状態を確認できません。認証の確認が済んでから操作してください。',
         }
 
   return (
@@ -291,22 +295,14 @@ export function TripJourney({
       <div hidden={screen !== 'before'} className="space-y-4">
         {!savedTrip && (
           <div className="gt-journey-chrome gt-card space-y-2 text-sm">
-            {learningPreventsSaving ? (
-              <p>
-                学びを使って作った旅程は現在保存できません。保存するには、学びを選ばずに旅程を作り直してください。
-              </p>
-            ) : (
-              <>
-                <p>旅程を保存すると、部分修正・現地での再計画・旅行後の振り返りが使えます。</p>
-                <button
-                  type="button"
-                  className="gt-button-secondary"
-                  onClick={() => savePanel.current?.focus()}
-                >
-                  旅程の保存へ
-                </button>
-              </>
-            )}
+            <p>旅程を保存すると、部分修正・現地での再計画・旅行後の振り返りが使えます。</p>
+            <button
+              type="button"
+              className="gt-button-secondary"
+              onClick={() => savePanel.current?.focus()}
+            >
+              旅程の保存へ
+            </button>
           </div>
         )}
         <RevisionRouteView
@@ -335,12 +331,11 @@ export function TripJourney({
                 trip={trip}
                 scope={scope}
                 save={saveTrip}
+                learningSaveProof={learningSaveProof}
+                learningSaveUnavailable={learningSaveUnavailable}
+                placeSaveProof={placeSaveProof}
+                onEditInput={onEditInput}
                 panelRef={savePanel}
-                saveBlockedReason={
-                  learningPreventsSaving
-                    ? 'この旅程には学びの反映記録があるため、現在の保存機能では保存できません。'
-                    : undefined
-                }
                 onSaved={setSavedTrip}
                 onRestore={
                   savedTrip && !isSavedCurrent ? () => adoptTripChange(savedTrip) : undefined
@@ -363,9 +358,7 @@ export function TripJourney({
             <p>
               {savedTrip
                 ? '現地で再計画するには、保存済みの旅程へ戻してください。'
-                : learningPreventsSaving
-                  ? '学びを使って作った旅程は現在保存できないため、現地での再計画は利用できません。'
-                  : '現地で再計画するには、旅行前の画面で旅程を保存してください。'}
+                : '現地で再計画するには、旅行前の画面で旅程を保存してください。'}
             </p>
             {savedTrip ? (
               <button
