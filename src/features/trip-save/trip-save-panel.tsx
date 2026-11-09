@@ -1,6 +1,6 @@
 'use client'
 
-import { useRef, useState } from 'react'
+import { useRef, useState, type Ref } from 'react'
 
 import type { Trip } from '@/domain'
 import { sameSavedTrip } from '@/features/onsite-flow/saved-snapshot'
@@ -19,7 +19,7 @@ type SaveState =
 const AUTH_MESSAGE = '認証の状態を確認できないため、保存を始めませんでした。旅程はそのままです。'
 
 // 旅程を保存して振り返りに進むための、本人の操作。保存は利用者が押したときだけ行う。
-// ボタンは常に押せる。保存中の再押下は無視し、認証を確認できないときは理由を示す。
+// 保存不可が確定している場合は事前に無効化する。保存中の再押下は無視する。
 export function TripSavePanel({
   trip,
   scope,
@@ -29,6 +29,8 @@ export function TripSavePanel({
   onReflect,
   onRestore,
   initialSavedTrip,
+  panelRef,
+  saveBlockedReason,
 }: {
   trip: Trip
   // 認証済みのセッション。なければ保存を始めない。
@@ -36,10 +38,13 @@ export function TripSavePanel({
   save?: SaveTrip
   onSaved: (saved: Trip) => void
   // 結果不明のとき、保存済みの旅行の一覧で確かめる操作。
-  onCheckSaved: () => void
-  onReflect?: () => void
+  onCheckSaved: (control: HTMLButtonElement) => void
+  onReflect?: (control: HTMLButtonElement) => void
   onRestore?: () => void
   initialSavedTrip?: Trip
+  panelRef?: Ref<HTMLElement>
+  // 送信前に判定できる保存不可条件。保存API側の検証を緩めずにUIだけ整合させる。
+  saveBlockedReason?: string
 }) {
   const [state, setState] = useState<SaveState>(() =>
     initialSavedTrip ? { phase: 'saved', trip: initialSavedTrip } : { phase: 'idle' },
@@ -48,7 +53,7 @@ export function TripSavePanel({
   const busy = useRef(false)
 
   const start = async () => {
-    if (busy.current || state.phase === 'saved') return
+    if (busy.current || state.phase === 'saved' || saveBlockedReason) return
     if (!scope) {
       setState({ phase: 'failed', message: AUTH_MESSAGE, unknown: false })
       return
@@ -76,10 +81,21 @@ export function TripSavePanel({
   const saving = state.phase === 'saving'
 
   return (
-    <section aria-labelledby="trip-save-heading" className="gt-card space-y-3">
+    <section
+      ref={panelRef}
+      tabIndex={-1}
+      aria-labelledby="trip-save-heading"
+      className="gt-card scroll-mt-4 space-y-3 focus:outline-2 focus:outline-gt-preview"
+    >
       <h3 id="trip-save-heading" className="text-base font-semibold">
         旅程の保存
       </h3>
+      <div className="space-y-1 text-sm text-gt-muted">
+        <p className="font-medium">保存される内容</p>
+        <p>
+          予定の名前・時刻・場所の識別子を保存します。営業時間や評価は保存しません。予約状況や当日の営業は別途ご確認ください。
+        </p>
+      </div>
       {state.phase === 'saved' ? (
         <div role="status" className="space-y-1 text-sm">
           <p className="font-semibold text-gt-ok">保存を確認しました。</p>
@@ -91,8 +107,14 @@ export function TripSavePanel({
         </div>
       ) : (
         <>
+          {saveBlockedReason && (
+            <p role="note" className="text-sm text-gt-warn">
+              {saveBlockedReason}
+            </p>
+          )}
           <button
             type="button"
+            disabled={Boolean(saveBlockedReason)}
             aria-disabled={saving}
             onClick={() => void start()}
             className="gt-button-primary"
@@ -110,7 +132,11 @@ export function TripSavePanel({
                   <p>
                     保存できたかどうか、確認できませんでした。もう一度押す前に、保存済みの旅行に入っているか確かめてください。
                   </p>
-                  <button type="button" onClick={onCheckSaved} className="gt-button-secondary">
+                  <button
+                    type="button"
+                    onClick={(event) => onCheckSaved(event.currentTarget)}
+                    className="gt-button-secondary"
+                  >
                     保存済みの旅行を確認する
                   </button>
                 </>
@@ -119,21 +145,17 @@ export function TripSavePanel({
           )}
         </>
       )}
-      <details className="text-sm text-gt-muted">
-        <summary className="flex min-h-11 cursor-pointer items-center font-medium">
-          保存される内容
-        </summary>
-        <p>
-          予定の名前・時刻・場所の識別子を保存します。営業時間や評価は保存しません。予約状況や当日の営業は別途ご確認ください。
-        </p>
-      </details>
       {onRestore && (
         <button type="button" onClick={onRestore} className="gt-button-secondary">
           保存済みの旅程へ戻す
         </button>
       )}
       {onReflect && (
-        <button type="button" onClick={onReflect} className="gt-button-secondary">
+        <button
+          type="button"
+          onClick={(event) => onReflect(event.currentTarget)}
+          className="gt-button-secondary"
+        >
           保存した旅行を振り返る
         </button>
       )}
