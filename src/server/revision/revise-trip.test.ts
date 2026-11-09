@@ -624,21 +624,24 @@ describe('乗車・乗換の予定は、施設として照合しない', () => {
     expect(proposed(response)[0].constraintCheck.status).toBe('satisfied')
   })
 
-  it('差し替え対象が乗車・乗換なら、Gemini・Mapsを呼ばず insufficient_information', async () => {
-    const client = clientReturning(draft([{ name: '昼食店B' }]))
-    const { response, maps } = await run({ places: stationPlaces, routes }, client, {
-      ...request,
-      trip: tripWithTransport('stop-lunch'),
-    })
+  it.each([request, closureRequest])(
+    '差し替え対象が乗車・乗換なら、Gemini・Mapsを呼ばず insufficient_information ($context.phase)',
+    async (revisionRequest) => {
+      const client = clientReturning(draft([{ name: '昼食店B' }]))
+      const { response, maps } = await run({ places: stationPlaces, routes }, client, {
+        ...revisionRequest,
+        trip: tripWithTransport('stop-lunch'),
+      })
 
-    expect(response).toEqual({
-      status: 'insufficient_information',
-      message: '乗車・乗換の予定は、施設として差し替えられません。',
-    })
-    expect(client.generateJson).not.toHaveBeenCalled()
-    expect(maps.searchPlaces).not.toHaveBeenCalled()
-    expect(maps.computeRoute).not.toHaveBeenCalled()
-  })
+      expect(response).toEqual({
+        status: 'insufficient_information',
+        message: '乗車・乗換の予定は、施設として差し替えられません。',
+      })
+      expect(client.generateJson).not.toHaveBeenCalled()
+      expect(maps.searchPlaces).not.toHaveBeenCalled()
+      expect(maps.computeRoute).not.toHaveBeenCalled()
+    },
+  )
 
   it('適用前の再検証も、対象が乗車・乗換なら、Mapsを呼ばず not_possible', async () => {
     const { response } = await run(fitting, clientReturning(draft([{ name: '昼食店B' }])))

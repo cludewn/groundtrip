@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 
-import type { Trip } from '@/domain'
+import { revisionTargetRestriction, type Trip } from '@/domain'
 import type { RouteMeta } from '@/features/trip-map/model'
 import { ROUTE_LIST_ID, stopButtonId } from '@/features/trip-map/route-map'
 import { TripRouteView } from '@/features/trip-map/trip-route-view'
@@ -136,7 +136,11 @@ export function RevisionRouteView({
   const updateNotice = useRef<HTMLDivElement>(null)
   const target = session && current.trip.stops.find((stop) => stop.id === session.stopId)
   const hasActiveSession =
-    session && target && !target.isFixed && session.trip === current.trip && generate
+    session &&
+    target &&
+    revisionTargetRestriction(target) === null &&
+    session.trip === current.trip &&
+    generate
 
   if (session && !hasActiveSession) {
     setInterruption({
@@ -400,7 +404,11 @@ export function RevisionRouteView({
                       updateStoredLock()
                       return
                     }
-                    if (current.trip.stops.some((stop) => stop.id === stopId && !stop.isFixed)) {
+                    if (
+                      current.trip.stops.some(
+                        (stop) => stop.id === stopId && revisionTargetRestriction(stop) === null,
+                      )
+                    ) {
                       setNotice(null)
                       setInterruption(null)
                       setSession({ trip: current.trip, stopId })

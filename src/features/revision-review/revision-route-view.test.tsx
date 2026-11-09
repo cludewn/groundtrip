@@ -119,6 +119,24 @@ const approvalDisabled = () => approve().getAttribute('aria-disabled') === 'true
 const tableInConfirmation = () => within(screen.getByRole('table'))
 
 describe('部分修正の候補比較', () => {
+  it('非固定の乗車・乗換は旅行前の部分修正の対象外にする', async () => {
+    const user = userEvent.setup()
+    const generate = vi.fn<GenerateRevisions>()
+    const transfer = { ...target, name: '駅で乗換', kind: 'transport' as const, isFixed: false }
+    render(
+      <RevisionRouteTest
+        trip={{ ...trip, stops: trip.stops.with(1, transfer) }}
+        generate={generate}
+      />,
+    )
+
+    await user.click(screen.getByRole('button', { name: /駅で乗換/ }))
+    const sheet = within(screen.getByRole('dialog'))
+    expect(sheet.getByText('乗車・乗換は部分修正の対象外です。')).toBeTruthy()
+    expect(sheet.queryByRole('button', { name: 'この予定だけ変更' })).toBeNull()
+    expect(generate).not.toHaveBeenCalled()
+  })
+
   it('選択したStopだけを徒歩で生成し、分岐、固定予定、構造化比較を切り替える', async () => {
     const user = userEvent.setup()
     // 希望条件を足すと理由が変わるため、応答も送られた理由に合わせる。

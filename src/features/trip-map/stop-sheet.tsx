@@ -9,8 +9,9 @@ import {
   type PointerEvent,
 } from 'react'
 
-import type { Stop } from '@/domain'
+import { revisionTargetRestriction, type Stop } from '@/domain'
 import { GoogleMapsSourceBox } from '@/features/legal/google-maps-attribution'
+import { TRANSPORT_REVISION_UNAVAILABLE } from '@/features/plain-wording/wording'
 
 import { EvidenceDetail, UnverifiedBadge } from './evidence-badge'
 import type { SegmentEvidenceItem } from './evidence-scope'
@@ -54,6 +55,7 @@ export function StopSheet({
   onClose,
 }: StopSheetProps) {
   const titleId = useId()
+  const revisionRestriction = revisionTargetRestriction(stop)
   const googleEvidence = stop.evidence.filter((item) => isGoogleSource(item.source.kind))
   const otherEvidence = stop.evidence.filter((item) => !isGoogleSource(item.source.kind))
   const dialogRef = useRef<HTMLDialogElement>(null)
@@ -325,20 +327,20 @@ export function StopSheet({
               >
                 {stop.isFixed ? '固定を解除する' : 'この予定を固定する'}
               </button>
-              {onStartRevision && stop.kind !== 'transport' && (
+              {onStartRevision && revisionRestriction !== 'transport' && (
                 <button
                   type="button"
-                  disabled={stop.isFixed}
+                  disabled={revisionRestriction === 'fixed'}
                   onClick={() => onStartRevision(stop.id)}
                   className="min-h-12 flex-1 rounded-xl bg-gt-ink px-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-45"
                 >
-                  {stop.isFixed ? '固定中は変更できません' : 'この予定だけ変更'}
+                  {revisionRestriction === 'fixed' ? '固定中は変更できません' : 'この予定だけ変更'}
                 </button>
               )}
             </div>
-            {stop.kind === 'transport' ? (
-              <p className="text-sm text-gt-muted">乗車・乗換は部分修正の対象外です。</p>
-            ) : !stop.isFixed && !onStartRevision && revisionUnavailableReason ? (
+            {revisionRestriction === 'transport' ? (
+              <p className="text-sm text-gt-muted">{TRANSPORT_REVISION_UNAVAILABLE}</p>
+            ) : revisionRestriction === null && !onStartRevision && revisionUnavailableReason ? (
               <p className="text-sm text-gt-muted">{revisionUnavailableReason}</p>
             ) : null}
           </div>
