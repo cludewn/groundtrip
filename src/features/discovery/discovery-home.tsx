@@ -37,14 +37,14 @@ export function DiscoveryHome({
   createContent,
 }: DiscoveryHomeProps) {
   const [manualRegion, setManualRegion] = useState('')
-  const [photoRegion, setPhotoRegion] = useState<{ region: string; explicit: boolean } | null>(null)
+  const [photoRegion, setPhotoRegion] = useState<string | null>(null)
   const [hope, setHope] = useState('')
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState<DiscoveryDestination | null>(null)
   // 前回渡したホームの値を基準に、ここで変更した項目だけを渡す。
   const lastSubmitted = useRef({ region: '', preferences: '' })
   const appliedDetails = useRef<TripDraftEdits | undefined>(undefined)
-  const region = photoRegion?.region ?? manualRegion
+  const region = photoRegion ?? manualRegion
 
   useEffect(() => {
     const previous = appliedDetails.current
@@ -75,12 +75,9 @@ export function DiscoveryHome({
       .toLocaleLowerCase('ja-JP')
       .includes(normalized),
   )
-  const selectTheme = (theme: DiscoveryDestination | null) => {
-    if (selected === theme) return
+  const selectTheme = (theme: DiscoveryDestination) => {
     setSelected(theme)
-    if (theme === null) setPhotoRegion(null)
-    else if (!photoRegion?.explicit && manualRegion.trim() === '')
-      setPhotoRegion({ region: theme.region, explicit: false })
+    if (region.trim() === '') setPhotoRegion(theme.region)
   }
 
   return (
@@ -147,7 +144,7 @@ export function DiscoveryHome({
                   <button
                     type="button"
                     className="min-h-11 underline underline-offset-2"
-                    onClick={() => setPhotoRegion({ region: selected.region, explicit: true })}
+                    onClick={() => setPhotoRegion(selected.region)}
                   >
                     {selected.region}を行き先に使う
                   </button>
@@ -155,15 +152,15 @@ export function DiscoveryHome({
                 <button
                   type="button"
                   className="min-h-11 underline underline-offset-2"
-                  onClick={() => selectTheme(null)}
+                  onClick={() => setSelected(null)}
                 >
                   テーマを外す
                 </button>
               </div>
             )}
-            {!selected && photoRegion && (
+            {photoRegion && (
               <div className="flex flex-wrap items-center gap-x-3 text-sm text-gt-muted">
-                <p>写真から採用した行き先：{photoRegion.region}</p>
+                <p>写真から入れた行き先：{photoRegion}</p>
                 <button
                   type="button"
                   className="min-h-11 underline underline-offset-2"
@@ -207,7 +204,7 @@ export function DiscoveryHome({
             写真から旅のテーマを探す（任意）
           </h2>
           <p className="text-sm text-gt-muted">
-            愛知・名古屋を中心に、大阪・東京の写真テーマも選べます。選んだテーマは行き先と旅の希望に反映できます。
+            愛知・名古屋を中心に、大阪・東京の写真テーマも選べます。選んだテーマは旅の希望に加わります。行き先が空欄の場合は、写真の地域が入ります。
           </p>
           <div className="space-y-1 sm:max-w-sm">
             <label htmlFor="discovery-search" className="block text-sm font-semibold">
