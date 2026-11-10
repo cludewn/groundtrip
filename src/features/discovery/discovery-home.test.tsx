@@ -120,6 +120,45 @@ it.each([
   },
 )
 
+it.each([
+  { source: '自動設定', manual: '', explicit: false, expected: '大阪市' },
+  { source: '手入力', manual: '名古屋市', explicit: false, expected: '名古屋市' },
+  { source: '明示採用', manual: '京都市', explicit: true, expected: '名古屋市' },
+])(
+  '$source の行き先で名古屋城から大阪城へテーマを切り替える',
+  async ({ manual, explicit, expected }) => {
+    const onCreate = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <DiscoveryHome mode="home" onOpenHome={vi.fn()} onOpenTrips={vi.fn()} onCreate={onCreate} />,
+    )
+
+    const destination = screen.getByLabelText<HTMLInputElement>('行き先')
+    const next = screen.getByRole('button', { name: '旅の条件へ進む' })
+    const osaka = screen.getByRole('button', { name: /大阪城の写真をテーマに選ぶ/ })
+    if (manual) await user.type(destination, manual)
+    await user.click(screen.getByRole('button', { name: /名古屋城の写真をテーマに選ぶ/ }))
+    if (explicit) await user.click(screen.getByRole('button', { name: '名古屋市を行き先に使う' }))
+    expect(destination.value).toBe('名古屋市')
+
+    await user.click(osaka)
+    expect(destination.value).toBe(expected)
+    await user.click(next)
+    expect(onCreate).toHaveBeenLastCalledWith({
+      region: expected,
+      preferences: '歴史を感じる場所を訪ねながら街歩きを楽しみたい',
+    })
+
+    if (explicit) {
+      await user.click(screen.getByRole('button', { name: '写真の行き先を解除' }))
+      expect(destination.value).toBe(manual)
+      expect(osaka.getAttribute('aria-pressed')).toBe('true')
+      await user.click(next)
+      expect(onCreate).toHaveBeenLastCalledWith({ region: manual })
+    }
+  },
+)
+
 it('写真テーマの説明と検索例に追加した都市を案内する', () => {
   render(
     <DiscoveryHome mode="home" onOpenHome={vi.fn()} onOpenTrips={vi.fn()} onCreate={vi.fn()} />,

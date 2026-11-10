@@ -37,14 +37,14 @@ export function DiscoveryHome({
   createContent,
 }: DiscoveryHomeProps) {
   const [manualRegion, setManualRegion] = useState('')
-  const [photoRegion, setPhotoRegion] = useState<string | null>(null)
+  const [photoRegion, setPhotoRegion] = useState<{ region: string; explicit: boolean } | null>(null)
   const [hope, setHope] = useState('')
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState<DiscoveryDestination | null>(null)
   // 前回渡したホームの値を基準に、ここで変更した項目だけを渡す。
   const lastSubmitted = useRef({ region: '', preferences: '' })
   const appliedDetails = useRef<TripDraftEdits | undefined>(undefined)
-  const region = photoRegion ?? manualRegion
+  const region = photoRegion?.region ?? manualRegion
 
   useEffect(() => {
     const previous = appliedDetails.current
@@ -77,7 +77,9 @@ export function DiscoveryHome({
   )
   const selectTheme = (theme: DiscoveryDestination) => {
     setSelected(theme)
-    if (region.trim() === '') setPhotoRegion(theme.region)
+    if (!photoRegion?.explicit && manualRegion.trim() === '') {
+      setPhotoRegion({ region: theme.region, explicit: false })
+    }
   }
 
   return (
@@ -144,7 +146,7 @@ export function DiscoveryHome({
                   <button
                     type="button"
                     className="min-h-11 underline underline-offset-2"
-                    onClick={() => setPhotoRegion(selected.region)}
+                    onClick={() => setPhotoRegion({ region: selected.region, explicit: true })}
                   >
                     {selected.region}を行き先に使う
                   </button>
@@ -160,7 +162,7 @@ export function DiscoveryHome({
             )}
             {photoRegion && (
               <div className="flex flex-wrap items-center gap-x-3 text-sm text-gt-muted">
-                <p>写真から入れた行き先：{photoRegion}</p>
+                <p>写真から入れた行き先：{photoRegion.region}</p>
                 <button
                   type="button"
                   className="min-h-11 underline underline-offset-2"
